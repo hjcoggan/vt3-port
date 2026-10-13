@@ -52,3 +52,10 @@ Source: https://github.com/ArcadeHustle/LindyLiberation (no license file). Read 
 - `makekey/main.cpp` derives ATA unlock keys from a physical drive's 512-byte identify response. It does not apply to an image file, and we don't have the drive.
 
 Conclusion: the arcade route stays blocked until a legitimate key source is found or the PIC is dealt with. Parked for now.
+
+## Also reviewed, not used: RingEdge_NoKey_softmod (2026-10-14)
+
+Source: https://github.com/ArcadeHustle/RingEdge_NoKey_softmod (no license file). Read as background only.
+
+- It covers RingEdge and RingWide hardware (a different Sega platform from Lindbergh). It's a TrueCrypt rekeying and keychip-bypass toolkit, with a full CipherShed/TrueCrypt tree, keyfiles, a keychip emulator notes file, and two Windows privilege-escalation binaries.
+- It doesn't apply to our Lindbergh image. Nothing from it is used, and none of its binaries or keyfiles were downloaded or run.
