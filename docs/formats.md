@@ -21,7 +21,7 @@ Layout (little-endian):
 | 0x10 | 16 × count | records: `name_hash`, `offset`, `size`, `unknown` |
 
 - Every offset is 2048-byte aligned and within the file.
-- `name_hash` is not decoded yet. `unknown` is a small integer, not yet decoded.
+- `name_hash` is decoded (see "CAPX name hash: decoded" below). `unknown` is the entry's rank when all names are sorted by that same key.
 - Payload kinds seen so far (by first two bytes):
 
 | Archive | Entries | Payloads |
@@ -142,3 +142,13 @@ Shared code lives in `tools/formats/`: `capx.py` (archive reader), `cri_utf.py` 
 - The script doesn't name files. It extracts with empty names, so it doesn't solve the hash.
 - Tested: zlib CRC32, JAMCRC, CRC32-BZIP2, CRC32-MPEG2, and CRC32C. Each was run over about 3,600 printable strings from the first 128 KB of `SE.xpac`, in original, lowercase, and uppercase forms, with and without the path. None matched any of the 9 stored hashes.
 - Next option: the hash may be seeded or use a different polynomial. Test it against names with known source, such as the cue names and file names inside the ACB sheets.
+
+## CAPX name hash: decoded (2026-10-14)
+
+- Key: take the asset path, change `/` to `\`, upper-case it, and keep the extension. For example `RESOURCE\SOUND\SE\CRIAU\FOOT.CSB`.
+- Hash: `h = sum(byte_i * 131^i) mod 2^32`, indexing from the start of the key. Equivalently, Horner's rule over the reversed key with multiplier 131, seed 0, and no final add.
+- `unknown` is the rank of the path among all names sorted by that key.
+- Verified: VOICE_ADX 3535/3535, KANSEI 113/113, SE 9/9, PSP LANGUAGE 488/488, Motion 353/353, BGM 99/131 (the rest differ in name, not hash). An independent spot-check on SE.xpac agreed.
+- Implementation: `tools/formats/crossplatform/capx_hash.py` (`capx_name_hash`, with `--selftest`). Findings: `docs/formats-crossplatform.md`.
+- Unnamed so far: game.xpac (1174 entries), stages (358), frontend (1007). The runtime doesn't need names. It can hash any path directly.
+- The QuickBMS-era CRC tests in the note above are superseded. The hash isn't a standard CRC.
