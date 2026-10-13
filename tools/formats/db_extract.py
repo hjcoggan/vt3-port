@@ -13,9 +13,12 @@ Verified layout (PC release):
                             (for example "Roger Federer(CHE)"). Field meanings
                             beyond the name are not yet known.
 
-Other tables in the same folder (tns_racket_tbl.bin, tns_swing_tbl_*.bin,
-tns_IKInfo_*.bin, tns_playstyle_tbl_dataM.bin) are binary and their record sizes
-are not yet confirmed. Use --record-size to try a guess.
+Other tables in the same folder:
+    tns_racket_tbl.bin      record size 136 (0x88); 66 records (period found by autocorrelation)
+    tns_swing_tbl_MEN.bin   record size 220 (0xDC); 411 records; name at offset 0. 392 of 408
+                            distinct names match animation names in Anims/*/anim.db
+    tns_swing_tbl_WOMEN.bin record size 220; 333 records; same name layout (MAK_*)
+    tns_playstyle_tbl_dataM.bin and tns_IKInfo_*.bin: record sizes not confirmed.
 
 Usage:
     db_extract.py FILE --record-size N [OUTDIR]
