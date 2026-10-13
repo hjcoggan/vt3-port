@@ -41,3 +41,4 @@
 - **Analysis runs:** the NoCD game was stopped after the save, so it doesn't hold the display.
 - **Renderer scope:** the game's shaders are all Shader Model 2 (587 compiled, 352 ps_2_0 and 235 vs_2_0; see `docs/d3d9-shaders.md`). The D3D9 layer translates SM2 bytecode to GLSL for the GL 3.3 backend. SM1 and SM3 are out of scope.
 - **Shim ownership:** the recompiler agent owns `runtime/shim/src/kernel32_*` and the import-to-shim merge. The runtime agent owns D3D9, D3DX, DirectSound, DirectInput, the user32 window code, and the SM2 translator.
+- **SafeDisc shim source:** moved out of the repo to `dump/safedisc-shim/` on the owner's decision. It's partly derived from SafeDiscShim (GPL-3) and is no longer needed now that the SafeDisc route is retired. It is not committed.
