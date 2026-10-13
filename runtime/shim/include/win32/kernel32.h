@@ -120,6 +120,9 @@ BOOL   WINAPI ResetEvent(HANDLE h);
 BOOL   WINAPI PulseEvent(HANDLE h);
 BOOL   WINAPI ReleaseMutex(HANDLE h);
 DWORD  WINAPI WaitForSingleObject(HANDLE h, DWORD ms);
+DWORD  WINAPI WaitForMultipleObjects(DWORD count, LPVOID handles, BOOL wait_all, DWORD ms);
+HANDLE WINAPI GetCurrentThread(void);
+BOOL   WINAPI SwitchToThread(void);
 
 /* Threads and processes. */
 HANDLE WINAPI CreateThread(LPVOID attrs, SIZE_T stack, LPVOID start, LPVOID param, DWORD flags, LPDWORD tid);

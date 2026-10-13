@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -179,9 +180,40 @@ uint32_t vt3shim_fn_token(const char *name)
     return 0;
 }
 
+/* Ordinal-only imports have no name in the import table. The shim binds by name, so map the
+ * ordinals it needs. DSOUND ordinal 11 is DirectSoundCreate. */
+static const char *shim_import_name(const vt3_import *im)
+{
+    if (strncmp(im->name, "ORD", 3) == 0 && im->dll && strcasecmp(im->dll, "DSOUND.dll") == 0 &&
+        strtol(im->name + 3, NULL, 10) == 11)
+        return "DirectSoundCreate";
+    return im->name;
+}
+
 static void put32(uint32_t a, uint32_t v)
 {
     memcpy(vt_mem + a, &v, 4);
+}
+
+/* Runs a guest function on the given stack, stdcall style, for the shim's threads and timers.
+ * The arguments are pushed right to left, and a sentinel return address goes under them. The
+ * callee pops its own arguments. */
+static uint32_t guest_call_hook(uint32_t stack_top, uint32_t teb, uint32_t fn,
+                                const uint32_t *args, uint32_t nargs)
+{
+    vt3_cpu c;
+    memset(&c, 0, sizeof c);
+    c.esp = stack_top;
+    for (uint32_t i = nargs; i-- > 0;) {
+        c.esp -= 4;
+        put32(c.esp, args[i]);
+    }
+    c.esp -= 4;
+    put32(c.esp, VT_SENTINEL_RET);
+    c.fs_base = teb;
+    c.fcw = 0x37Fu;
+    vt_icall(&c, fn);
+    return c.eax;
 }
 
 int vt3_run(const vt3_module *m, const char *image_path)
@@ -220,6 +252,8 @@ int vt3_run(const vt3_module *m, const char *image_path)
 
     vt3shim_set_game_root(getenv("VT3_GAME_ROOT") ? getenv("VT3_GAME_ROOT") : ".");
     if (vt3shim_init() != 0) return 1;
+    vt3shim_set_guest_call(guest_call_hook);
+    vt3shim_thread_begin_main();
 
     /* Imports: each IAT slot gets a unique token. Calls through the slot land in
      * the icall table, which maps the token to a shim. */
@@ -238,7 +272,7 @@ int vt3_run(const vt3_module *m, const char *image_path)
         uint32_t tok = VT_TOKEN_BASE + 16u * (uint32_t)i;
         put32(im->slot, tok);
         tab[n].addr = tok;
-        tab[n].fn = shim_lookup(im->name);
+        tab[n].fn = shim_lookup(shim_import_name(im));
         tab[n].name = im->name;
         n++;
     }

@@ -240,7 +240,11 @@ DWORD WINAPI GetFileSize(HANDLE hf, LPDWORD size_high)
 BOOL WINAPI CloseHandle(HANDLE h)
 {
     if (vt3s_handle_get(h, VT3S_H_SYNC)) {
-        vt3s_handle_take(h, VT3S_H_SYNC);
+        free(vt3s_handle_take(h, VT3S_H_SYNC));
+        return TRUE;
+    }
+    if (vt3s_handle_get(h, VT3S_H_THREAD)) {
+        vt3s_handle_take(h, VT3S_H_THREAD);   /* the thread object outlives the handle */
         return TRUE;
     }
     vfile *f = vt3s_handle_take(h, VT3S_H_FILE);

@@ -49,6 +49,8 @@ add_library(vt3shim STATIC
     shim/src/kernel32_time.c
     shim/src/kernel32_std.c
     shim/src/kernel32_sys.c
+    shim/src/kernel32_thread.c
+    shim/src/winmm_timer.c
     shim/src/user32_stub.c
     shim/src/user32_window.c
     shim/src/d3d9_object.c

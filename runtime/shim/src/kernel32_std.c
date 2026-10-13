@@ -21,8 +21,6 @@
 #define VT3_CP_UTF8 65001u
 
 static HANDLE std_handles[3];          /* stdin, stdout, stderr */
-static uint32_t tls_values[VT3_TLS_SLOTS];
-static uint8_t tls_used[VT3_TLS_SLOTS];
 static GPTR cmdline_addr;
 
 /* Length of a guest string, bounded by the arena. */
@@ -107,94 +105,6 @@ LPSTR WINAPI GetCommandLineA(void)
 DWORD WINAPI GetCurrentProcessId(void)
 {
     return (DWORD)getpid();
-}
-
-DWORD WINAPI GetCurrentThreadId(void)
-{
-    return 1u;
-}
-
-/* Thread-local storage. One thread, so one table. */
-DWORD WINAPI TlsAlloc(void)
-{
-    for (uint32_t i = 0; i < VT3_TLS_SLOTS; i++) {
-        if (!tls_used[i]) {
-            tls_used[i] = 1;
-            tls_values[i] = 0;
-            vt3s_set_last_error(ERROR_SUCCESS);
-            return i;
-        }
-    }
-    vt3s_set_last_error(ERROR_NOT_ENOUGH_MEMORY);
-    return 0xFFFFFFFFu;
-}
-
-LPVOID WINAPI TlsGetValue(DWORD index)
-{
-    if (index >= VT3_TLS_SLOTS || !tls_used[index]) {
-        vt3s_set_last_error(ERROR_INVALID_PARAMETER);
-        return 0;
-    }
-    vt3s_set_last_error(ERROR_SUCCESS);
-    return tls_values[index];
-}
-
-BOOL WINAPI TlsSetValue(DWORD index, LPVOID value)
-{
-    if (index >= VT3_TLS_SLOTS || !tls_used[index]) {
-        vt3s_set_last_error(ERROR_INVALID_PARAMETER);
-        return FALSE;
-    }
-    tls_values[index] = value;
-    vt3s_set_last_error(ERROR_SUCCESS);
-    return TRUE;
-}
-
-BOOL WINAPI TlsFree(DWORD index)
-{
-    if (index >= VT3_TLS_SLOTS || !tls_used[index]) {
-        vt3s_set_last_error(ERROR_INVALID_PARAMETER);
-        return FALSE;
-    }
-    tls_used[index] = 0;
-    tls_values[index] = 0;
-    return TRUE;
-}
-
-/* CRITICAL_SECTION: DebugInfo, LockCount, RecursionCount, OwningThread,
- * LockSemaphore, SpinCount. Only the counters are kept. */
-#define CS_LOCKCOUNT 4u
-#define CS_RECURSION 8u
-#define CS_OWNER 12u
-
-void WINAPI InitializeCriticalSection(LPVOID cs)
-{
-    if (!vt3s_guest_range_ok(cs, 24)) return;
-    memset(vt3_g2h(cs), 0, 24);
-    vt3s_store_u32(cs + CS_LOCKCOUNT, 0xFFFFFFFFu);
-}
-
-void WINAPI EnterCriticalSection(LPVOID cs)
-{
-    if (!vt3s_guest_range_ok(cs, 24)) return;
-    vt3s_store_u32(cs + CS_LOCKCOUNT, vt3s_load_u32(cs + CS_LOCKCOUNT) + 1u);
-    vt3s_store_u32(cs + CS_RECURSION, vt3s_load_u32(cs + CS_RECURSION) + 1u);
-    vt3s_store_u32(cs + CS_OWNER, 1u);
-}
-
-void WINAPI LeaveCriticalSection(LPVOID cs)
-{
-    if (!vt3s_guest_range_ok(cs, 24)) return;
-    uint32_t rec = vt3s_load_u32(cs + CS_RECURSION);
-    if (rec) vt3s_store_u32(cs + CS_RECURSION, rec - 1u);
-    vt3s_store_u32(cs + CS_LOCKCOUNT, vt3s_load_u32(cs + CS_LOCKCOUNT) - 1u);
-    if (rec <= 1u) vt3s_store_u32(cs + CS_OWNER, 0u);
-}
-
-void WINAPI DeleteCriticalSection(LPVOID cs)
-{
-    if (!vt3s_guest_range_ok(cs, 24)) return;
-    memset(vt3_g2h(cs), 0, 24);
 }
 
 LONG WINAPI InterlockedIncrement(LPLONG addend)

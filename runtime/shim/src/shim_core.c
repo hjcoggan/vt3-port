@@ -14,7 +14,7 @@ typedef struct hentry {
 
 static hentry *g_handles;
 static uint32_t g_handle_count;     /* slots allocated, used or not */
-static DWORD g_last_error;
+static __thread DWORD g_last_error;   /* per guest thread */
 static char g_root[1024] = "./";
 
 static int slot_of(HANDLE h)

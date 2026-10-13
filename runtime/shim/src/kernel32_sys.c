@@ -26,6 +26,16 @@
 
 static uint32_t vm_next = VT3_VM_BASE;
 
+uint32_t vt3s_vm_alloc(uint32_t bytes)
+{
+    uint32_t n = (bytes + VT3_PAGE - 1) & ~(VT3_PAGE - 1);
+    if (n == 0 || vm_next + n > VT3_VM_LIMIT || vm_next + n < vm_next) return 0;
+    uint32_t p = vm_next;
+    vm_next += n;
+    memset(vt3_g2h(p), 0, n);
+    return p;
+}
+
 static void zero_guest(GPTR p, uint32_t n)
 {
     if (vt3s_guest_range_ok(p, n)) memset(vt3_g2h(p), 0, n);
@@ -391,70 +401,6 @@ SIZE_T WINAPI VirtualQuery(LPVOID addr, LPVOID info, SIZE_T len)
 }
 
 /* ---- synchronisation ------------------------------------------------------ */
-
-static HANDLE new_sync_handle(void)
-{
-    static int dummy;
-    return vt3s_handle_new(VT3S_H_SYNC, &dummy);
-}
-
-HANDLE WINAPI CreateEventA(LPVOID attrs, BOOL manual, BOOL initial, LPCSTR name)
-{
-    (void)attrs; (void)manual; (void)initial; (void)name;
-    return new_sync_handle();
-}
-
-HANDLE WINAPI CreateMutexA(LPVOID attrs, BOOL owner, LPCSTR name)
-{
-    (void)attrs; (void)owner; (void)name;
-    return new_sync_handle();
-}
-
-BOOL WINAPI SetEvent(HANDLE h) { return vt3s_handle_get(h, VT3S_H_SYNC) ? TRUE : FALSE; }
-BOOL WINAPI ResetEvent(HANDLE h) { return vt3s_handle_get(h, VT3S_H_SYNC) ? TRUE : FALSE; }
-BOOL WINAPI PulseEvent(HANDLE h) { return vt3s_handle_get(h, VT3S_H_SYNC) ? TRUE : FALSE; }
-BOOL WINAPI ReleaseMutex(HANDLE h) { return vt3s_handle_get(h, VT3S_H_SYNC) ? TRUE : FALSE; }
-
-/* Single thread: nothing else can signal, so a wait returns at once as signalled. */
-DWORD WINAPI WaitForSingleObject(HANDLE h, DWORD ms)
-{
-    (void)ms;
-    if (!vt3s_handle_get(h, VT3S_H_SYNC)) {
-        vt3s_set_last_error(ERROR_INVALID_HANDLE);
-        return 0xFFFFFFFFu; /* WAIT_FAILED */
-    }
-    return VT3_WAIT_OBJECT_0;
-}
-
-/* ---- threads and processes ------------------------------------------------ */
-
-HANDLE WINAPI CreateThread(LPVOID attrs, SIZE_T stack, LPVOID start, LPVOID param, DWORD flags, LPDWORD tid)
-{
-    (void)attrs; (void)stack; (void)start; (void)param; (void)flags;
-    if (tid) vt3s_store_u32(tid, 0);
-    vt3s_set_last_error(ERROR_CALL_NOT_IMPLEMENTED);
-    VT3_ERROR("shim: CreateThread is not implemented: the runtime is single-threaded");
-    return 0;
-}
-
-void WINAPI ExitThread(DWORD code)
-{
-    fflush(stdout);
-    exit((int)code);
-}
-
-BOOL WINAPI GetExitCodeThread(HANDLE h, LPDWORD code)
-{
-    (void)h;
-    if (code) vt3s_store_u32(code, 0);
-    return FALSE;
-}
-
-DWORD WINAPI ResumeThread(HANDLE h) { (void)h; return 0; }
-DWORD WINAPI SuspendThread(HANDLE h) { (void)h; return 0; }
-BOOL WINAPI SetThreadPriority(HANDLE h, int prio) { (void)h; (void)prio; return TRUE; }
-int WINAPI GetThreadPriority(HANDLE h) { (void)h; return 0; }
-DWORD WINAPI SetThreadIdealProcessor(HANDLE h, DWORD cpu) { (void)h; (void)cpu; return 0; }
 
 HANDLE WINAPI GetCurrentProcess(void) { return 0xFFFFFFFFu; }
 

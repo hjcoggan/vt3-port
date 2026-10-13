@@ -8,6 +8,8 @@
 #include "vt3/vt3_log.h"
 #include "win32/d3dx9.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define E_FAIL_D3DX 0x80004005u
@@ -22,11 +24,48 @@ static void note_unavailable(const char *what)
     VT3_WARN("%s: not available in the native runtime (returns E_FAIL)", what);
 }
 
+/* Copies guest text (up to max bytes, stopping at NUL) for logs. Controls become '.'. */
+static size_t guest_text(GPTR p, uint32_t max, char *dst, size_t cap)
+{
+    size_t n = 0;
+    while (n + 1 < cap && n < max) {
+        const uint8_t *q = d3d9_gmem(p + (GPTR)n, 1);
+        if (!q || *q == 0) break;
+        uint8_t c = *q;
+        dst[n++] = (c == '\n' || c == '\r') ? '|' : (c >= 0x20 && c < 0x7f) ? (char)c : '.';
+    }
+    dst[n] = 0;
+    return n;
+}
+
+/* With VT3_HLSL_DUMP set, writes each source passed to D3DXCompileShader to that
+ * directory as d3dx_src_NN.hlsl, for analysis. */
+static void dump_source(GPTR src, UINT len)
+{
+    static unsigned index;
+    const char *dir = getenv("VT3_HLSL_DUMP");
+    const uint8_t *s = d3d9_gmem(src, len);
+    if (!dir || !s) return;
+    char path[512];
+    snprintf(path, sizeof path, "%s/d3dx_src_%02u.hlsl", dir, index++);
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    fwrite(s, 1, len, f);
+    fclose(f);
+}
+
 HRESULT WINAPI D3DXCompileShader(GPTR src_data, UINT data_len, GPTR defines, GPTR include, GPTR function_name,
                                  GPTR profile, DWORD flags, GPTR ppShader, GPTR ppErrorMsgs, GPTR ppConstantTable)
 {
-    (void)src_data; (void)data_len; (void)defines; (void)include; (void)function_name;
-    (void)profile; (void)flags;
+    char entry[64], target[32], head[257];
+    guest_text(function_name, sizeof entry - 1, entry, sizeof entry);
+    guest_text(profile, sizeof target - 1, target, sizeof target);
+    guest_text(src_data, data_len < 256 ? data_len : 256, head, sizeof head);
+    VT3_INFO("D3DXCompileShader: %u bytes, entry \"%s\", profile \"%s\", flags 0x%x, defines %s, include %s",
+             (unsigned)data_len, entry, target, (unsigned)flags, defines ? "yes" : "no", include ? "yes" : "no");
+    VT3_INFO("D3DXCompileShader: source starts: %s", head);
+    dump_source(src_data, data_len);
+    (void)defines; (void)include;
     note_unavailable("D3DXCompileShader");
     vt3s_store_u32(ppShader, 0);
     vt3s_store_u32(ppErrorMsgs, 0);

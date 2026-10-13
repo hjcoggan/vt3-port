@@ -56,13 +56,3 @@ BOOL WINAPI QueryPerformanceCounter(LPLONGLONG count)
     return TRUE;
 }
 
-void WINAPI Sleep(DWORD milliseconds)
-{
-    struct timespec ts = {
-        .tv_sec = milliseconds / 1000u,
-        .tv_nsec = (long)(milliseconds % 1000u) * 1000000L,
-    };
-    while (nanosleep(&ts, &ts) != 0) {
-        /* interrupted: nanosleep leaves the remainder in ts, so keep sleeping */
-    }
-}
