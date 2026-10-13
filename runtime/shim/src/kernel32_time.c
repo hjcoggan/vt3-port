@@ -21,9 +21,10 @@ static uint64_t since_start_ns(void)
     return mono_ns() - g_start_ns;
 }
 
+/* Milliseconds since boot, as on Windows. CLOCK_MONOTONIC counts from boot on macOS. */
 DWORD WINAPI GetTickCount(void)
 {
-    return (DWORD)(since_start_ns() / 1000000u);
+    return (DWORD)(mono_ns() / 1000000u);
 }
 
 DWORD WINAPI timeGetTime(void)

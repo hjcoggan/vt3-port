@@ -27,6 +27,7 @@ add_library(vt3core STATIC
     src/core/log.c
     src/core/guest.c
     src/render/letterbox.c
+    src/render/sm2_glsl.c
     src/render/renderer.c
     src/render/gl33.c
     src/audio/ringbuf.c
@@ -46,6 +47,10 @@ add_library(vt3shim STATIC
     shim/src/kernel32_heap.c
     shim/src/kernel32_file.c
     shim/src/kernel32_time.c
+    shim/src/kernel32_std.c
+    shim/src/kernel32_sys.c
+    shim/src/user32_stub.c
+    shim/src/user32_window.c
     shim/src/d3d9_stub.c
     shim/src/dsound_stub.c
     shim/src/dinput8_stub.c
@@ -59,7 +64,11 @@ add_executable(vt3rt
     src/main.c
     tests/selftest.c
     tests/layout_check.c   # compile-time only: checks the COM vtable layouts
+    tests/sm2_glcheck.c    # --sm2-check: GL compile and link of SM2 shaders
 )
+if(APPLE)
+    target_link_libraries(vt3rt PRIVATE "-framework OpenGL")
+endif()
 target_include_directories(vt3rt PRIVATE tests)
 target_link_libraries(vt3rt PRIVATE vt3shim)
 target_compile_options(vt3rt PRIVATE ${VT3_WARNINGS})

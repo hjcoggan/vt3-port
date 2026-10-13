@@ -16,6 +16,8 @@
 
 #include <OpenGL/gl3.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* One X-macro list drives the typedefs, the pointers, and the loader. */
@@ -69,7 +71,20 @@
     X(void, glBlitFramebuffer, (GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum)) \
     X(void, glDrawArrays, (GLenum, GLint, GLsizei))                                       \
     X(void, glActiveTexture, (GLenum))                                                    \
-    X(GLenum, glGetError, (void))
+    X(GLenum, glGetError, (void))                                                         \
+    X(void, glUniform4fv, (GLint, GLsizei, const GLfloat *))                              \
+    X(void, glDrawElements, (GLenum, GLsizei, GLenum, const void *))                      \
+    X(void, glDepthFunc, (GLenum))                                                        \
+    X(void, glDepthMask, (GLboolean))                                                     \
+    X(void, glCullFace, (GLenum))                                                         \
+    X(void, glFrontFace, (GLenum))                                                        \
+    X(void, glReadPixels, (GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *))       \
+    X(void, glGenRenderbuffers, (GLsizei, GLuint *))                                      \
+    X(void, glDeleteRenderbuffers, (GLsizei, const GLuint *))                             \
+    X(void, glBindRenderbuffer, (GLenum, GLuint))                                         \
+    X(void, glRenderbufferStorage, (GLenum, GLenum, GLsizei, GLsizei))                    \
+    X(void, glFramebufferRenderbuffer, (GLenum, GLenum, GLenum, GLuint))                  \
+    X(void, glDisableVertexAttribArray, (GLuint))
 
 #define VT3_DECL_TYPE(ret, name, params) typedef ret (*vt3_pfn_##name) params;
 #define VT3_DECL_VAR(ret, name, params) static vt3_pfn_##name p_##name;
@@ -81,6 +96,15 @@ VT3_GL_FUNCS(VT3_DECL_VAR)
     if (!p_##name) { VT3_ERROR("GL 3.3 entry point missing: %s", #name); missing++; }
 
 #define VT3_MAX_TEX 256
+#define VT3_MAX_PROGS 256
+#define VT3_CONST_REGS 256
+
+typedef struct gl_prog {
+    GLuint id;
+    GLint loc_vsc, loc_psc;
+    GLint loc_samp[VT3_MAX_SAMPLERS];
+    int used;
+} gl_prog;
 #define VT3_VERTEX_BYTES ((GLsizeiptr)sizeof(vt3_tlvertex))
 
 typedef struct gl_tex {
@@ -94,6 +118,10 @@ static struct {
     int logical_w, logical_h;
     GLuint fbo, fbo_color;
     GLuint white;                 /* 1x1 white, bound for untextured draws */
+    GLuint ebo, depth_rb;
+    uint32_t attr_mask;           /* attribute locations currently enabled */
+    float zero_consts[VT3_CONST_REGS * 4];
+    gl_prog progs[VT3_MAX_PROGS];
     GLuint program, vao, vbo;
     GLint u_logical_size, u_tex, u_use_tex;
     gl_tex tex[VT3_MAX_TEX];
@@ -192,6 +220,7 @@ static int gl_init(int logical_w, int logical_h)
     p_glGenVertexArrays(1, &g.vao);
     p_glBindVertexArray(g.vao);
     p_glGenBuffers(1, &g.vbo);
+    p_glGenBuffers(1, &g.ebo);
     p_glBindBuffer(GL_ARRAY_BUFFER, g.vbo);
     p_glEnableVertexAttribArray(0);
     p_glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, VT3_VERTEX_BYTES, (const void *)0);
@@ -219,6 +248,10 @@ static int gl_init(int logical_w, int logical_h)
     p_glGenFramebuffers(1, &g.fbo);
     p_glBindFramebuffer(GL_FRAMEBUFFER, g.fbo);
     p_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g.fbo_color, 0);
+    p_glGenRenderbuffers(1, &g.depth_rb);
+    p_glBindRenderbuffer(GL_RENDERBUFFER, g.depth_rb);
+    p_glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, logical_w, logical_h);
+    p_glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, g.depth_rb);
     if (p_glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         VT3_ERROR("logical framebuffer is incomplete");
         return -1;
@@ -245,6 +278,11 @@ static void gl_shutdown(void)
     if (g.fbo) p_glDeleteFramebuffers(1, &g.fbo);
     if (g.fbo_color) p_glDeleteTextures(1, &g.fbo_color);
     if (g.white) p_glDeleteTextures(1, &g.white);
+    if (g.depth_rb) p_glDeleteRenderbuffers(1, &g.depth_rb);
+    if (g.ebo) p_glDeleteBuffers(1, &g.ebo);
+    for (int i = 0; i < VT3_MAX_PROGS; i++) {
+        if (g.progs[i].used) p_glDeleteProgram(g.progs[i].id);
+    }
     if (g.vbo) p_glDeleteBuffers(1, &g.vbo);
     if (g.vao) p_glDeleteVertexArrays(1, &g.vao);
     if (g.program) p_glDeleteProgram(g.program);
@@ -330,9 +368,13 @@ static void gl_clear(uint32_t argb)
     p_glClear(GL_COLOR_BUFFER_BIT);
 }
 
+static void apply_state(const vt3_rstate *s);
+
 static void gl_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex)
 {
     gl_bind_logical_fbo();
+    static const vt3_rstate tl_state = { 1, 5, 6, 0, 0, 8, 1 };   /* alpha blend, no depth, no cull */
+    apply_state(&tl_state);
     p_glBindVertexArray(g.vao);
     p_glBindBuffer(GL_ARRAY_BUFFER, g.vbo);
     p_glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)count * VT3_VERTEX_BYTES, v, GL_STREAM_DRAW);
@@ -367,6 +409,206 @@ static void gl_present(const vt3_rect *dst, int nearest, int drawable_w, int dra
     p_glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+/* ---- programmable path ------------------------------------------------ */
+
+static GLenum map_blend(int d3d)
+{
+    switch (d3d) {
+    case 1: return GL_ZERO;
+    case 2: return GL_ONE;
+    case 3: return GL_SRC_COLOR;
+    case 4: return GL_ONE_MINUS_SRC_COLOR;
+    case 5: return GL_SRC_ALPHA;
+    case 6: return GL_ONE_MINUS_SRC_ALPHA;
+    case 7: return GL_DST_ALPHA;
+    case 8: return GL_ONE_MINUS_DST_ALPHA;
+    case 9: return GL_DST_COLOR;
+    case 10: return GL_ONE_MINUS_DST_COLOR;
+    default: return GL_ONE;
+    }
+}
+
+static GLenum map_cmp(int d3d)
+{
+    switch (d3d) {
+    case 1: return GL_NEVER;
+    case 2: return GL_LESS;
+    case 3: return GL_EQUAL;
+    case 4: return GL_LEQUAL;
+    case 5: return GL_GREATER;
+    case 6: return GL_NOTEQUAL;
+    case 7: return GL_GEQUAL;
+    default: return GL_ALWAYS;
+    }
+}
+
+static void apply_state(const vt3_rstate *s)
+{
+    if (s->alpha_blend) {
+        p_glEnable(GL_BLEND);
+        p_glBlendFunc(map_blend(s->src_blend), map_blend(s->dst_blend));
+    } else {
+        p_glDisable(GL_BLEND);
+    }
+    if (s->depth_test) {
+        p_glEnable(GL_DEPTH_TEST);
+        p_glDepthFunc(map_cmp(s->depth_func));
+    } else {
+        p_glDisable(GL_DEPTH_TEST);
+    }
+    p_glDepthMask(s->depth_write ? GL_TRUE : GL_FALSE);
+    if (s->cull == 1) {                       /* D3DCULL_NONE */
+        p_glDisable(GL_CULL_FACE);
+    } else {
+        /* HYPOTHESIS: D3DCULL_CW culls triangles that are clockwise in GL
+         * window space, so the front face is counter-clockwise. Verify on a
+         * known winding before relying on it. */
+        p_glEnable(GL_CULL_FACE);
+        p_glCullFace(GL_BACK);
+        p_glFrontFace(s->cull == 2 ? GL_CCW : GL_CW);
+    }
+}
+
+static gl_prog *prog_get(vt3_prog p)
+{
+    if (p == 0 || p > VT3_MAX_PROGS || !g.progs[p - 1].used) return NULL;
+    return &g.progs[p - 1];
+}
+
+static int compile_capture(GLenum type, const char *src, GLuint *out, char *err, size_t errcap)
+{
+    GLuint sh = p_glCreateShader(type);
+    p_glShaderSource(sh, 1, &src, NULL);
+    p_glCompileShader(sh);
+    GLint ok = 0;
+    p_glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        p_glGetShaderInfoLog(sh, (GLsizei)errcap, NULL, err);
+        p_glDeleteShader(sh);
+        return -1;
+    }
+    *out = sh;
+    return 0;
+}
+
+static int gl_prog_create(vt3_prog *out, const char *vs_src, const char *ps_src, char *err, size_t errcap)
+{
+    int slot = -1;
+    for (int i = 0; i < VT3_MAX_PROGS; i++) {
+        if (!g.progs[i].used) { slot = i; break; }
+    }
+    if (slot < 0) { snprintf(err, errcap, "program table full"); return -1; }
+
+    GLuint vs = 0, ps = 0;
+    if (compile_capture(GL_VERTEX_SHADER, vs_src, &vs, err, errcap) != 0) return -1;
+    if (compile_capture(GL_FRAGMENT_SHADER, ps_src, &ps, err, errcap) != 0) {
+        p_glDeleteShader(vs);
+        return -1;
+    }
+    GLuint id = p_glCreateProgram();
+    p_glAttachShader(id, vs);
+    p_glAttachShader(id, ps);
+    p_glLinkProgram(id);
+    p_glDeleteShader(vs);
+    p_glDeleteShader(ps);
+    GLint linked = 0;
+    p_glGetProgramiv(id, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        p_glGetProgramInfoLog(id, (GLsizei)errcap, NULL, err);
+        p_glDeleteProgram(id);
+        return -1;
+    }
+    gl_prog *p = &g.progs[slot];
+    memset(p, 0, sizeof *p);
+    p->id = id;
+    p->used = 1;
+    p->loc_vsc = p_glGetUniformLocation(id, "vsc");
+    p->loc_psc = p_glGetUniformLocation(id, "psc");
+    for (int n = 0; n < VT3_MAX_SAMPLERS; n++) {
+        char name[8];
+        snprintf(name, sizeof name, "s%d", n);
+        p->loc_samp[n] = p_glGetUniformLocation(id, name);
+    }
+    *out = (vt3_prog)(slot + 1);
+    return 0;
+}
+
+static void gl_prog_destroy(vt3_prog h)
+{
+    gl_prog *p = prog_get(h);
+    if (!p) return;
+    p_glDeleteProgram(p->id);
+    p->used = 0;
+}
+
+static void gl_draw_program(const vt3_draw *d)
+{
+    gl_prog *p = prog_get(d->prog);
+    if (!p || !d->layout) return;
+    gl_bind_logical_fbo();
+    apply_state(&d->state);
+
+    p_glBindVertexArray(g.vao);
+    p_glBindBuffer(GL_ARRAY_BUFFER, g.vbo);
+    p_glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)d->vertex_bytes, d->vertices, GL_STREAM_DRAW);
+
+    uint32_t want = 0;
+    for (int i = 0; i < d->layout->count && i < VT3_MAX_VATTR; i++) {
+        const vt3_vattr *a = &d->layout->attr[i];
+        if (a->location < 0 || a->location >= VT3_MAX_VATTR) continue;
+        want |= 1u << a->location;
+        GLenum t = a->type == VT3_VT_UBYTE_NORM ? GL_UNSIGNED_BYTE : GL_FLOAT;
+        GLboolean norm = a->type == VT3_VT_UBYTE_NORM ? GL_TRUE : GL_FALSE;
+        p_glEnableVertexAttribArray((GLuint)a->location);
+        p_glVertexAttribPointer((GLuint)a->location, a->components, t, norm, d->layout->stride,
+                                (const void *)(intptr_t)a->offset);
+    }
+    for (int loc = 0; loc < VT3_MAX_VATTR; loc++) {
+        if ((g.attr_mask & (1u << loc)) && !(want & (1u << loc))) p_glDisableVertexAttribArray((GLuint)loc);
+    }
+    g.attr_mask = want;
+
+    p_glUseProgram(p->id);
+    if (p->loc_vsc >= 0) p_glUniform4fv(p->loc_vsc, VT3_CONST_REGS, d->vsc ? d->vsc : g.zero_consts);
+    if (p->loc_psc >= 0) p_glUniform4fv(p->loc_psc, VT3_CONST_REGS, d->psc ? d->psc : g.zero_consts);
+    for (int n = 0; n < VT3_MAX_SAMPLERS; n++) {
+        if (p->loc_samp[n] < 0) continue;
+        vt3_tex t = d->samplers[n];
+        p_glActiveTexture(GL_TEXTURE0 + (GLenum)n);
+        p_glBindTexture(GL_TEXTURE_2D, (t != 0 && t <= VT3_MAX_TEX && g.tex[t - 1].used) ? g.tex[t - 1].id : g.white);
+        p_glUniform1i(p->loc_samp[n], n);
+    }
+    p_glActiveTexture(GL_TEXTURE0);
+
+    if (d->indices) {
+        p_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g.ebo);
+        p_glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)d->count * 2, d->indices, GL_STREAM_DRAW);
+        p_glDrawElements(d->prim == VT3_PRIM_TRIANGLESTRIP ? GL_TRIANGLE_STRIP : GL_TRIANGLES,
+                         (GLsizei)d->count, GL_UNSIGNED_SHORT, NULL);
+    } else {
+        p_glDrawArrays(d->prim == VT3_PRIM_TRIANGLESTRIP ? GL_TRIANGLE_STRIP : GL_TRIANGLES, 0, (GLsizei)d->count);
+    }
+}
+
+static void gl_readback(uint8_t *rgba)
+{
+    int w = g.logical_w, h = g.logical_h;
+    p_glBindFramebuffer(GL_FRAMEBUFFER, g.fbo);
+    p_glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    p_glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);   /* bottom row first */
+    p_glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    size_t row = (size_t)w * 4;
+    uint8_t *tmp = malloc(row);
+    if (!tmp) return;
+    for (int y = 0; y < h / 2; y++) {
+        uint8_t *a = rgba + (size_t)y * row, *b = rgba + (size_t)(h - 1 - y) * row;
+        memcpy(tmp, a, row);
+        memcpy(a, b, row);
+        memcpy(b, tmp, row);
+    }
+    free(tmp);
+}
+
 const vt3_gfx_ops vt3_gfx_gl33 = {
     .name = "OpenGL 3.3 core",
     .init = gl_init,
@@ -378,4 +620,8 @@ const vt3_gfx_ops vt3_gfx_gl33 = {
     .clear = gl_clear,
     .draw = gl_draw,
     .present = gl_present,
+    .prog_create = gl_prog_create,
+    .prog_destroy = gl_prog_destroy,
+    .draw_program = gl_draw_program,
+    .readback = gl_readback,
 };

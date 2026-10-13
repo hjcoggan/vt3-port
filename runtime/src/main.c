@@ -14,6 +14,9 @@
 #include "vt3/vt3_renderer.h"
 #include "vt3shim/shim.h"
 
+int vt3_sm2_glcheck_dir(const char *dir);
+int vt3_sm2_gl_draw_test(void);
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,7 +40,8 @@ static void usage(const char *argv0)
            "  --no-audio         do not open the audio device\n"
            "  --no-vsync         disable vsync\n"
            "  --game-root PATH   directory for game data (Win32 paths map onto it)\n"
-           "  --selftest [PATH]  run the self-test; PATH is an .adx or .xpac for the ADX check\n",
+           "  --selftest [PATH]  run the self-test; PATH is an .adx or .xpac for the ADX check\n"
+           "  --sm2-check DIR    compile and link SM2 shaders (.vs_2_0.bin / .ps_2_0.bin) in GL\n",
            argv0, argv0);
 }
 
@@ -99,6 +103,10 @@ int main(int argc, char **argv)
             cfg.audio = 0;
         } else if (strcmp(a, "--no-vsync") == 0) {
             cfg.vsync = 0;
+        } else if (strcmp(a, "--sm2-draw-test") == 0) {
+            return vt3_sm2_gl_draw_test();
+        } else if (strcmp(a, "--sm2-check") == 0 && i + 1 < argc) {
+            return vt3_sm2_glcheck_dir(argv[i + 1]);
         } else if (strcmp(a, "--game-root") == 0 && i + 1 < argc) {
             cfg.game_root = argv[++i];
         } else {

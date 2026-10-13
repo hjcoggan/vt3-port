@@ -11,6 +11,7 @@
 #ifndef VT3_RENDERER_H
 #define VT3_RENDERER_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct vt3_rect {
@@ -54,6 +55,55 @@ typedef struct vt3_gfx_config {
     int integer_scale;         /* nonzero: whole-number scaling where it fits */
 } vt3_gfx_config;
 
+/* ---- programmable path (SM2 translator output) ---------------------- */
+
+#define VT3_MAX_VATTR    16
+#define VT3_MAX_SAMPLERS 16
+
+typedef uint32_t vt3_prog;      /* 0 = none */
+
+typedef enum vt3_vtype {
+    VT3_VT_FLOAT = 0,           /* 1-4 floats */
+    VT3_VT_UBYTE_NORM = 1       /* 4 unsigned bytes, normalised (D3DCOLOR order B,G,R,A) */
+} vt3_vtype;
+
+typedef struct vt3_vattr {
+    int location;               /* GLSL input location */
+    int components;             /* 1-4 */
+    vt3_vtype type;
+    int offset;                 /* bytes from the vertex start */
+} vt3_vattr;
+
+typedef struct vt3_vlayout {
+    int stride;                 /* bytes per vertex */
+    int count;
+    vt3_vattr attr[VT3_MAX_VATTR];
+} vt3_vlayout;
+
+/* Render state in D3D9 terms (D3DBLEND_*, D3DCMP_*, D3DCULL_* values); the backend maps them. */
+typedef struct vt3_rstate {
+    int alpha_blend;            /* D3DRS_ALPHABLENDENABLE */
+    int src_blend, dst_blend;   /* D3DBLEND_* */
+    int depth_test;             /* D3DRS_ZENABLE */
+    int depth_write;            /* D3DRS_ZWRITEENABLE */
+    int depth_func;             /* D3DCMP_* */
+    int cull;                   /* D3DCULL_NONE / CW / CCW */
+} vt3_rstate;
+
+typedef struct vt3_draw {
+    vt3_prog prog;
+    const vt3_vlayout *layout;
+    const void *vertices;       /* vertex buffer contents */
+    uint32_t vertex_bytes;
+    const uint16_t *indices;    /* NULL = non-indexed */
+    uint32_t count;             /* vertices, or indices when indexed */
+    vt3_prim prim;
+    const float *vsc;           /* 256 x vec4, NULL = zeros */
+    const float *psc;           /* 256 x vec4, NULL = zeros */
+    vt3_tex samplers[VT3_MAX_SAMPLERS];
+    vt3_rstate state;
+} vt3_draw;
+
 typedef struct vt3_gfx_ops {
     const char *name;
     int  (*init)(int logical_w, int logical_h);
@@ -65,6 +115,10 @@ typedef struct vt3_gfx_ops {
     void (*clear)(uint32_t argb);
     void (*draw)(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex);
     void (*present)(const vt3_rect *dst, int nearest, int drawable_w, int drawable_h);
+    int  (*prog_create)(vt3_prog *out, const char *vs_src, const char *ps_src, char *err, size_t errcap);
+    void (*prog_destroy)(vt3_prog p);
+    void (*draw_program)(const vt3_draw *d);
+    void (*readback)(uint8_t *rgba);        /* logical size, RGBA8, top row first */
 } vt3_gfx_ops;
 
 int  vt3_gfx_init(const vt3_gfx_ops *ops, const vt3_gfx_config *cfg);
@@ -77,6 +131,11 @@ void vt3_gfx_clear(uint32_t argb);
 void vt3_gfx_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex);
 /* Letterbox the logical buffer into the drawable and show it. Does not swap. */
 void vt3_gfx_present(int drawable_w, int drawable_h);
+
+int  vt3_gfx_prog_create(vt3_prog *out, const char *vs_src, const char *ps_src, char *err, size_t errcap);
+void vt3_gfx_prog_destroy(vt3_prog p);
+void vt3_gfx_draw_program(const vt3_draw *d);
+void vt3_gfx_readback(uint8_t *rgba);
 
 extern const vt3_gfx_ops vt3_gfx_gl33;
 

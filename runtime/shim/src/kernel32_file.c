@@ -21,10 +21,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-typedef struct vfile {
-    int fd;
-    int64_t size;
-} vfile;
 
 /*
  * Resolve a Win32 path (drive letter and backslashes allowed) under the game
@@ -178,17 +174,27 @@ BOOL WINAPI ReadFile(HANDLE hf, LPVOID buffer, DWORD bytes, LPDWORD bytes_read, 
 
 BOOL WINAPI WriteFile(HANDLE hf, LPCVOID buffer, DWORD bytes, LPDWORD bytes_written, LPOVERLAPPED ovl)
 {
-    (void)buffer;
-    (void)bytes;
-    (void)bytes_written;
     (void)ovl;
-    if (!vt3s_handle_get(hf, VT3S_H_FILE)) {
+    vfile *f = vt3s_handle_get(hf, VT3S_H_FILE);
+    if (!f) {
         vt3s_set_last_error(ERROR_INVALID_HANDLE);
         return FALSE;
     }
-    vt3s_unimpl("WriteFile");   /* read-only so far */
-    vt3s_set_last_error(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    if (bytes && !vt3s_guest_range_ok(buffer, bytes)) {
+        vt3s_set_last_error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    const uint8_t *src = bytes ? vt3_g2h(buffer) : NULL;
+    DWORD done = 0;
+    while (done < bytes) {
+        ssize_t w = write(f->fd, src + done, bytes - done);
+        if (w < 0 && errno == EINTR) continue;
+        if (w <= 0) break;
+        done += (DWORD)w;
+    }
+    if (bytes_written) vt3s_store_u32(bytes_written, done);
+    vt3s_set_last_error(done == bytes ? ERROR_SUCCESS : ERROR_ACCESS_DENIED);
+    return done == bytes ? TRUE : FALSE;
 }
 
 DWORD WINAPI SetFilePointer(HANDLE hf, LONG distance, LPLONG distance_high, DWORD method)
@@ -233,12 +239,16 @@ DWORD WINAPI GetFileSize(HANDLE hf, LPDWORD size_high)
 
 BOOL WINAPI CloseHandle(HANDLE h)
 {
+    if (vt3s_handle_get(h, VT3S_H_SYNC)) {
+        vt3s_handle_take(h, VT3S_H_SYNC);
+        return TRUE;
+    }
     vfile *f = vt3s_handle_take(h, VT3S_H_FILE);
     if (!f) {
         vt3s_set_last_error(ERROR_INVALID_HANDLE);
         return FALSE;
     }
-    close(f->fd);
+    if (!f->std) close(f->fd);
     free(f);
     return TRUE;
 }

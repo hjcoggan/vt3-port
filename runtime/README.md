@@ -34,6 +34,13 @@ Needs Xcode command-line tools, CMake, and SDL3 from Homebrew:
 The window clears to `0xFF1B3A4B` (ARGB) and draws one gradient quad. This
 checks the GL path, not the game.
 
+## SM2 shader checks
+
+    ./build/vt3rt --sm2-draw-test                      # hand-assembled vs_2_0/ps_2_0 pair, GL readback
+    ./build/vt3rt --sm2-check dump/runtime/shaders/bin # compile and link extracted blobs in GL
+
+`--sm2-check` reads `*.vs_2_0.bin` / `*.ps_2_0.bin` from the directory you name. Those are game-derived and stay outside the repo. The translator is `src/render/sm2_glsl.c`, and its output conventions are in `include/vt3/vt3_sm2.h`.
+
 ## Self-test
 
     ./build/vt3rt --selftest                                  # unit checks only

@@ -4,11 +4,20 @@
 
 #include "win32/types.h"
 
+/* File object behind a VT3S_H_FILE handle. std is set for the console handles,
+ * which CloseHandle must not close. */
+typedef struct vfile {
+    int fd;
+    int64_t size;
+    int std;
+} vfile;
+
 /* Handle table. HANDLE values are (slot + 1) * 4, never 0 or -1. */
 typedef enum vt3s_hkind {
     VT3S_H_NONE = 0,
     VT3S_H_HEAP,
-    VT3S_H_FILE
+    VT3S_H_FILE,
+    VT3S_H_SYNC     /* event or mutex: no state, single-threaded */
 } vt3s_hkind;
 
 HANDLE vt3s_handle_new(vt3s_hkind kind, void *obj);
@@ -27,6 +36,9 @@ uint32_t vt3s_load_u32(GPTR p);
 
 /* Game root for file paths. Never NULL: "." if unset. */
 const char *vt3s_game_root(void);
+
+/* System DLL handles for GetModuleHandleA and LoadLibraryA. 0 when not a system DLL. */
+HANDLE vt3s_system_module(LPCSTR name);
 
 /* Heap module. */
 void vt3s_heap_module_init(void);

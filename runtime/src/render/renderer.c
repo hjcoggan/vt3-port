@@ -69,3 +69,25 @@ void vt3_gfx_present(int drawable_w, int drawable_h)
     int nearest = g_cfg.integer_scale && dst.w % g_cfg.logical_w == 0 && dst.h % g_cfg.logical_h == 0;
     g_ops->present(&dst, nearest, drawable_w, drawable_h);
 }
+
+int vt3_gfx_prog_create(vt3_prog *out, const char *vs_src, const char *ps_src, char *err, size_t errcap)
+{
+    if (!g_ops || !g_ops->prog_create) return -1;
+    return g_ops->prog_create(out, vs_src, ps_src, err, errcap);
+}
+
+void vt3_gfx_prog_destroy(vt3_prog p)
+{
+    if (g_ops && g_ops->prog_destroy) g_ops->prog_destroy(p);
+}
+
+void vt3_gfx_draw_program(const vt3_draw *d)
+{
+    if (g_ops && g_ops->draw_program && d && d->count) g_ops->draw_program(d);
+}
+
+void vt3_gfx_readback(uint8_t *rgba)
+{
+    if (g_ops && g_ops->readback) g_ops->readback(rgba);
+}
+
