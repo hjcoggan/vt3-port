@@ -16,3 +16,10 @@
 
 - Game data never goes into git. `.gitignore` covers ISOs, CABs, executables, DLLs, and extracted assets.
 - Only English content is extracted and documented. Other languages are skipped.
+
+## Analysis versus runtime (owner clarification)
+
+- Compatibility layers (Wine, CrossOver, and similar) are allowed on the Mac for analysis only. Examples: running the original game to dump decrypted memory, tracing SECDRV IOCTL traffic, or observing behaviour.
+- The shipped port must be native arm64 on both macOS and Android. No Wine, Winlator, or Proton at runtime.
+- Decompiled code is written from our own analysis. Third-party code is not copied into the repo. The GPL-3 SafeDiscShim source was reviewed as a protocol reference only.
+- REA's Ghidra provider needs `GHIDRA_INSTALL_DIR` in the MCP server environment. Ghidra headless needs `JAVA_HOME` set to JDK 21.
