@@ -26,6 +26,19 @@ DWORD  WINAPI SetFilePointer(HANDLE file, LONG distance, LPLONG distance_high, D
 DWORD  WINAPI GetFileSize(HANDLE file, LPDWORD size_high);
 BOOL   WINAPI CloseHandle(HANDLE handle);
 
+/* Directory search. Win32 wildcard rules ('*' and '?'), case-insensitive. */
+typedef GPTR LPWIN32_FIND_DATAA;
+#define MAX_PATH                 260u
+#define WIN32_FIND_DATAA_SIZE    320u   /* sizeof(WIN32_FIND_DATAA) on 32-bit Windows */
+#define FILE_ATTRIBUTE_READONLY  0x00000001u
+#define FILE_ATTRIBUTE_DIRECTORY 0x00000010u
+#define ERROR_NO_MORE_FILES      18u
+#define ERROR_PATH_NOT_FOUND     3u
+#define ERROR_INVALID_NAME       123u
+HANDLE WINAPI FindFirstFileA(LPCSTR pattern, LPWIN32_FIND_DATAA data);
+BOOL   WINAPI FindNextFileA(HANDLE find, LPWIN32_FIND_DATAA data);
+BOOL   WINAPI FindClose(HANDLE find);
+
 /* Errors. */
 DWORD  WINAPI GetLastError(void);
 void   WINAPI SetLastError(DWORD error);

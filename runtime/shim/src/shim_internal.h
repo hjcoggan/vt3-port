@@ -20,7 +20,8 @@ typedef enum vt3s_hkind {
     VT3S_H_HEAP,
     VT3S_H_FILE,
     VT3S_H_SYNC,    /* event or mutex: a struct vt3s_sync */
-    VT3S_H_THREAD   /* a guest thread: a vt3s_thread */
+    VT3S_H_THREAD,  /* a guest thread: a vt3s_thread */
+    VT3S_H_FIND     /* a directory search: a vfind (kernel32_file.c) */
 } vt3s_hkind;
 
 typedef struct vt3s_thread vt3s_thread;
