@@ -23,3 +23,11 @@
 - The shipped port must be native arm64 on both macOS and Android. No Wine, Winlator, or Proton at runtime.
 - Decompiled code is written from our own analysis. Third-party code is not copied into the repo. The GPL-3 SafeDiscShim source was reviewed as a protocol reference only.
 - REA's Ghidra provider needs `GHIDRA_INSTALL_DIR` in the MCP server environment. Ghidra headless needs `JAVA_HOME` set to JDK 21.
+
+## 2026-10-14: Clean-room relaxed; prototype builds
+
+- The owner has relaxed the clean-room requirement for the SafeDisc work. This is a private research project, nothing is distributed, and the games are owned. Reference code, including SafeDiscShim (GPL-3), may be used for analysis. Any GPL code that ends up in the repo must be flagged here before a public release. None is public at present.
+- The owner donated two prototype archives. Neither is PC.
+  - Feb 21, 2007: a PSP UMD image (`ULUS-10246`, `PSP_GAME`). Its game data uses the same CAPX, ADB, and anim.db layouts as the PC release. Its PRX files are encrypted (`~SCE`), so they give no symbols.
+  - Dec 16, 2006: a PS3 build (`PS3_GAME`, `vt3.xaf` at 4.5 GB, `PS3UPDAT.PUP`). It's not yet analysed.
+- Neither prototype is useful for PC symbols directly. They are useful as cross-platform references for the data formats.
