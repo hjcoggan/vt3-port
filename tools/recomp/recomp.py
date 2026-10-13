@@ -27,6 +27,7 @@ Model in brief:
 
 import argparse
 import os
+import re
 import struct
 import sys
 from collections import Counter
@@ -257,10 +258,17 @@ def ea(op):
     return f"((uint32_t)({e}))"
 
 
+# Flat segment model: segment registers hold the Windows selectors. Loads return them.
+# Stores are ignored, because nothing reads a segment base except through FS.
+SEG_VALUE = {'cs': 0x1B, 'ds': 0x23, 'es': 0x23, 'ss': 0x23, 'fs': 0x3B, 'gs': 0x00}
+
+
 def val(op, sz):
     """C expression for the operand's value, as uint32_t, masked to its width."""
     if op.kind == 'imm':
         return f"0x{op.imm & MASK[sz]:x}u"
+    if op.kind == 'reg' and op.reg in SEG_VALUE:
+        return f"0x{SEG_VALUE[op.reg]:x}u"
     if op.kind == 'mem':
         return f"rd{8 * sz}({ea(op)})"
     if op.kind == 'reg':
@@ -287,6 +295,8 @@ def setreg(name, expr):
 
 
 def store(op, sz, expr):
+    if op.kind == 'reg' and op.reg in SEG_VALUE:
+        return ""
     if op.kind == 'reg':
         return setreg(op.reg, expr)
     if op.kind == 'mem':
@@ -333,23 +343,32 @@ def is_jcc(mn):
 # ----------------------------------------------------------------------------
 
 class JTable:
-    __slots__ = ('addr', 'table', 'count', 'targets', 'heuristic')
+    """An indirect jump through a table. `bad` is set when the table cannot be trusted.
 
-    def __init__(self, addr, table, count, targets, heuristic):
+    A table is accepted only with a cmp/ja (or cmp/jae) bound and at least two
+    entries, and every entry must be code. Otherwise `bad` holds the reason, and
+    the jump traps at run time and is counted as unsupported.
+    """
+    __slots__ = ('addr', 'table', 'count', 'targets', 'bad')
+
+    def __init__(self, addr, table, count, targets, bad=None):
         self.addr, self.table, self.count = addr, table, count
-        self.targets, self.heuristic = targets, heuristic
+        self.targets, self.bad = targets, bad
 
 
 class Analysis:
-    def __init__(self, img, dec, log):
+    def __init__(self, img, dec, log, table_sizes=None):
         self.img = img
         self.dec = dec
         self.log = log
         self.E = {}           # function entry -> hard?
         self.tables = {}      # indirect jump addr -> JTable or None
-        self.bad_tables = set()
         self.table_slots = set()
         self.soft_bad = set()
+        self.unbounded = {}   # jump addr -> (table, index register), for function-level bounds
+        self.table_sizes = dict(table_sizes or {})   # explicit sizes, each with a source note
+        self._jcc_index = None
+        self.failed = {}      # entry -> reason, for entries whose body would not decode
 
     # -- instruction flow ---------------------------------------------------
 
@@ -370,20 +389,108 @@ class Analysis:
         return out
 
     def _bound_before(self, end, idx_reg):
-        """Find 'cmp idx,N ; ja/jae default' immediately before end."""
+        """Entry count for a jump at end whose index is idx_reg, or None.
+
+        Three patterns bound an index, in order of preference:
+          1. cmp idx,N ; ja default (index 0..N) or jae/jnb default (0..N-1), just before end.
+          2. and idx,M as the last write to idx before end (index 0..M).
+          3. cmp idx,N ; jb end (the table dispatch is the taken target, index 0..N-1).
+        """
         for seq in self._windows(end):
             if len(seq) < 2:
                 continue
-            j, c = seq[-1], seq[-2]
+            j = seq[-1]
             if j.mn not in ('ja', 'jae', 'jnb'):
                 continue
-            if c.mn != 'cmp' or len(c.ops) != 2:
+            # The compare sets the flags. Moves, lea, and push/pop between it and the branch
+            # leave the flags alone, so they can be skipped if they do not write the index.
+            for c in reversed(seq[:-1]):
+                if c.mn == 'cmp' and len(c.ops) == 2 and c.ops[0].kind == 'reg' and \
+                        c.ops[0].reg == idx_reg and c.ops[1].kind == 'imm':
+                    n = c.ops[1].imm & M32
+                    return n + 1 if j.mn == 'ja' else n
+                if c.mn in ('mov', 'lea', 'push', 'pop') and not (
+                        c.ops and c.ops[0].kind == 'reg' and c.ops[0].reg == idx_reg):
+                    continue
+                break
+        for seq in self._windows(end):
+            for ins in reversed(seq):
+                if len(ins.ops) >= 1 and ins.ops[0].kind == 'reg' and ins.ops[0].reg == idx_reg:
+                    if ins.mn == 'and' and len(ins.ops) == 2 and ins.ops[1].kind == 'imm':
+                        m = ins.ops[1].imm & M32
+                        if m >= 1:
+                            return m + 1
+                    if ins.mn not in ('cmp', 'test'):
+                        break
+            else:
                 continue
-            if c.ops[0].kind != 'reg' or c.ops[0].reg != idx_reg or c.ops[1].kind != 'imm':
+            break
+        # The dispatch can also be reached by a taken jb from far away in the function.
+        for j in self._jcc_sites(end):
+            jb = self.dec.at(j)
+            if jb is None or jb.mn not in ('jb', 'jnae', 'jc') or jb.ops[0].imm & M32 != end:
                 continue
-            n = c.ops[1].imm & M32
-            return n + 1 if j.mn == 'ja' else n
+            for k in range(2, 8):
+                c = self.dec.at(j - k)
+                if c is not None and c.addr + c.size == j and c.mn == 'cmp' and len(c.ops) == 2 \
+                        and c.ops[0].kind == 'reg' and c.ops[0].reg == idx_reg and c.ops[1].kind == 'imm':
+                    return c.ops[1].imm & M32
         return None
+
+    def _function_bound(self, jaddr, seen):
+        """Bound for an unbounded jump, from the function's own instructions.
+
+        Looks at the last instruction before the jump that writes the index register. If it
+        is and idx,M, the index is in 0..M. Any other write, or none, gives no bound."""
+        table, idx = self.unbounded[jaddr]
+        for a in sorted((x for x in seen if x < jaddr), reverse=True):
+            ins = seen[a]
+            if not ins.ops or ins.ops[0].kind != 'reg' or ins.ops[0].reg != idx:
+                continue
+            if ins.mn == 'and' and len(ins.ops) == 2 and ins.ops[1].kind == 'imm' and \
+                    (ins.ops[1].imm & M32) >= 1:
+                return (ins.ops[1].imm & M32) + 1
+            if ins.mn not in ('cmp', 'test'):
+                return None
+        return None
+
+    def resolve_function_bounds(self, jumps, seen):
+        """Resolve unbounded jumps among seen. Returns True if any table was resolved."""
+        progressed = False
+        for jaddr in jumps:
+            if jaddr not in self.unbounded or jaddr not in seen:
+                continue
+            count = self._function_bound(jaddr, seen)
+            if count is None:
+                continue
+            table, idx = self.unbounded.pop(jaddr)
+            try:
+                self.tables[jaddr] = self._table_from_count(jaddr, table, count)
+            except DecodeError:
+                self.tables[jaddr] = JTable(jaddr, table, 0, [], bad="table outside image")
+            progressed = True
+        return progressed
+
+    def _jcc_sites(self, target):
+        """Addresses of short or near conditional branches whose byte encoding targets target.
+
+        Built once from the executable bytes. Candidates are checked by decoding, so
+        a byte pattern inside another instruction does no harm."""
+        if self._jcc_index is None:
+            index = {}
+            for lo, hi in self.img.exec_ranges:
+                off, end = lo - self.img.base, hi - self.img.base
+                buf = self.img.mem
+                for p in range(off, end - 1):
+                    op = buf[p]
+                    if op in (0x72, 0x73, 0x76, 0x77):                 # jb, jae, jbe, ja rel8
+                        t = self.img.base + p + 2 + struct.unpack_from('<b', buf, p + 1)[0]
+                        index.setdefault(t, []).append(self.img.base + p)
+                    elif op == 0x0F and p + 5 < end and buf[p + 1] in (0x82, 0x83, 0x86, 0x87):
+                        t = self.img.base + p + 6 + struct.unpack_from('<i', buf, p + 2)[0]
+                        index.setdefault(t, []).append(self.img.base + p)
+            self._jcc_index = index
+        return self._jcc_index.get(target, [])
 
     def table_for(self, ins):
         """Return a JTable for an indirect jump, or None if it is not a table jump."""
@@ -410,28 +517,32 @@ class Analysis:
         return res
 
     def _make_table(self, jaddr, table, idx_reg, bound_end):
+        if jaddr in self.table_sizes:
+            return self._table_from_count(jaddr, table, self.table_sizes[jaddr])
         count = self._bound_before(bound_end, idx_reg)
-        heuristic = count is None
-        if heuristic:
-            count = 0
-            while count < 1024 and self.img.in_image(table + 4 * count) and \
-                    self.img.is_exec(self.img.read32(table + 4 * count)):
-                count += 1
-            self.log(f"warning: jump at {jaddr:#x}: no bound found, heuristic count {count}")
+        if count is None:
+            # Not bounded locally. Function-level resolution may still bound it.
+            self.unbounded[jaddr] = (table, idx_reg)
+            return JTable(jaddr, table, 0, [], bad="no cmp/ja bound")
+        return self._table_from_count(jaddr, table, count)
+
+    def _table_from_count(self, jaddr, table, count):
+        if count < 2:
+            self.log(f"error: jump at {jaddr:#x}: bound gives {count} entries")
+            return JTable(jaddr, table, count, [], bad=f"bound gives {count} entries")
         targets = []
-        try:
-            for i in range(count):
+        for i in range(count):
+            try:
                 v = self.img.read32(table + 4 * i)
-                if not self.img.is_exec(v):
-                    raise DecodeError(jaddr, f"table entry {i} -> {v:#x} not code")
-                if v not in targets:
-                    targets.append(v)
-        except DecodeError:
-            self.bad_tables.add(jaddr)
-            raise
+            except DecodeError:
+                return JTable(jaddr, table, count, [], bad=f"entry {i} outside image")
+            if not self.img.is_exec(v):
+                return JTable(jaddr, table, count, [], bad=f"entry {i} = {v:#x} is not code")
+            if v not in targets:
+                targets.append(v)
         for i in range(count):
             self.table_slots.add(table + 4 * i)
-        return JTable(jaddr, table, count, sorted(targets), heuristic)
+        return JTable(jaddr, table, count, sorted(targets))
 
     def flow(self, ins):
         """(targets, falls_through) for one instruction's control flow."""
@@ -442,11 +553,9 @@ class Analysis:
             op = ins.ops[0]
             if op.kind == 'imm':
                 return [op.imm & M32], False
-            if ins.addr in self.bad_tables:
-                raise DecodeError(ins.addr, "bad jump table")
             tb = self.table_for(ins)
             if tb is not None:
-                return list(tb.targets), False
+                return ([] if tb.bad else list(tb.targets)), False
             return [], False  # indirect tail jump: codegen emits vt_icall
         if is_jcc(mn) or mn in LOOPS or mn in ('jecxz', 'jcxz'):
             return [ins.ops[0].imm & M32], True
@@ -481,23 +590,33 @@ class Analysis:
     def _scan(self, f, hard, work):
         seen, todo = set(), [f]
         try:
-            while todo:
-                a = todo.pop()
-                if a in seen or (a != f and a in self.E):
-                    continue
-                ins = self.dec.at(a)
-                if ins is None:
-                    raise DecodeError(a, f"not code (from function {f:#x})")
-                seen.add(a)
-                if ins.mn == 'call' and ins.ops[0].kind == 'imm':
-                    self._add(work, ins.ops[0].imm & M32, hard)
-                targets, falls = self.flow(ins)
-                todo.extend(targets)
-                if falls:
-                    todo.append(a + ins.size)
+            while True:
+                while todo:
+                    a = todo.pop()
+                    if a in seen or (a != f and a in self.E):
+                        continue
+                    ins = self.dec.at(a)
+                    if ins is None:
+                        raise DecodeError(a, f"not code (from function {f:#x})")
+                    seen.add(a)
+                    if ins.mn == 'call' and ins.ops[0].kind == 'imm':
+                        self._add(work, ins.ops[0].imm & M32, hard)
+                    targets, falls = self.flow(ins)
+                    todo.extend(targets)
+                    if falls:
+                        todo.append(a + ins.size)
+                # Jumps left unbounded locally may now be bounded from this function.
+                pending = [a for a in seen if a in self.unbounded]
+                if not self.resolve_function_bounds(pending, {a: self.dec.at(a) for a in seen}):
+                    break
+                for a in pending:
+                    if a in self.tables and self.tables[a] and not self.tables[a].bad:
+                        todo.extend(self.tables[a].targets)
         except DecodeError as e:
+            # A failed entry is not a reason to stop the run. Codegen emits a trap for it,
+            # and the report lists it.
             if hard:
-                raise TranslateError(f"hard function {f:#x}: {e}") from e
+                self.failed[f] = str(e)
             self.soft_bad.add(f)
 
     def closure(self, roots):
@@ -508,9 +627,72 @@ class Analysis:
             f = work.pop()
             self._scan(f, self.E[f], work)
 
-    def build_entries(self, reloc_sites):
+    def code_pointer_candidates(self):
+        """Code addresses that the program stores, found in two places:
+          * immediates in translated code (for example mov [slot], offset label), and
+          * dwords in non-executable sections that point into executable ones.
+        Neither is a relocation in VT3.exe, and neither is a call target, so direct
+        discovery never sees them."""
+        cands = set()
+        for e in list(self.E):
+            try:
+                seen = self.reach(e)
+            except DecodeError:
+                continue
+            for ins in seen.values():
+                for op in ins.ops:
+                    if op.kind == 'imm' and self.img.is_exec(op.imm & M32):
+                        cands.add(op.imm & M32)
+        for sec in self.img.pe.sections:
+            if sec.Characteristics & IMAGE_SCN_MEM_EXECUTE:
+                continue
+            lo = self.img.base + sec.VirtualAddress
+            hi = lo + (sec.Misc_VirtualSize or sec.SizeOfRawData)
+            for a in range(lo, min(hi, self.img.base + self.img.size) - 3, 4):
+                v = struct.unpack_from('<I', self.img.mem, a - self.img.base)[0]
+                if self.img.is_exec(v):
+                    cands.add(v)
+        return cands
+
+    def covered_bytes(self):
+        covered = set()
+        for e in self.E:
+            try:
+                for a, ins in self.reach(e).items():
+                    covered.update(range(a, a + ins.size))
+            except DecodeError:
+                pass
+        return covered
+
+    def add_validated(self, cands):
+        """Add candidates that start outside every known body and look like a function.
+
+        A candidate inside existing code is a switch case label or a branch target, not
+        an entry. A candidate must reach a ret without data-like bytes (add [eax], al),
+        and it must decode in full. Returns (candidates, added)."""
+        covered = self.covered_bytes()
+        good = []
+        for c in sorted(cands):
+            if c in self.E or c in covered or self.dec.at(c) is None:
+                continue
+            try:
+                seen = self.reach(c)
+            except DecodeError:
+                continue
+            if len(seen) < 2 or not any(i.mn == 'ret' for i in seen.values()):
+                continue
+            if any(i.mn == 'add' and 'byte ptr [eax], al' in i.text for i in seen.values()):
+                continue
+            good.append((c, False))
+        before = len(self.E)
+        self.closure(good)
+        return len(good), len(self.E) - before
+
+    def build_entries(self, reloc_sites, seeds=(), scan_pointers=True):
         hard_roots = [(self.img.entry, True)] + [(a, True) for a, _ in self.img.exports]
+        hard_roots += [(a, True) for a in seeds if self.img.is_exec(a)]
         self.closure(hard_roots)
+        self.pointer_stats = []
         # A relocation site holds an absolute VA. If that VA is code, it is a
         # candidate entry (function pointer, or a code address in data). Slots
         # that we already read as jump-table entries are not candidates.
@@ -522,10 +704,29 @@ class Analysis:
             if self.img.is_exec(v):
                 soft.append((v, False))
         self.closure(soft)
+        if scan_pointers:
+            for _ in range(3):
+                cands = self.code_pointer_candidates()
+                validated, added = self.add_validated(cands)
+                self.pointer_stats.append((len(cands), validated, added))
+                if added == 0:
+                    break
 
     # -- codegen-time reachability ------------------------------------------
 
     def reach(self, entry):
+        for _ in range(4):
+            seen = self._reach_once(entry)
+            pending = [a for a in seen if a in self.unbounded]
+            if not pending or not self.resolve_function_bounds(pending, seen):
+                break
+        order = sorted(seen)
+        for x, y in zip(order, order[1:]):
+            if x + seen[x].size > y:
+                raise DecodeError(y, f"overlaps instruction at {x:#x}")
+        return seen
+
+    def _reach_once(self, entry):
         seen, todo = {}, [entry]
         while todo:
             a = todo.pop()
@@ -539,10 +740,6 @@ class Analysis:
             todo.extend(targets)
             if falls:
                 todo.append(a + ins.size)
-        order = sorted(seen)
-        for x, y in zip(order, order[1:]):
-            if x + seen[x].size > y:
-                raise DecodeError(y, f"overlaps instruction at {x:#x}")
         return seen
 
 
@@ -587,6 +784,8 @@ class FnGen:
             if op.kind == 'imm':
                 return [self.branch(op.imm & M32)]
             tb = self.an.tables.get(ins.addr)
+            if tb is not None and tb.bad:
+                raise Unsupported(f"jump table ({tb.bad})")
             if tb is not None:
                 cases = "".join(f" case 0x{t:x}u: {self.branch(t)}" for t in tb.targets)
                 return [f"{{ uint32_t t = {val(op, 4)}; switch (t) {{{cases} "
@@ -607,6 +806,9 @@ def plain(ins):
     mn, ops = ins.mn, ins.ops
     if mn in ('nop', 'fnop', 'fwait', 'wait', 'emms', 'prefetchnta', 'prefetcht0', 'prefetcht1'):
         return []
+    special = simd_or_misc(ins)
+    if special is not None:
+        return special
     if mn == 'mov':
         d, s = ops
         sz = size_of(d)
@@ -1090,6 +1292,222 @@ def sse(ins):
     raise Unsupported(mn)
 
 
+# ---- MMX and SSE2 integer ops. The lane arithmetic is in rt/vt3simd.c. -------
+PKOPS = {
+    'paddb': ('VT_PK_ADD', 8), 'paddw': ('VT_PK_ADD', 16), 'paddd': ('VT_PK_ADD', 32), 'paddq': ('VT_PK_ADD', 64),
+    'psubb': ('VT_PK_SUB', 8), 'psubw': ('VT_PK_SUB', 16), 'psubd': ('VT_PK_SUB', 32), 'psubq': ('VT_PK_SUB', 64),
+    'paddsb': ('VT_PK_ADDS', 8), 'paddsw': ('VT_PK_ADDS', 16),
+    'paddusb': ('VT_PK_ADDUS', 8), 'paddusw': ('VT_PK_ADDUS', 16),
+    'psubsb': ('VT_PK_SUBS', 8), 'psubsw': ('VT_PK_SUBS', 16),
+    'psubusb': ('VT_PK_SUBUS', 8), 'psubusw': ('VT_PK_SUBUS', 16),
+    'pmullw': ('VT_PK_MULLO', 16), 'pmulhw': ('VT_PK_MULHI', 16), 'pmulhuw': ('VT_PK_MULHIU', 16),
+    'pavgb': ('VT_PK_AVG', 8), 'pavgw': ('VT_PK_AVG', 16),
+    'pmaxsw': ('VT_PK_MAX', 16), 'pmaxub': ('VT_PK_MAXU', 8),
+    'pminsw': ('VT_PK_MIN', 16), 'pminub': ('VT_PK_MINU', 8),
+    'pcmpeqb': ('VT_PK_EQ', 8), 'pcmpeqw': ('VT_PK_EQ', 16), 'pcmpeqd': ('VT_PK_EQ', 32),
+    'pcmpgtb': ('VT_PK_GT', 8), 'pcmpgtw': ('VT_PK_GT', 16), 'pcmpgtd': ('VT_PK_GT', 32),
+    'pand': ('VT_PK_AND', 64), 'pandn': ('VT_PK_ANDN', 64), 'por': ('VT_PK_OR', 64), 'pxor': ('VT_PK_XOR', 64),
+}
+PKSHIFT = {'psllw': (0, 16), 'pslld': (0, 32), 'psllq': (0, 64),
+           'psrlw': (1, 16), 'psrld': (1, 32), 'psrlq': (1, 64),
+           'psraw': (2, 16), 'psrad': (2, 32)}
+PKUNPACK = {'punpcklbw': (8, 0), 'punpcklwd': (16, 0), 'punpckldq': (32, 0), 'punpcklqdq': (64, 0),
+            'punpckhbw': (8, 1), 'punpckhwd': (16, 1), 'punpckhdq': (32, 1), 'punpckhqdq': (64, 1)}
+PKPACK = {'packssdw': 0, 'packsswb': 1, 'packuswb': 2}
+CMP_PRED = {'eq': 0, 'lt': 1, 'le': 2, 'unord': 3, 'neq': 4, 'nlt': 5, 'nle': 6, 'ord': 7}
+
+
+def _vreg(op):
+    """('xmm', i) or ('mm', i) for a register operand, None for memory."""
+    if op.kind == 'reg':
+        if op.reg.startswith('xmm'):
+            return ('xmm', int(op.reg[3:]))
+        if op.reg.startswith('mm'):
+            return ('mm', int(op.reg[2:]))
+        raise Unsupported(f"register {op.reg}")
+    return None
+
+
+def _vkind(op):
+    """Like _vreg, but None for any register that is not MMX or XMM."""
+    if op.kind == 'reg':
+        if op.reg.startswith('xmm'):
+            return ('xmm', int(op.reg[3:]))
+        if op.reg.startswith('mm'):
+            return ('mm', int(op.reg[2:]))
+    return None
+
+
+def _width(op):
+    """Operand width in bytes for a packed register or memory operand: 8 for MMX, 16 for XMM."""
+    r = _vreg(op)
+    if r is not None:
+        return 8 if r[0] == 'mm' else 16
+    return 16
+
+
+def _vload(op, nb):
+    """C expression for an operand as vt_xmm. Memory loads nb bytes."""
+    r = _vreg(op)
+    if r is None:
+        return f"vt_ldx({ea(op)})" if nb == 16 else f"vt_ldmm({ea(op)})"
+    if r[0] == 'xmm':
+        return f"c->xmm[{r[1]}]"
+    return f"vt_mmv(c->mm[{r[1]}])"
+
+
+def _vstore(op, nb, var):
+    r = _vreg(op)
+    if r is None:
+        raise Unsupported("packed store to memory")
+    if r[0] == 'xmm':
+        return f"c->xmm[{r[1]}] = {var};"
+    return f"c->mm[{r[1]}] = {var}.u64[0];"
+
+
+def simd_or_misc(ins):
+    """Statements for the MMX/SSE2 integer forms and single-instruction gaps, or None."""
+    mn, ops = ins.mn, ins.ops
+    if mn in PKOPS:
+        op, bits = PKOPS[mn]
+        d, s = ops
+        nb = _width(d)
+        return [blk(f"vt_xmm dv = {_vload(d, nb)};", f"vt_xmm sv = {_vload(s, nb)};",
+                    f"vt_pbinop({op}, {bits}, &dv, &sv, {nb});", _vstore(d, nb, 'dv'))]
+    if mn in PKSHIFT:
+        kind, bits = PKSHIFT[mn]
+        d, s = ops
+        nb = _width(d)
+        if s.kind == 'imm':
+            cnt = f"{s.imm & 0xFF}ull"
+        else:
+            r = _vreg(s)
+            if r is None:
+                cnt = f"rd64({ea(s)})"
+            elif r[0] == 'mm':
+                cnt = f"c->mm[{r[1]}]"
+            else:
+                cnt = f"c->xmm[{r[1]}].u64[0]"
+        return [blk(f"vt_xmm dv = {_vload(d, nb)};",
+                    f"vt_pshift({kind}, {bits}, &dv, (uint64_t){cnt}, {nb});", _vstore(d, nb, 'dv'))]
+    if mn in PKUNPACK:
+        bits, high = PKUNPACK[mn]
+        d, s = ops
+        nb = _width(d)
+        return [blk(f"vt_xmm dv = {_vload(d, nb)};", f"vt_xmm sv = {_vload(s, nb)};",
+                    f"vt_punpck({bits}, {high}, &dv, &sv, {nb});", _vstore(d, nb, 'dv'))]
+    if mn in PKPACK:
+        d, s = ops
+        nb = _width(d)
+        return [blk(f"vt_xmm dv = {_vload(d, nb)};", f"vt_xmm sv = {_vload(s, nb)};",
+                    f"vt_ppack({PKPACK[mn]}, &dv, &sv, {nb});", _vstore(d, nb, 'dv'))]
+    if mn == 'pshufw':
+        d, s, im = ops
+        return [blk(f"vt_xmm dv; vt_xmm sv = {_vload(s, 8)};", f"vt_pshufw(&dv, &sv, {im.imm & 0xFF});",
+                    _vstore(d, 8, 'dv'))]
+    if mn in ('pshuflw', 'pshufhw'):
+        d, s, im = ops
+        return [blk(f"vt_xmm dv; vt_xmm sv = {_vload(s, 16)};",
+                    f"vt_pshufhalf(&dv, &sv, {im.imm & 0xFF}, {1 if mn == 'pshufhw' else 0});",
+                    _vstore(d, 16, 'dv'))]
+    if mn == 'pmaddwd':
+        d, s = ops
+        nb = _width(d)
+        return [blk(f"vt_xmm dv = {_vload(d, nb)};", f"vt_xmm sv = {_vload(s, nb)};",
+                    f"vt_pmaddwd(&dv, &sv, {nb});", _vstore(d, nb, 'dv'))]
+    if mn == 'pextrw':
+        d, s, im = ops
+        nb = _width(s)
+        return [blk(f"vt_xmm sv = {_vload(s, nb)};",
+                    store(d, 4, f"vt_pextrw(&sv, {im.imm & 0xFF}, {nb})"))]
+    if mn == 'pinsrw':
+        d, s, im = ops
+        nb = _width(d)
+        v = val(s, 4) if s.kind == 'reg' else val(s, 2)
+        return [blk(f"vt_xmm dv = {_vload(d, nb)};", f"vt_pinsrw(&dv, {v}, {im.imm & 0xFF}, {nb});",
+                    _vstore(d, nb, 'dv'))]
+    if mn == 'pmovmskb':
+        d, s = ops
+        nb = _width(s)
+        return [blk(f"vt_xmm sv = {_vload(s, nb)};", store(d, 4, f"vt_pmovmskb(&sv, {nb})"))]
+    if mn in ('movd', 'movq') and any(_vkind(o) and _vkind(o)[0] == 'mm' for o in ops):
+        d, s = ops
+        kd, ks = _vkind(d), _vkind(s)
+        if kd and kd[0] == 'mm':
+            if ks and ks[0] == 'mm':
+                src = f"c->mm[{ks[1]}]"
+            elif s.kind == 'mem':
+                src = f"rd64({ea(s)})" if mn == 'movq' else f"rd32({ea(s)})"
+            else:
+                src = val(s, 4)
+            return [f"c->mm[{kd[1]}] = (uint64_t)({src});"]
+        if mn == 'movd':
+            return [store(d, 4, f"(uint32_t)c->mm[{ks[1]}]")]
+        if d.kind == 'mem':
+            return [f"wr64({ea(d)}, c->mm[{ks[1]}]);"]
+        return [f"c->xmm[{kd[1]}].u64[0] = c->mm[{ks[1]}]; c->xmm[{kd[1]}].u64[1] = 0;"]
+    if mn in ('cvtps2pi', 'cvttps2pi'):
+        d, s = ops
+        trunc = 1 if mn.startswith('cvtt') else 0
+        return [blk(f"vt_xmm sv = {_vload(s, 16)};",
+                    f"c->mm[{_vreg(d)[1]}] = (uint64_t)vt_cvt_i32((double)sv.f32[0], {trunc}) | "
+                    f"((uint64_t)vt_cvt_i32((double)sv.f32[1], {trunc}) << 32);")]
+    if mn == 'cvtpi2ps':
+        d, s = ops
+        return [blk(f"vt_xmm sv = {_vload(s, 8)};", f"c->xmm[{_vreg(d)[1]}].f32[0] = (float)(int32_t)sv.u32[0];",
+                    f"c->xmm[{_vreg(d)[1]}].f32[1] = (float)(int32_t)sv.u32[1];")]
+    m = re.match(r'^cmp(eq|lt|le|unord|neq|nlt|nle|ord)(ps|pd|ss|sd)$', mn)
+    if m:
+        d, s = ops
+        pred = CMP_PRED[m.group(1)]
+        dbl = 1 if m.group(2)[1] == 'd' else 0
+        scalar = 1 if m.group(2)[0] == 's' else 0
+        return [blk(f"vt_xmm dv = c->xmm[{_xmm(d)}];", f"vt_xmm sv = {_vload(s, 16)};",
+                    f"vt_cmpf({pred}, {dbl}, {scalar}, &dv, &sv);", f"c->xmm[{_xmm(d)}] = dv;")]
+    if mn in ('rcpss', 'rsqrtss'):
+        d, s = ops
+        f = _f32src(s)
+        expr = f"1.0f / {f}" if mn == 'rcpss' else f"1.0f / sqrtf({f})"
+        return [f"c->xmm[{_xmm(d)}].f32[0] = {expr};"]
+    if mn == 'int3':
+        return [f"vt_die_at(0x{ins.addr:x}u, 3u);"]
+    if mn == 'cpuid':
+        return ["VT_SPILL(); vt_cpuid(c); VT_RELOAD();"]
+    if mn == 'xlatb':
+        return [blk("uint32_t t = rd8(ebx + (eax & 0xFFu));", "eax = (eax & 0xFFFFFF00u) | (t & 0xFFu);")]
+    if mn == 'stmxcsr':
+        return [f"wr32({ea(ops[0])}, 0x1F80u);"]
+    if mn == 'ldmxcsr':
+        return []
+    if mn in ('rcl', 'rcr'):
+        d, s = ops
+        sz = size_of(d)
+        bits = 8 * sz
+        m = MASK[sz]
+        n_mod = "(cnt_raw & 0x1Fu) % 9u" if bits == 8 else ("(cnt_raw & 0x1Fu) % 17u" if bits == 16
+                                                          else "(cnt_raw & 0x1Fu)")
+        if mn == 'rcl':
+            step = f"uint32_t t = (a >> {bits - 1}) & 1u; a = ((a << 1) | cf) & 0x{m:x}u; cf = t;"
+            of_expr = f"((a >> {bits - 1}) & 1u) ^ cf"
+        else:
+            step = f"uint32_t t = a & 1u; a = (a >> 1) | (cf << {bits - 1}); cf = t;"
+            of_expr = f"((a >> {bits - 1}) & 1u) ^ ((a >> {bits - 2}) & 1u)"
+        return [blk(f"uint32_t a = {val(d, sz)};", f"uint32_t cnt_raw = {val(s, 1)};",
+                    f"uint32_t n = {n_mod};",
+                    f"for (uint32_t i = 0; i < n; i++) {{ {step} }}",
+                    "if (n == 1u) { of = " + of_expr + " & 1u; }",
+                    store(d, sz, 'a'))]
+    if mn == 'fnstenv' or mn == 'fstenv':
+        return [f"vt_fnstenv(c, {ea(ops[0])});"]
+    if mn == 'fldenv':
+        return [f"vt_fldenv(c, {ea(ops[0])});"]
+    if mn in ('fnsave', 'fsave'):
+        return [f"vt_fnsave(c, {ea(ops[0])});"]
+    if mn == 'frstor':
+        return [f"vt_frstor(c, {ea(ops[0])});"]
+    return None
+
+
 PACKED_ARITH = {
     'addps': ('f32', 4, '+'), 'subps': ('f32', 4, '-'), 'mulps': ('f32', 4, '*'), 'divps': ('f32', 4, '/'),
     'addpd': ('f64', 2, '+'), 'subpd': ('f64', 2, '-'), 'mulpd': ('f64', 2, '*'), 'divpd': ('f64', 2, '/'),
@@ -1316,6 +1734,41 @@ def x87(ins):
         return ["c->ftop = (c->ftop - 1u) & 7u;"]
     if mn == 'ffree':
         return []
+    if mn in ('fsin', 'fcos'):
+        return [f"FST(0) = {mn[1:]}(FST(0));"]
+    if mn == 'fptan':
+        return [blk("FST(0) = tan(FST(0));", "FPUSH(1.0);")]
+    if mn == 'fpatan':
+        return [blk("double s = FST(0); double d = FST(1);", "FST(1) = atan2(d, s);", "FPOP();")]
+    if mn == 'fyl2x':
+        return [blk("double x = FST(0); double y = FST(1);", "FST(1) = y * log2(x);", "FPOP();")]
+    if mn == 'f2xm1':
+        return ["FST(0) = exp2(FST(0)) - 1.0;"]
+    if mn == 'fscale':
+        return ["FST(0) = FST(0) * exp2(trunc(FST(1)));"]
+    if mn == 'fprem':
+        return ["FST(0) = fmod(FST(0), FST(1)); c->fsw &= ~0x400u;"]
+    consts = {'fldl2e': '1.4426950408889634', 'fldln2': '0.6931471805599453',
+              'fldlg2': '0.3010299956639812', 'fldl2t': '3.3219280948873623'}
+    if mn in consts:
+        return [blk(f"double t = {consts[mn]};", "FPUSH(t);")]
+    if mn == 'fxam':
+        return [blk("double v = FST(0);",
+                    "uint32_t sw = (c->fsw & ~0x4700u) | (signbit(v) ? 0x200u : 0u);",
+                    "if (isnan(v)) sw |= 0x100u;",
+                    "else if (isinf(v)) sw |= 0x500u;",
+                    "else if (v == 0.0) sw |= 0x4000u;",
+                    "else if (fpclassify(v) == FP_SUBNORMAL) sw |= 0x4400u;",
+                    "else sw |= 0x400u;",
+                    "c->fsw = sw;")]
+    if mn in ('fiadd', 'fimul', 'fisub', 'fisubr', 'fidiv', 'fidivr'):
+        o = ops[0]
+        cast, rd = {2: ('int16_t', 'rd16'), 4: ('int32_t', 'rd32')}[o.size]
+        base = mn[1:]
+        oc = {'fiadd': '+', 'fimul': '*', 'fisub': '-', 'fisubr': 'r-', 'fidiv': '/', 'fidivr': 'r/'}[mn]
+        sv = f"(double)({cast})({rd}({ea(o)}))"
+        expr = f"s {oc[1:]} d" if oc.startswith('r') else f"d {oc} s"
+        return [blk(f"double s = {sv};", "double d = FST(0);", f"FST(0) = {expr};")]
     raise Unsupported(mn)
 
 
@@ -1370,11 +1823,11 @@ def write_module(img, an, out_dir, name, allow_unsup, log):
                     unsup_hard.append((entry, a, text))
             body.extend(lines)
         except (DecodeError, TranslateError) as e:
-            if hard:
-                raise TranslateError(str(e))
             stubs += 1
+            if hard:
+                an.failed[entry] = str(e)
             body.extend([f"void {fname(entry)}(vt3_cpu *c) {{",
-                         f"  vt_die_at(0x{entry:x}u, 0u); /* soft entry did not decode: {e} */",
+                         f"  vt_die_at(0x{entry:x}u, 0u); /* entry did not decode: {e} */",
                          "}"])
     decl = [f"static void {fname(a)}(vt3_cpu *c);" for a in fns]
     fn_tab = [f"  {{0x{a:08x}u, {fname(a)}, \"sub_{a:08x}\"}}," for a in fns]
@@ -1418,6 +1871,12 @@ def main(argv=None):
     ap.add_argument('--name', default=None)
     ap.add_argument('--allow-unsupported', action='store_true',
                     help='emit traps for unsupported instructions and exit 0')
+    ap.add_argument('--seeds', default=None,
+                    help='file of function entries, one per "// ==== NAME @ ADDR" header (Ghidra dump)')
+    ap.add_argument('--table-sizes', default=None,
+                    help='file of "JUMP_ADDR COUNT [# source]" lines for jump tables whose size is known')
+    ap.add_argument('--no-pointer-scan', action='store_true',
+                    help='do not add code addresses found in immediates and data')
     ap.add_argument('-v', '--verbose', action='store_true')
     args = ap.parse_args(argv)
 
@@ -1430,8 +1889,25 @@ def main(argv=None):
     name = ''.join(ch if ch.isalnum() else '_' for ch in name)
     img = Image(args.image)
     dec = Decoder(img)
-    an = Analysis(img, dec, log)
-    an.build_entries(img.reloc_sites)
+    sizes = {}
+    if args.table_sizes:
+        with open(args.table_sizes) as f:
+            for line in f:
+                body = line.split('#')[0].split()
+                if len(body) == 2:
+                    sizes[int(body[0], 16)] = int(body[1])
+    an = Analysis(img, dec, log, table_sizes=sizes)
+    seeds = []
+    if args.seeds:
+        with open(args.seeds, errors='replace') as f:
+            for line in f:
+                m = re.match(r'^// ==== .* @ ([0-9a-fA-F]{8})\s*$', line)
+                if m:
+                    seeds.append(int(m.group(1), 16))
+        print(f"seeds: {len(seeds)} entries from {args.seeds}")
+    an.build_entries(img.reloc_sites, seeds, scan_pointers=not args.no_pointer_scan)
+    for i, (ncand, nvalid, nadded) in enumerate(getattr(an, 'pointer_stats', [])):
+        print(f"pointer scan round {i + 1}: {ncand} candidates, {nvalid} accepted, {nadded} new entries")
     if an.soft_bad:
         log(f"note: {len(an.soft_bad)} soft entries do not scan cleanly")
     try:
@@ -1444,10 +1920,14 @@ def main(argv=None):
     print(f"functions: {len(an.E)} ({hard_fns} hard, {len(an.E) - hard_fns} soft, {stubs} soft stubs)")
     print(f"instructions emitted: {ninsn}")
     print(f"jump tables: {sum(1 for t in an.tables.values() if t)} "
-          f"({sum(1 for t in an.tables.values() if t and t.heuristic)} heuristic)")
+          f"({sum(1 for t in an.tables.values() if t and t.bad)} rejected)")
     print(f"output: {c_path}")
     if mnemonics:
         print("unsupported (soft and hard):", dict(mnemonics.most_common()))
+    if an.failed:
+        print(f"failed entries (trapped at run time): {len(an.failed)}")
+        for entry, why in list(an.failed.items())[:10]:
+            print(f"  {entry:#x}: {why}", file=sys.stderr)
     if unsup_hard:
         for entry, a, text in unsup_hard[:40]:
             print(f"error: hard function {entry:#x}: unsupported at {a:#x}: {text}", file=sys.stderr)

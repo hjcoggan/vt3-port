@@ -21,6 +21,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 RT = os.path.join(os.path.dirname(HERE), 'rt')
 RECOMP = os.path.join(HERE, '..', 'recomp.py')
+REPO_RUNTIME = os.path.join(HERE, '..', '..', '..', 'runtime')
 ROOT = '/Users/heath/Virtua Tennis 3/dump/recomp'
 PY = '/Users/heath/Virtua Tennis 3/tools/venv/bin/python'
 GCC = 'i686-w64-mingw32-gcc'
@@ -67,14 +68,36 @@ def wine_env():
 
 
 def build_runtime(objdir):
+    """Compile the native runtime (guest arena, shim) and the translator's loader.
+
+    The shim is runtime/shim: the only Win32 implementation. The adapters are generated
+    from its headers at build time, so nothing is duplicated.
+    """
     os.makedirs(objdir, exist_ok=True)
+    shim = os.path.join(REPO_RUNTIME, 'shim')
+    adapters = os.path.join(objdir, 'vt3_shim_adapters.c')
+    r = run(['/Users/heath/Virtua Tennis 3/tools/venv/bin/python', '-I',
+             os.path.join(RT, 'gen_adapters.py'), shim, adapters])
+    if r.returncode:
+        sys.exit(f"adapter generation failed:\n{r.stdout.decode()}{r.stderr.decode()}")
+    sources = [
+        (os.path.join(RT, 'vt3rt.c'), []),
+        (os.path.join(RT, 'vt3main.c'), []),
+        (os.path.join(RT, 'vt3simd.c'), []),
+        (adapters, []),
+        (os.path.join(REPO_RUNTIME, 'src', 'core', 'log.c'), []),
+        (os.path.join(REPO_RUNTIME, 'src', 'core', 'guest.c'), []),
+    ] + [(os.path.join(shim, 'src', f), []) for f in (
+        'shim_core.c', 'kernel32_heap.c', 'kernel32_file.c', 'kernel32_time.c',
+        'kernel32_std.c', 'kernel32_sys.c', 'user32_stub.c', 'user32_window.c',
+        'd3d9_stub.c', 'dsound_stub.c', 'dinput8_stub.c')]
+    incs = ['-I', RT, '-I', os.path.join(REPO_RUNTIME, 'include'), '-I', os.path.join(shim, 'include')]
     objs = []
-    for src in ('vt3rt.c', 'vt3shim.c', 'vt3main.c'):
-        obj = os.path.join(objdir, src.replace('.c', '.o'))
-        r = run([CC, '-O2', '-std=gnu11', '-w', '-ffp-contract=off', '-I', RT, '-c',
-                 os.path.join(RT, src), '-o', obj])
+    for src, _ in sources:
+        obj = os.path.join(objdir, os.path.basename(src).replace('.c', '.o'))
+        r = run([CC, '-O2', '-std=gnu11', '-w', '-ffp-contract=off'] + incs + ['-c', src, '-o', obj])
         if r.returncode:
-            sys.exit(f"runtime build failed:\n{r.stderr.decode()}")
+            sys.exit(f"runtime build failed for {src}:\n{r.stderr.decode()}")
         objs.append(obj)
     return objs
 
@@ -107,7 +130,7 @@ def build_one(test, vname, vflags, objs):
     if r.returncode:
         return expected, f"C compile failed: {r.stderr.decode()[-1200:]}"
     native = os.path.join(tdir, 'native')
-    r = run([CC, '-o', native, modo] + objs + ['-lm'])
+    r = run([CC, '-o', native, modo] + objs + ['-lm', '-lpthread'])
     if r.returncode:
         return expected, f"link failed: {r.stderr.decode()[-800:]}"
 
