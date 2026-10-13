@@ -39,3 +39,4 @@
 - **Function discovery:** Ghidra's list (13,013 functions, 0 failures) seeds the recompiler, instead of direct-call discovery (1,029 functions).
 - **D3D9 scope:** taken from a Wine trace of the NoCD build, logged with `WINEDEBUG=+d3d,+d3d9,+d3dx9`. The renderer implements only that subset.
 - **Analysis runs:** the NoCD game was stopped after the save, so it doesn't hold the display.
+- **Renderer scope:** the game's shaders are all Shader Model 2 (587 compiled, 352 ps_2_0 and 235 vs_2_0; see `docs/d3d9-shaders.md`). The D3D9 layer translates SM2 bytecode to GLSL for the GL 3.3 backend. SM1 and SM3 are out of scope.
