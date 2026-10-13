@@ -48,6 +48,7 @@ add_library(vt3shim STATIC
     shim/src/kernel32_time.c
     shim/src/d3d9_stub.c
     shim/src/dsound_stub.c
+    shim/src/dinput8_stub.c
 )
 target_include_directories(vt3shim PUBLIC shim/include)
 target_link_libraries(vt3shim PUBLIC vt3core)
@@ -57,6 +58,7 @@ target_compile_options(vt3shim PRIVATE ${VT3_WARNINGS})
 add_executable(vt3rt
     src/main.c
     tests/selftest.c
+    tests/layout_check.c   # compile-time only: checks the COM vtable layouts
 )
 target_include_directories(vt3rt PRIVATE tests)
 target_link_libraries(vt3rt PRIVATE vt3shim)

@@ -52,6 +52,29 @@ into the repo.
 Exit codes: 0 pass, 1 fail, 77 unit checks passed but no ADX path given
 (ctest reports SKIPPED).
 
+## Interface layouts
+
+The COM vtables in `shim/include/win32/` were generated from the mingw-w64
+14.0.0 headers (`d3d9.h`, `dsound.h`, `dinput.h`), not typed from memory. Two
+checks guard them:
+
+- `tests/layout_check.c` is built into `vt3rt`. It asserts every slot offset
+  (slot N at byte offset 4*N, guest pointers are 32-bit) and the packed
+  WAVEFORMATEX size.
+- `tests/sdk_layout_check.c` is compiled against the real SDK. It asserts
+  every slot of the SDK vtables, 35 header constants, and the WAVEFORMATEX
+  size. Run it with the 32-bit mingw compiler:
+
+        i686-w64-mingw32-gcc -c -I"$(i686-w64-mingw32-gcc -print-sysroot)/i686-w64-mingw32/include" \
+            tests/sdk_layout_check.c -o /dev/null
+
+  It exits 0 when every assertion holds. Changing a slot order or constant
+  fails it at compile time (a deliberately swapped slot was confirmed to fail).
+
+Not checked by these: kernel32 prototypes (the guest ABI uses 32-bit pointers
+on purpose, so the signatures differ on the type level), and the winmm
+prototypes, which were compared by eye against `timeapi.h`.
+
 ## ADX decoder: how it was checked
 
 `src/audio/adx.c` is written from the public format description (header
@@ -97,13 +120,16 @@ Type 4 (exponential scale) and type 2 (fixed coefficients) return
         audio/              adx.c, ringbuf.c, audio_sdl.c
         input/              input.c (state), input_sdl.c (SDL to game mapping, STUB table)
       shim/
-        include/win32/      types.h, kernel32.h, winmm.h, d3d9.h (sketch), dsound.h (sketch)
+        include/win32/      types.h, kernel32.h, winmm.h, d3d9.h, dsound.h, dinput.h
+                            (COM layouts checked against the mingw-w64 SDK headers)
         include/vt3shim/    shim.h (init, game root)
         src/                shim_core.c (handles, errors, guest helpers),
                             kernel32_heap.c, kernel32_file.c, kernel32_time.c,
-                            d3d9_stub.c, dsound_stub.c
+                            d3d9_stub.c, dsound_stub.c, dinput8_stub.c
       tests/
         selftest.c          unit checks and ADX check
+        layout_check.c      compile-time vtable layout check (built into vt3rt)
+        sdk_layout_check.c  the same checks against the real mingw-w64 SDK (run by hand)
 
 ## What is implemented, and what is stubbed
 
@@ -119,9 +145,9 @@ Type 4 (exponential scale) and type 2 (fixed coefficients) return
 | kernel32 heap | Implemented: first-fit, coalescing, realloc. Linear search (TODO). |
 | kernel32 file I/O | Read-only: CreateFileA (OPEN_EXISTING only), ReadFile, SetFilePointer, GetFileSize, CloseHandle. Case-insensitive per path component. WriteFile and overlapped I/O return "not implemented". |
 | kernel32 timers | Implemented: GetTickCount, timeGetTime, QueryPerformanceCounter/Frequency, Sleep. |
-| Direct3D 9 | **Sketch only.** Interface layouts in `d3d9.h`; `Direct3DCreate9` logs and returns NULL. Vtable order is from memory and must be checked against the SDK header. |
-| DirectSound | **Sketch only.** `DirectSoundCreate` returns DSERR_NODRIVER. |
-| DirectInput 8 | Not started. |
+| Direct3D 9 | **Sketch only.** `d3d9.h` has the IDirect3D9 (17) and IDirect3DDevice9 (119) vtables, checked slot by slot against the SDK. `Direct3DCreate9` logs and returns NULL. |
+| DirectSound | **Sketch only.** `dsound.h` has IDirectSound (11), IDirectSoundBuffer (21), and WAVEFORMATEX (packed, 18 bytes), all checked against the SDK. `DirectSoundCreate` returns DSERR_NODRIVER. |
+| DirectInput 8 | **Sketch only.** `dinput.h` has IDirectInput8A (11) and IDirectInputDevice8A (32), checked against the SDK. `DirectInput8Create` logs and returns E_NOTIMPL. |
 | Android | Not started. |
 
 Unimplemented shim calls log a warning once per API name (`vt3s_unimpl`).
