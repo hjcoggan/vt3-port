@@ -67,31 +67,48 @@ def wine_env():
     return env
 
 
+def shim_sources():
+    """The shim sources that runtime/CMakeLists.txt builds into vt3shim. Single source of truth."""
+    text = open(os.path.join(REPO_RUNTIME, 'CMakeLists.txt')).read()
+    block = text[text.index('add_library(vt3shim STATIC'):]
+    block = block[:block.index(')')]
+    return [os.path.join(REPO_RUNTIME, p.strip()) for p in block.splitlines()
+            if p.strip().endswith('.c') and 'shim/src/' in p]
+
+
 def build_runtime(objdir):
     """Compile the native runtime (guest arena, shim) and the translator's loader.
 
-    The shim is runtime/shim: the only Win32 implementation. The adapters are generated
-    from its headers at build time, so nothing is duplicated.
+    The shim is runtime/shim: the only Win32 implementation. The shim sources are the ones
+    CMake builds. The adapters are generated from the same sources.
     """
     os.makedirs(objdir, exist_ok=True)
     shim = os.path.join(REPO_RUNTIME, 'shim')
     adapters = os.path.join(objdir, 'vt3_shim_adapters.c')
+    shim_src = shim_sources()
     r = run(['/Users/heath/Virtua Tennis 3/tools/venv/bin/python', '-I',
-             os.path.join(RT, 'gen_adapters.py'), shim, adapters])
+             os.path.join(RT, 'gen_adapters.py'), shim, adapters] + shim_src)
     if r.returncode:
         sys.exit(f"adapter generation failed:\n{r.stdout.decode()}{r.stderr.decode()}")
     sources = [
-        (os.path.join(RT, 'vt3rt.c'), []),
-        (os.path.join(RT, 'vt3main.c'), []),
-        (os.path.join(RT, 'vt3simd.c'), []),
-        (adapters, []),
-        (os.path.join(REPO_RUNTIME, 'src', 'core', 'log.c'), []),
-        (os.path.join(REPO_RUNTIME, 'src', 'core', 'guest.c'), []),
-    ] + [(os.path.join(shim, 'src', f), []) for f in (
-        'shim_core.c', 'kernel32_heap.c', 'kernel32_file.c', 'kernel32_time.c',
-        'kernel32_std.c', 'kernel32_sys.c', 'user32_stub.c', 'user32_window.c',
-        'd3d9_stub.c', 'dsound_stub.c', 'dinput8_stub.c')]
+        os.path.join(RT, 'vt3rt.c'),
+        os.path.join(RT, 'vt3main.c'),
+        os.path.join(RT, 'vt3simd.c'),
+        adapters,
+        os.path.join(REPO_RUNTIME, 'src', 'core', 'log.c'),
+        os.path.join(REPO_RUNTIME, 'src', 'core', 'guest.c'),
+    ] + shim_src
     incs = ['-I', RT, '-I', os.path.join(REPO_RUNTIME, 'include'), '-I', os.path.join(shim, 'include')]
+    objs = []
+    for src in sources:
+        obj = os.path.join(objdir, os.path.basename(src).replace('.c', '.o'))
+        r = run([CC, '-O2', '-std=gnu11', '-w', '-ffp-contract=off'] + incs + ['-c', src, '-o', obj])
+        if r.returncode:
+            sys.exit(f"runtime build failed for {src}:\n{r.stderr.decode()}")
+        objs.append(obj)
+    return objs
+
+
     objs = []
     for src, _ in sources:
         obj = os.path.join(objdir, os.path.basename(src).replace('.c', '.o'))

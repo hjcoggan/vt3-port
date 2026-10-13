@@ -3,6 +3,7 @@
 
 #include "vt3/vt3_guest.h"
 #include "vt3shim/shim.h"
+#include "vt3shim/thunk.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -20,6 +21,7 @@ uint8_t *vt_mem = NULL;
 #define VT_STACK_TOP 0x10000000u
 #define VT_TEB 0x0FE00000u          /* inside the arena, below the stack */
 #define VT_TOKEN_BASE 0xFFFF0000u   /* import tokens, never memory */
+#define VT_SHIM_TOKEN_BASE 0xFFF00000u /* shim functions, for guest vtables (vt3shim_fn_token) */
 #define VT_SENTINEL_RET 0xFFFFFFF0u /* return address for the entry call */
 
 typedef struct {
@@ -225,6 +227,14 @@ static vt3_fnptr shim_lookup(const char *name)
     return NULL;
 }
 
+/* Guest address for shim function `name` (runtime/shim/include/vt3shim/thunk.h). */
+uint32_t vt3shim_fn_token(const char *name)
+{
+    for (size_t i = 0; i < vt3_shim_count; i++)
+        if (strcmp(vt3_shim_table[i].name, name) == 0) return VT_SHIM_TOKEN_BASE + 16u * (uint32_t)i;
+    return 0;
+}
+
 static void put32(uint32_t a, uint32_t v)
 {
     memcpy(vt_mem + a, &v, 4);
@@ -270,7 +280,7 @@ int vt3_run(const vt3_module *m, const char *image_path)
     /* Imports: each IAT slot gets a unique token. Calls through the slot land in
      * the icall table, which maps the token to a shim. */
     size_t nimp = m->nimps;
-    icent *tab = calloc(m->nfns + nimp, sizeof *tab);
+    icent *tab = calloc(m->nfns + nimp + vt3_shim_count, sizeof *tab);
     if (!tab) return 1;
     size_t n = 0;
     for (size_t i = 0; i < m->nfns; i++) {
@@ -286,6 +296,12 @@ int vt3_run(const vt3_module *m, const char *image_path)
         tab[n].addr = tok;
         tab[n].fn = shim_lookup(im->name);
         tab[n].name = im->name;
+        n++;
+    }
+    for (size_t i = 0; i < vt3_shim_count; i++) {
+        tab[n].addr = VT_SHIM_TOKEN_BASE + 16u * (uint32_t)i;
+        tab[n].fn = vt3_shim_table[i].fn;
+        tab[n].name = vt3_shim_table[i].name;
         n++;
     }
     qsort(tab, n, sizeof *tab, icent_cmp);

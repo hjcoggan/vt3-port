@@ -245,6 +245,11 @@ def size_of(op):
 
 
 def ea(op):
+    # 16-bit addressing ([bx+si], 0x67 prefix) is not supported. Its register names are not
+    # C identifiers in the generated code, so refuse rather than emit broken C.
+    for r in (op.base, op.index):
+        if r and r not in GPR32:
+            raise Unsupported(f"{r}-based addressing")
     parts = []
     if op.base:
         parts.append(op.base)
@@ -628,12 +633,13 @@ class Analysis:
             self._scan(f, self.E[f], work)
 
     def code_pointer_candidates(self):
-        """Code addresses that the program stores, found in two places:
-          * immediates in translated code (for example mov [slot], offset label), and
-          * dwords in non-executable sections that point into executable ones.
+        """Code addresses the program stores. Returns (immediates, data) as two sets.
+
+        immediates: operands of translated code, for example push offset thunk.
+        data: dwords in non-executable sections that point into executable ones.
         Neither is a relocation in VT3.exe, and neither is a call target, so direct
         discovery never sees them."""
-        cands = set()
+        imm, cands = set(), set()
         for e in list(self.E):
             try:
                 seen = self.reach(e)
@@ -642,7 +648,7 @@ class Analysis:
             for ins in seen.values():
                 for op in ins.ops:
                     if op.kind == 'imm' and self.img.is_exec(op.imm & M32):
-                        cands.add(op.imm & M32)
+                        imm.add(op.imm & M32)
         for sec in self.img.pe.sections:
             if sec.Characteristics & IMAGE_SCN_MEM_EXECUTE:
                 continue
@@ -652,7 +658,7 @@ class Analysis:
                 v = struct.unpack_from('<I', self.img.mem, a - self.img.base)[0]
                 if self.img.is_exec(v):
                     cands.add(v)
-        return cands
+        return imm, cands
 
     def covered_bytes(self):
         covered = set()
@@ -664,22 +670,29 @@ class Analysis:
                 pass
         return covered
 
-    def add_validated(self, cands):
-        """Add candidates that start outside every known body and look like a function.
+    def add_validated(self, imm, data):
+        """Add pointer candidates that look like functions. Returns (accepted, added).
 
-        A candidate inside existing code is a switch case label or a branch target, not
-        an entry. A candidate must reach a ret without data-like bytes (add [eax], al),
-        and it must decode in full. Returns (candidates, added)."""
+        A candidate must start outside known code (a candidate inside a body is a case label
+        or a branch target), decode in full, and end in a way that leaves the function: a
+        ret, or a jmp out of the body (a thunk that tail-jumps). Data-like bytes
+        (add [eax], al) reject it. Jump-table targets are never entries."""
         covered = self.covered_bytes()
+        table_targets = set()
+        for tb in self.tables.values():
+            if tb and not tb.bad:
+                table_targets.update(tb.targets)
         good = []
-        for c in sorted(cands):
-            if c in self.E or c in covered or self.dec.at(c) is None:
+        for c in sorted(imm | data):
+            if c in self.E or c in table_targets or self.dec.at(c) is None:
+                continue
+            if c in covered:
                 continue
             try:
                 seen = self.reach(c)
             except DecodeError:
                 continue
-            if len(seen) < 2 or not any(i.mn == 'ret' for i in seen.values()):
+            if not self._leaves_function(seen):
                 continue
             if any(i.mn == 'add' and 'byte ptr [eax], al' in i.text for i in seen.values()):
                 continue
@@ -687,6 +700,16 @@ class Analysis:
         before = len(self.E)
         self.closure(good)
         return len(good), len(self.E) - before
+
+    def _leaves_function(self, seen):
+        """True if the body ends by returning or by jumping out of the body."""
+        for a, ins in seen.items():
+            if ins.mn in RET_MN:
+                return True
+            if ins.mn == 'jmp':
+                if ins.ops[0].kind != 'imm' or (ins.ops[0].imm & M32) not in seen:
+                    return True
+        return False
 
     def build_entries(self, reloc_sites, seeds=(), scan_pointers=True):
         hard_roots = [(self.img.entry, True)] + [(a, True) for a, _ in self.img.exports]
@@ -706,9 +729,9 @@ class Analysis:
         self.closure(soft)
         if scan_pointers:
             for _ in range(3):
-                cands = self.code_pointer_candidates()
-                validated, added = self.add_validated(cands)
-                self.pointer_stats.append((len(cands), validated, added))
+                imm, data = self.code_pointer_candidates()
+                validated, added = self.add_validated(imm, data)
+                self.pointer_stats.append((len(imm | data), validated, added))
                 if added == 0:
                     break
 

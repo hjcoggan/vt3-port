@@ -15,8 +15,8 @@ The port is static recompilation: decode the PE32 image, translate each guest fu
 ## Pipeline
 
 1. `pefile` loads the image into a flat byte array covering `SizeOfImage`, at `ImageBase`.
-2. Entries are found in two passes. Hard entries: entry point, exports, and direct call targets. Soft entries: the values at base-relocation sites that point into an executable section, excluding jump-table slots. A soft entry that fails to decode becomes a trap stub. A hard entry that fails is an error.
-3. Indirect jumps are resolved to jump tables. The table is `[disp + idx*4]`, or a `mov reg, [disp+idx*4]` followed by `jmp reg`. The entry count comes from the nearest `cmp idx, N` followed by `ja` (count N+1) or `jae` (count N). Targets are read from the image.
+2. Entries come from several sources. Hard entries: the entry point, exports, direct call targets, and the function list from Ghidra (`--seeds`). Soft entries: values at base-relocation sites that point into code (VT3.exe has none), and code addresses found by the pointer scan (see below). A soft entry that fails to decode is a trap stub. A hard entry that fails to decode becomes a trap at run time and is reported. The run continues.
+3. Indirect jumps are resolved to jump tables under the rule in [Jump tables](#jump-tables). A table that cannot be bounded is rejected: the jump traps at run time and is counted as unsupported.
 4. Each entry is emitted as one C function. Its body is every instruction reachable by flow that does not cross another entry. Branches inside the body are `goto`. A branch to another entry is a tail call. Calls to no-return imports (ExitProcess and similar) end a path.
 5. Output: `NAME.c` (the functions plus the `vt3_mod` table) and `image.bin` (the flat image). The runtime loads `image.bin`, so the C file holds code only.
 
@@ -90,12 +90,37 @@ Input: `dump/patches/Virtua-Tennis-3_NoCD_Win_EN_for-version-101/VT3.exe`, read-
 - **Function discovery.** Hard entries are the entry point and direct call targets: 1029 functions, 0 decode failures. Translation takes about 1.5 s. The output is `vt3.c` (6.9 MB, 49,409 instructions) and `image.bin` (8.4 MB). `vt3.c` passes a clang syntax-only check.
 - **Translation coverage.** 1012 of 1029 functions contain no unsupported instruction. 17 functions contain 106 unsupported sites. The sites are MMX and SSE2 integer ops (`pextrw`, `psrlq`, `psllq`, `pcmpeqd`, `pmovmskb`, `pinsrw`, `pmaxsw`), x87 transcendentals and environment ops (`fscale`, `f2xm1`, `fptan`, `fpatan`, `fcos`, `fyl2x`, `fldl2e`, `fidiv`, `fnsave`, `frstor`), `rcr`, `stmxcsr`, `int3`, and segment-register moves. Most sit in one address range near 0x65xxxx. I haven't checked whether that range is CRT code, but the instruction mix suggests it is.
 - **Reachability.** Direct call flow reaches 148 KB of the 2.92 MB of executable bytes (5.1%). The rest is reachable only through indirect calls: vtables, COM objects, and callbacks. This is the main discovery gap.
-- **Candidate code pointers.** A scan of the non-executable sections finds 6,046 dwords that point into `.text`. 6,033 decode as instructions, and 5,912 reach cleanly. Together they reach about 730 KB. This is an upper bound. Some will be false positives, and none has been validated against a call site yet. The translator does not do this scan yet.
-- **Jump tables.** 28 tables were found. 24 of them have no `cmp/ja` bound, so the count came from a heuristic. Some heuristic counts are 0 or 1, and those are not trustworthy. Each heuristic table becomes a `switch` in the output, so this is a known bug to fix before the output is used.
+- **Candidate code pointers.** Superseded. The pointer scan is described above, and its current numbers are there.
+- **Jump tables.** Superseded. See [Jump tables](#jump-tables). The heuristic count is gone.
 - **Imports in use.** Discovered code references 119 of the 161 imports through the IAT. The runtime has 12 shims, and all 12 match VT3 imports. So 149 imports have no implementation. The most-referenced are `GetLastError` (20 sites), `CloseHandle` (13), `InterlockedIncrement` and `InterlockedDecrement` (12 each), `WideCharToMultiByte` (8), `MessageBoxA` (8), `EnterCriticalSection` (8), `lstrlenA` (8), `lstrcpyA` (8), `GetModuleHandleA` (7), and `GetProcAddress` (7).
 - **Exit status.** Without `--allow-unsupported`, the translator exits 2 on this input, because hard functions have unsupported instructions. The run used `--allow-unsupported` so that the coverage report could finish.
 
-What coverage means for the port: the translator gets through the discovered code, but most of the game's code is not discovered yet, and most imports have no implementation. The next steps are the data-pointer scan, a fix for heuristic jump tables, and shims for the D3D, DirectSound, and DirectInput imports.
+Current state, after the Ghidra seeds and the pointer scan: 16,095 entries (13,013 hard, 3,082 soft), 85.9% of executable bytes, and 15,948 functions with no unsupported sites. The remaining 147 functions have 177 unsupported sites, mostly from rejected jump tables.
+
+Startup on the translated binary: the CRT initializes, the game reads its optional `vt3.ini` and `default.ini` (both absent, which is expected), and then calls `Direct3DCreate9`. That is a stub in the runtime's D3D9 layer, which is owned by the runtime agent, so the run stops there with "Could not create D3D device". The exit path then runs the registered `atexit` functions, which the pointer scan now finds.
+
+## Jump tables
+
+A table is accepted only when its entry count is known. The count comes from one of these, in order:
+
+1. `cmp idx, N` followed by `ja` (N+1 entries) or `jae`/`jnb` (N entries) just before the jump. Moves, lea, and push/pop between the compare and the branch are skipped if they do not write `idx`, since they leave the flags alone.
+2. `and idx, M` as the last write to `idx` before the jump (M+1 entries), in the same function.
+3. `cmp idx, N` followed by a taken `jb` whose target is the jump (N entries). Found by indexing all short and near `jb` and `ja` branch targets in the executable bytes.
+4. An explicit size from `--table-sizes FILE`, with a source note. Each entry in `dump/recomp/vt3_table_sizes.txt` was checked by hand against the Ghidra decompile. It currently holds one entry, `_memcpy`, `switch (_Size & 3)`, 4 entries.
+
+A table with no bound, or with fewer than two entries, or with an entry that is not code, is rejected. The jump traps at run time and is counted as unsupported. There is no heuristic count any more. The old rule, which read entries until one was not code, produced counts of 0 and 1 on VT3.exe.
+
+On VT3.exe, 532 jump tables are found and 161 are rejected. Each rejection is loud in the translator log and traps at run time.
+
+## Pointer scan
+
+Some functions are reached only through stored addresses: `atexit` and `onexit` registrations, vtables, and callback tables. VT3.exe has no relocations, so direct discovery and the Ghidra list do not see every such target. The scan works in three rounds, and each round adds only what it validates.
+
+- **Sources.** Immediates in translated code (`push offset label`, `mov [slot], offset label`), and dwords in non-executable sections that point into executable ones. Round 1 found 57,006 distinct candidates.
+- **Exclusions.** Candidates already inside a known function body, which are almost always switch case labels. Jump-table targets, which are case labels by definition.
+- **Acceptance.** The candidate must decode in full, must reach a `ret` or leave its body by a `jmp` (a thunk that tail-jumps), and must not contain data-like bytes (`add [eax], al`).
+
+Result on VT3.exe: 3,082 soft entries, 85.9% of executable bytes covered (up from 75.7% from the Ghidra list alone, +297 KB). Three rounds added 2,847, 234, and 1 entries. Two of the accepted candidates were `0x6c6800` and `0x6c66b0`, which are destructor thunks pushed onto the `atexit` table by static C++ initializers. Earlier rules rejected them: one because its body ends in a tail `jmp`, and the other because a single-instruction body was rejected.
 
 ## Known gaps
 

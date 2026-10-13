@@ -6,7 +6,8 @@ arguments. This script reads the shim's WINAPI prototypes, and for each function
 is both declared and defined it writes an adapter. The adapter reads the arguments
 from the guest stack, calls the shim, and pops the stdcall argument bytes.
 
-Usage: gen_adapters.py SHIM_ROOT OUT.c
+Usage: gen_adapters.py SHIM_ROOT OUT.c [SHIM_SOURCE.c ...]
+Without source arguments every src/*.c under SHIM_ROOT is used.
 
 Functions declared but not defined get no adapter. An import with no adapter traps
 at run time with its name. The list of such functions is printed.
@@ -63,9 +64,10 @@ def load_prototypes(shim_root):
     return protos
 
 
-def load_definitions(shim_root):
+def load_definitions(shim_root, sources=None):
     defined = set()
-    for path in glob.glob(os.path.join(shim_root, 'src', '*.c')):
+    paths = sources if sources else glob.glob(os.path.join(shim_root, 'src', '*.c'))
+    for path in paths:
         text = strip_comments(open(path, errors='replace').read())
         for m in re.finditer(r'\bWINAPI\s+([A-Za-z_]\w*)\s*\([^;{]*\)\s*\{', text):
             defined.add(m.group(1))
@@ -124,12 +126,15 @@ def emit(protos, names):
 
 
 def main(argv):
-    if len(argv) != 3:
+    if len(argv) < 3:
         print(__doc__, file=sys.stderr)
         return 2
     shim_root, out_path = argv[1], argv[2]
+    # Optional: the shim sources that are linked. Adapters are emitted only for functions
+    # defined in these files, so adapters and link inputs always match.
+    sources = argv[3:] or None
     protos = load_prototypes(shim_root)
-    defined = load_definitions(shim_root)
+    defined = load_definitions(shim_root, sources)
     names = sorted(n for n in protos if n in defined)
     missing = sorted(n for n in protos if n not in defined)
     with open(out_path, 'w') as f:
