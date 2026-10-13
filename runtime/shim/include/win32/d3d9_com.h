@@ -385,6 +385,44 @@
     X(Unlock) \
     X(Restore)
 
+/* ID3DXBuffer: slot order, X-macro over every member. */
+#define VT3_ID3DXBUFFER_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(GetBufferPointer) \
+    X(GetBufferSize)
+
+/* ID3DXConstantTable: slot order, X-macro over every member. */
+#define VT3_ID3DXCONSTANTTABLE_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(GetBufferPointer) \
+    X(GetBufferSize) \
+    X(GetDesc) \
+    X(GetConstantDesc) \
+    X(GetSamplerIndex) \
+    X(GetConstant) \
+    X(GetConstantByName) \
+    X(GetConstantElement) \
+    X(SetDefaults) \
+    X(SetValue) \
+    X(SetBool) \
+    X(SetBoolArray) \
+    X(SetInt) \
+    X(SetIntArray) \
+    X(SetFloat) \
+    X(SetFloatArray) \
+    X(SetVector) \
+    X(SetVectorArray) \
+    X(SetMatrix) \
+    X(SetMatrixArray) \
+    X(SetMatrixPointerArray) \
+    X(SetMatrixTranspose) \
+    X(SetMatrixTransposeArray) \
+    X(SetMatrixTransposePointerArray)
+
 HRESULT WINAPI IDirect3D9_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
 DWORD WINAPI IDirect3D9_AddRef(GPTR This);
 DWORD WINAPI IDirect3D9_Release(GPTR This);
@@ -714,5 +752,37 @@ HRESULT WINAPI IDirectSoundBuffer_SetFrequency(GPTR This, DWORD dwFrequency);
 HRESULT WINAPI IDirectSoundBuffer_Stop(GPTR This);
 HRESULT WINAPI IDirectSoundBuffer_Unlock(GPTR This, GPTR pvAudioPtr1, DWORD dwAudioBytes1, GPTR pvAudioPtr2, DWORD dwAudioPtr2);
 HRESULT WINAPI IDirectSoundBuffer_Restore(GPTR This);
+HRESULT WINAPI ID3DXBuffer_QueryInterface(GPTR This, GPTR riid, GPTR out);
+DWORD WINAPI ID3DXBuffer_AddRef(GPTR This);
+DWORD WINAPI ID3DXBuffer_Release(GPTR This);
+GPTR WINAPI ID3DXBuffer_GetBufferPointer(GPTR This);
+DWORD WINAPI ID3DXBuffer_GetBufferSize(GPTR This);
+HRESULT WINAPI ID3DXConstantTable_QueryInterface(GPTR This, GPTR iid, GPTR out);
+DWORD WINAPI ID3DXConstantTable_AddRef(GPTR This);
+DWORD WINAPI ID3DXConstantTable_Release(GPTR This);
+GPTR WINAPI ID3DXConstantTable_GetBufferPointer(GPTR This);
+DWORD WINAPI ID3DXConstantTable_GetBufferSize(GPTR This);
+HRESULT WINAPI ID3DXConstantTable_GetDesc(GPTR This, GPTR pDesc);
+HRESULT WINAPI ID3DXConstantTable_GetConstantDesc(GPTR This, UINT hConstant, GPTR pConstantDesc, GPTR pCount);
+UINT WINAPI ID3DXConstantTable_GetSamplerIndex(GPTR This, UINT hConstant);
+UINT WINAPI ID3DXConstantTable_GetConstant(GPTR This, UINT hConstant, UINT Index);
+UINT WINAPI ID3DXConstantTable_GetConstantByName(GPTR This, UINT constant, GPTR name);
+UINT WINAPI ID3DXConstantTable_GetConstantElement(GPTR This, UINT hConstant, UINT Index);
+HRESULT WINAPI ID3DXConstantTable_SetDefaults(GPTR This, GPTR device);
+HRESULT WINAPI ID3DXConstantTable_SetValue(GPTR This, GPTR device, UINT constant, GPTR data, UINT data_size);
+HRESULT WINAPI ID3DXConstantTable_SetBool(GPTR This, GPTR device, UINT constant, BOOL value);
+HRESULT WINAPI ID3DXConstantTable_SetBoolArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count);
+HRESULT WINAPI ID3DXConstantTable_SetInt(GPTR This, GPTR device, UINT constant, INT value);
+HRESULT WINAPI ID3DXConstantTable_SetIntArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count);
+HRESULT WINAPI ID3DXConstantTable_SetFloat(GPTR This, GPTR device, UINT constant, DWORD value);
+HRESULT WINAPI ID3DXConstantTable_SetFloatArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count);
+HRESULT WINAPI ID3DXConstantTable_SetVector(GPTR This, GPTR device, UINT constant, GPTR value);
+HRESULT WINAPI ID3DXConstantTable_SetVectorArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count);
+HRESULT WINAPI ID3DXConstantTable_SetMatrix(GPTR This, GPTR device, UINT constant, GPTR value);
+HRESULT WINAPI ID3DXConstantTable_SetMatrixArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count);
+HRESULT WINAPI ID3DXConstantTable_SetMatrixPointerArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count);
+HRESULT WINAPI ID3DXConstantTable_SetMatrixTranspose(GPTR This, GPTR device, UINT constant, GPTR value);
+HRESULT WINAPI ID3DXConstantTable_SetMatrixTransposeArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count);
+HRESULT WINAPI ID3DXConstantTable_SetMatrixTransposePointerArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count);
 
 #endif /* VT3_WIN32_D3D9_COM_H */

@@ -34,6 +34,7 @@ INTERFACES = [
     "IDirect3DIndexBuffer9", "IDirect3DSurface9", "IDirect3DVertexDeclaration9",
     "IDirect3DVertexShader9", "IDirect3DPixelShader9", "IDirect3DStateBlock9",
     "IDirect3DQuery9", "IDirect3DVolume9", "IDirectSound", "IDirectSoundBuffer",
+    "ID3DXBuffer", "ID3DXConstantTable",
 ]
 
 IUNKNOWN = {"QueryInterface", "AddRef", "Release"}
@@ -79,6 +80,8 @@ IMPLEMENTED = {
     "IDirectSound": IUNKNOWN | {"CreateSoundBuffer", "GetCaps", "DuplicateSoundBuffer",
                                 "SetCooperativeLevel", "Compact", "GetSpeakerConfig",
                                 "SetSpeakerConfig", "Initialize"},
+    "ID3DXBuffer": IUNKNOWN | {"GetBufferPointer", "GetBufferSize"},
+    "ID3DXConstantTable": IUNKNOWN,
     "IDirectSoundBuffer": IUNKNOWN | {"GetCaps", "GetCurrentPosition", "GetFormat", "GetVolume",
                                       "GetPan", "GetFrequency", "GetStatus", "Initialize", "Lock",
                                       "Play", "SetCurrentPosition", "SetFormat", "SetVolume",
@@ -98,7 +101,7 @@ RET_MAP = {"HRESULT": "HRESULT", "ULONG": "DWORD", "UINT": "UINT", "BOOL": "BOOL
            "WINBOOL": "BOOL", "DWORD": "DWORD", "void": "void", "HMONITOR": "GPTR",
            # float returns come back in ST(0), which gen_adapters.py cannot express.
            # Only GetNPatchMode returns float, and nothing in the trace calls it.
-           "float": "DWORD"}
+           "float": "DWORD", "void *": "GPTR", "LPVOID": "GPTR", "LPCSTR": "GPTR"}
 
 SCALAR = {"UINT", "INT", "DWORD", "BOOL"}
 
@@ -113,12 +116,13 @@ KIND = {
     "IDirect3DStateBlock9": "D3D9_KIND_STATEBLOCK", "IDirect3DQuery9": "D3D9_KIND_QUERY",
     "IDirect3DVolume9": "D3D9_KIND_VOLUME",
     "IDirectSound": "D3D9_KIND_DSOUND", "IDirectSoundBuffer": "D3D9_KIND_DSBUFFER",
+    "ID3DXBuffer": "D3D9_KIND_D3DXBUFFER", "ID3DXConstantTable": "D3D9_KIND_D3DXCONSTTABLE",
 }
 
 # Bodies the generator writes itself (d3d9_com_generic.c). {KIND} is the interface kind,
 # {OUT} the first output parameter. Anything not listed here is hand-written.
 GENERIC = {
-    "QueryInterface": "return d3d9_qi_kind(This, riid, ppvObject, {KIND});",
+    "QueryInterface": "return d3d9_qi_kind(This, {RIID}, {PPV}, {KIND});",
     "AddRef": "return d3d9_add_ref(This);",
     "Release": "return d3d9_release(This);",
     "GetDevice": "return d3d9_get_device(This, {OUT});",
@@ -132,7 +136,7 @@ RESOURCE_KINDS = {"IDirect3DTexture9", "IDirect3DCubeTexture9", "IDirect3DVolume
 
 
 def preprocess(include_dir):
-    src = "#include <d3d9.h>\n#include <dsound.h>\n"
+    src = "#include <d3d9.h>\n#include <dsound.h>\n#include <d3dx9core.h>\n#include <d3dx9shader.h>\n"
     r = subprocess.run(["i686-w64-mingw32-gcc", "-E", "-x", "c", "-I", include_dir, "-"],
                        input=src.encode(), capture_output=True)
     if r.returncode:
@@ -184,7 +188,11 @@ def iid_table(text):
 
 
 def is_output(param):
-    return "**" in param
+    """An output is a `T **` parameter or an LPLP typedef. A const pointer array is an input."""
+    if re.search(r'\bconst\b', param, re.I):
+        return False
+    words = param.split()
+    return "**" in param or (bool(words) and words[0].startswith("LPLP"))
 
 
 def map_param(p, index):
@@ -202,7 +210,7 @@ def map_param(p, index):
         return "GPTR", name
     words = [w for w in body.split() if w not in ("const", "volatile", "struct", "enum")]
     base = words[-1] if words else ""
-    if base == "float":
+    if base in ("float", "FLOAT"):
         return "DWORD", name
     if base == "int":
         return "INT", name
@@ -321,7 +329,8 @@ def main(argv):
         '#include "d3d9_internal.h"',
         "",
     ]
-    raw = "".join(open(os.path.join(include_dir, h), encoding='latin-1').read() for h in ('d3d9.h', 'dsound.h'))
+    raw = "".join(open(os.path.join(include_dir, h), encoding='latin-1').read()
+                  for h in ('d3d9.h', 'dsound.h', 'd3dx9core.h', 'd3dx9shader.h'))
     iids = {n: b for n, b in iid_table(raw) if n in KIND}
     for name, b in iids.items():
         gen.append(f"static const uint8_t iid_{name}[16] = {{ " + ", ".join(f"0x{x:02X}" for x in b) + " };")
@@ -342,7 +351,12 @@ def main(argv):
             continue
         outs = [n for (t, n), raw in zip(ps, [None] * len(ps)) if t == "GPTR" and n.startswith("pp")]
         out_name = next((n for t, n in ps if n.startswith("pp") or n.startswith("ppv")), "")
-        body = GENERIC[name].replace("{KIND}", KIND[iface]).replace("{OUT}", c_ident(out_name) if out_name else "0")
+        # Parameter names come from the prototype: the D3DX headers name QueryInterface's
+        # output 'out', not 'ppvObject'.
+        body = (GENERIC[name].replace("{KIND}", KIND[iface])
+                .replace("{OUT}", c_ident(out_name) if out_name else "0")
+                .replace("{RIID}", c_ident(ps[0][1]) if ps else "0")
+                .replace("{PPV}", c_ident(ps[1][1]) if len(ps) > 1 else "0"))
         plist = ", ".join(["GPTR This"] + [f"{t} {c_ident(n)}" for t, n in ps])
         gen.append(f"{ret} WINAPI {iface}_{name}({plist})")
         gen.append("{")

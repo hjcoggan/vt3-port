@@ -1,10 +1,13 @@
 /*
- * D3DX 9 entry points that are not math. Shader compilation and file-based texture
- * loading are not available: they log once and fail. D3DXCreateTexture makes a real
- * texture through the device's own path. A failed texture creation still writes a
- * valid stub object, so the caller never gets NULL.
+ * D3DX 9 entry points that are not math. Shader compilation is done by d3dx9_compile.c
+ * for the HLSL subset the game uses; a source outside that subset fails with the reason
+ * in ppErrorMsgs. File-based compilation and the constant table are not implemented, and
+ * their calls fail. D3DXCreateTexture makes a real texture through the device's own path.
+ * Every creation call writes an object (a stub when the real one is not available), so
+ * the caller never gets NULL from a creation output.
  */
 #include "d3d9_internal.h"
+#include "d3dx9_compile.h"
 #include "vt3/vt3_log.h"
 #include "win32/d3dx9.h"
 
@@ -22,6 +25,11 @@ static void note_unavailable(const char *what)
         if (strcmp(seen[i], what) == 0) return;
     if (n < 8) seen[n++] = what;
     VT3_WARN("%s: not available in the native runtime (returns E_FAIL)", what);
+}
+
+static void put32(GPTR p, uint32_t v)
+{
+    if (p) vt3s_store_u32(p, v);
 }
 
 /* Copies guest text (up to max bytes, stopping at NUL) for logs. Controls become '.'. */
@@ -57,20 +65,35 @@ static void dump_source(GPTR src, UINT len)
 HRESULT WINAPI D3DXCompileShader(GPTR src_data, UINT data_len, GPTR defines, GPTR include, GPTR function_name,
                                  GPTR profile, DWORD flags, GPTR ppShader, GPTR ppErrorMsgs, GPTR ppConstantTable)
 {
-    char entry[64], target[32], head[257];
+    char entry[64], target[32], msg[256];
     guest_text(function_name, sizeof entry - 1, entry, sizeof entry);
     guest_text(profile, sizeof target - 1, target, sizeof target);
-    guest_text(src_data, data_len < 256 ? data_len : 256, head, sizeof head);
     VT3_INFO("D3DXCompileShader: %u bytes, entry \"%s\", profile \"%s\", flags 0x%x, defines %s, include %s",
              (unsigned)data_len, entry, target, (unsigned)flags, defines ? "yes" : "no", include ? "yes" : "no");
-    VT3_INFO("D3DXCompileShader: source starts: %s", head);
     dump_source(src_data, data_len);
-    (void)defines; (void)include;
-    note_unavailable("D3DXCompileShader");
-    vt3s_store_u32(ppShader, 0);
-    vt3s_store_u32(ppErrorMsgs, 0);
-    vt3s_store_u32(ppConstantTable, 0);
-    return E_FAIL_D3DX;
+
+    uint32_t *tok = NULL, ntok = 0;
+    int rc;
+    const char *src = data_len ? d3d9_gmem(src_data, data_len) : NULL;
+    if (!src) {
+        snprintf(msg, sizeof msg, "the source is not in guest memory");
+        rc = -1;
+    } else {
+        rc = d3dx_compile_hlsl(src, data_len, entry, target, &tok, &ntok, msg, sizeof msg);
+    }
+    uint32_t blob = 0;
+    if (rc == 0) {
+        blob = d3dx_buffer_new(tok, ntok * 4u);
+        VT3_INFO("D3DXCompileShader: %s compiled to %u bytes of %s", entry, (unsigned)(ntok * 4u), target);
+    } else {
+        VT3_WARN("D3DXCompileShader: %s (%s) failed: %s", entry, target, msg);
+    }
+    free(tok);
+    if (!blob) blob = d3d9_new_stub(D3D9_KIND_D3DXBUFFER, 0);
+    put32(ppShader, blob);
+    put32(ppErrorMsgs, rc == 0 ? 0 : d3dx_buffer_new(msg, (uint32_t)strlen(msg) + 1u));
+    if (ppConstantTable) put32(ppConstantTable, d3d9_new_stub(D3D9_KIND_D3DXCONSTTABLE, 0));
+    return rc == 0 ? S_OK : E_FAIL_D3DX;
 }
 
 HRESULT WINAPI D3DXCompileShaderFromFileA(GPTR filename, GPTR defines, GPTR include, GPTR function_name,
@@ -79,9 +102,10 @@ HRESULT WINAPI D3DXCompileShaderFromFileA(GPTR filename, GPTR defines, GPTR incl
 {
     (void)filename; (void)defines; (void)include; (void)function_name; (void)profile; (void)flags;
     note_unavailable("D3DXCompileShaderFromFileA");
-    vt3s_store_u32(ppShader, 0);
-    vt3s_store_u32(ppErrorMsgs, 0);
-    vt3s_store_u32(ppConstantTable, 0);
+    static const char msg[] = "file-based shader compilation is not available in the native runtime";
+    put32(ppShader, d3d9_new_stub(D3D9_KIND_D3DXBUFFER, 0));
+    put32(ppErrorMsgs, d3dx_buffer_new(msg, sizeof msg));
+    put32(ppConstantTable, d3d9_new_stub(D3D9_KIND_D3DXCONSTTABLE, 0));
     return E_FAIL_D3DX;
 }
 
@@ -89,7 +113,7 @@ HRESULT WINAPI D3DXGetShaderConstantTable(GPTR byte_code, GPTR constant_table)
 {
     (void)byte_code;
     note_unavailable("D3DXGetShaderConstantTable");
-    vt3s_store_u32(constant_table, 0);
+    put32(constant_table, d3d9_new_stub(D3D9_KIND_D3DXCONSTTABLE, 0));
     return E_FAIL_D3DX;
 }
 

@@ -141,12 +141,22 @@ vt3s_thread *vt3s_thread_attach_host(void)
     return t;
 }
 
+/* A suspended thread blocks here until ResumeThread brings its count back to zero.
+ * Suspension is checked at waits and at polling points, not in the middle of guest code.
+ * Caller holds gil. */
+static void honor_suspend(void)
+{
+    vt3s_thread *t = current();
+    while (t->suspend_count) pthread_cond_wait(&gcond, &gil);
+}
+
 /* Wait with the guest lock released until pred(arg) holds, or ms expires. ms == INFINITE
  * waits forever. Returns 1 if pred holds, 0 on timeout. Caller holds gil. */
 typedef int (*vt3s_pred)(void *arg);
 
 static int wait_until(vt3s_pred pred, void *arg, DWORD ms)
 {
+    honor_suspend();
     struct timespec deadline;
     if (ms != INFINITE) {
         clock_gettime(CLOCK_REALTIME, &deadline);
@@ -260,7 +270,8 @@ DWORD WINAPI SuspendThread(HANDLE h)
     vt3s_thread *t = thread_of(h);
     if (!t) { vt3s_set_last_error(ERROR_INVALID_HANDLE); return 0xFFFFFFFFu; }
     DWORD prev = t->suspend_count;
-    t->suspend_count++;     /* a running thread stops at its next wait */
+    t->suspend_count++;     /* another thread stops at its next wait or polling point */
+    if (t == current()) honor_suspend();   /* a thread that suspends itself waits for ResumeThread */
     return prev;
 }
 
@@ -302,6 +313,20 @@ BOOL WINAPI SwitchToThread(void)
     sched_yield();
     pthread_mutex_lock(&gil);
     return TRUE;
+}
+
+/* A guest thread that polls (spinning on InterlockedExchange, or entering and leaving a
+ * critical section) never reaches a blocking call, so it would hold the guest lock for
+ * ever. Polling APIs call this. Every 64th call releases the lock for a moment. */
+void vt3s_spin_point(void)
+{
+    honor_suspend();
+    static unsigned calls;
+    if ((++calls & 63u) == 0) {
+        pthread_mutex_unlock(&gil);
+        sched_yield();
+        pthread_mutex_lock(&gil);
+    }
 }
 
 void WINAPI Sleep(DWORD ms)
@@ -378,6 +403,7 @@ void WINAPI InitializeCriticalSection(LPVOID cs)
 
 void WINAPI EnterCriticalSection(LPVOID cs)
 {
+    vt3s_spin_point();
     if (!vt3s_guest_range_ok(cs, 24)) return;
     uint32_t me = current()->tid;
     uint32_t owner = vt3s_load_u32(cs + CS_OWNER);

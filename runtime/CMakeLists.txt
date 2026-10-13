@@ -53,6 +53,7 @@ add_library(vt3shim STATIC
     shim/src/winmm_timer.c
     shim/src/user32_stub.c
     shim/src/user32_window.c
+    shim/src/user32_text.c
     shim/src/d3d9_object.c
     shim/src/d3d9_iface.c
     shim/src/d3d9_device.c
@@ -64,6 +65,7 @@ add_library(vt3shim STATIC
     shim/src/d3d9_draw.c
     shim/src/gfx_weak.c
     shim/src/d3dx9_math.c
+    shim/src/d3dx9_compile.c
     shim/src/d3dx9_stub.c
     shim/src/dsound_stub.c
     shim/src/dinput8_stub.c

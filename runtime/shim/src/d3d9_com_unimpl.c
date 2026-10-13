@@ -864,3 +864,237 @@ HRESULT WINAPI IDirect3DVolume9_UnlockBox(GPTR This)
     vt3s_unimpl("IDirect3DVolume9::UnlockBox");
     return E_NOTIMPL;
 }
+
+GPTR WINAPI ID3DXConstantTable_GetBufferPointer(GPTR This)
+{
+    (void)This;
+    vt3s_unimpl("ID3DXConstantTable::GetBufferPointer");
+    return 0;
+}
+
+DWORD WINAPI ID3DXConstantTable_GetBufferSize(GPTR This)
+{
+    (void)This;
+    vt3s_unimpl("ID3DXConstantTable::GetBufferSize");
+    return 0;
+}
+
+HRESULT WINAPI ID3DXConstantTable_GetDesc(GPTR This, GPTR pDesc)
+{
+    (void)This;
+    (void)(pDesc);
+    vt3s_unimpl("ID3DXConstantTable::GetDesc");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI ID3DXConstantTable_GetConstantDesc(GPTR This, UINT hConstant, GPTR pConstantDesc, GPTR pCount)
+{
+    (void)This;
+    (void)(hConstant);
+    (void)(pConstantDesc);
+    (void)(pCount);
+    vt3s_unimpl("ID3DXConstantTable::GetConstantDesc");
+    return E_NOTIMPL;
+}
+
+UINT WINAPI ID3DXConstantTable_GetSamplerIndex(GPTR This, UINT hConstant)
+{
+    (void)This;
+    (void)(hConstant);
+    vt3s_unimpl("ID3DXConstantTable::GetSamplerIndex");
+    return 0;
+}
+
+UINT WINAPI ID3DXConstantTable_GetConstant(GPTR This, UINT hConstant, UINT Index)
+{
+    (void)This;
+    (void)(hConstant);
+    (void)(Index);
+    vt3s_unimpl("ID3DXConstantTable::GetConstant");
+    return 0;
+}
+
+UINT WINAPI ID3DXConstantTable_GetConstantByName(GPTR This, UINT constant, GPTR name)
+{
+    (void)This;
+    (void)(constant);
+    (void)(name);
+    vt3s_unimpl("ID3DXConstantTable::GetConstantByName");
+    return 0;
+}
+
+UINT WINAPI ID3DXConstantTable_GetConstantElement(GPTR This, UINT hConstant, UINT Index)
+{
+    (void)This;
+    (void)(hConstant);
+    (void)(Index);
+    vt3s_unimpl("ID3DXConstantTable::GetConstantElement");
+    return 0;
+}
+
+HRESULT WINAPI ID3DXConstantTable_SetDefaults(GPTR This, GPTR device)
+{
+    (void)This;
+    (void)(device);
+    vt3s_unimpl("ID3DXConstantTable::SetDefaults");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI ID3DXConstantTable_SetValue(GPTR This, GPTR device, UINT constant, GPTR data, UINT data_size)
+{
+    (void)This;
+    (void)(device);
+    (void)(constant);
+    (void)(data);
+    (void)(data_size);
+    vt3s_unimpl("ID3DXConstantTable::SetValue");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI ID3DXConstantTable_SetBool(GPTR This, GPTR device, UINT constant, BOOL value)
+{
+    (void)This;
+    (void)(device);
+    (void)(constant);
+    (void)(value);
+    vt3s_unimpl("ID3DXConstantTable::SetBool");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI ID3DXConstantTable_SetBoolArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count)
+{
+    (void)This;
+    (void)(device);
+    (void)(constant);
+    (void)(values);
+    (void)(value_count);
+    vt3s_unimpl("ID3DXConstantTable::SetBoolArray");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI ID3DXConstantTable_SetInt(GPTR This, GPTR device, UINT constant, INT value)
+{
+    (void)This;
+    (void)(device);
+    (void)(constant);
+    (void)(value);
+    vt3s_unimpl("ID3DXConstantTable::SetInt");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI ID3DXConstantTable_SetIntArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count)
+{
+    (void)This;
+    (void)(device);
+    (void)(constant);
+    (void)(values);
+    (void)(value_count);
+    vt3s_unimpl("ID3DXConstantTable::SetIntArray");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI ID3DXConstantTable_SetFloat(GPTR This, GPTR device, UINT constant, DWORD value)
+{
+    (void)This;
+    (void)(device);
+    (void)(constant);
+    (void)(value);
+    vt3s_unimpl("ID3DXConstantTable::SetFloat");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI ID3DXConstantTable_SetFloatArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count)
+{
+    (void)This;
+    (void)(device);
+    (void)(constant);
+    (void)(values);
+    (void)(value_count);
+    vt3s_unimpl("ID3DXConstantTable::SetFloatArray");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI ID3DXConstantTable_SetVector(GPTR This, GPTR device, UINT constant, GPTR value)
+{
+    (void)This;
+    (void)(device);
+    (void)(constant);
+    (void)(value);
+    vt3s_unimpl("ID3DXConstantTable::SetVector");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI ID3DXConstantTable_SetVectorArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count)
+{
+    (void)This;
+    (void)(device);
+    (void)(constant);
+    (void)(values);
+    (void)(value_count);
+    vt3s_unimpl("ID3DXConstantTable::SetVectorArray");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI ID3DXConstantTable_SetMatrix(GPTR This, GPTR device, UINT constant, GPTR value)
+{
+    (void)This;
+    (void)(device);
+    (void)(constant);
+    (void)(value);
+    vt3s_unimpl("ID3DXConstantTable::SetMatrix");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI ID3DXConstantTable_SetMatrixArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count)
+{
+    (void)This;
+    (void)(device);
+    (void)(constant);
+    (void)(values);
+    (void)(value_count);
+    vt3s_unimpl("ID3DXConstantTable::SetMatrixArray");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI ID3DXConstantTable_SetMatrixPointerArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count)
+{
+    (void)This;
+    (void)(device);
+    (void)(constant);
+    (void)(values);
+    (void)(value_count);
+    vt3s_unimpl("ID3DXConstantTable::SetMatrixPointerArray");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI ID3DXConstantTable_SetMatrixTranspose(GPTR This, GPTR device, UINT constant, GPTR value)
+{
+    (void)This;
+    (void)(device);
+    (void)(constant);
+    (void)(value);
+    vt3s_unimpl("ID3DXConstantTable::SetMatrixTranspose");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI ID3DXConstantTable_SetMatrixTransposeArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count)
+{
+    (void)This;
+    (void)(device);
+    (void)(constant);
+    (void)(values);
+    (void)(value_count);
+    vt3s_unimpl("ID3DXConstantTable::SetMatrixTransposeArray");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI ID3DXConstantTable_SetMatrixTransposePointerArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count)
+{
+    (void)This;
+    (void)(device);
+    (void)(constant);
+    (void)(values);
+    (void)(value_count);
+    vt3s_unimpl("ID3DXConstantTable::SetMatrixTransposePointerArray");
+    return E_NOTIMPL;
+}

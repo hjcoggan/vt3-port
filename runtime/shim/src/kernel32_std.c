@@ -109,6 +109,7 @@ DWORD WINAPI GetCurrentProcessId(void)
 
 LONG WINAPI InterlockedIncrement(LPLONG addend)
 {
+    vt3s_spin_point();
     uint32_t v = vt3s_load_u32(addend) + 1u;
     vt3s_store_u32(addend, v);
     return (LONG)v;
@@ -116,6 +117,7 @@ LONG WINAPI InterlockedIncrement(LPLONG addend)
 
 LONG WINAPI InterlockedDecrement(LPLONG addend)
 {
+    vt3s_spin_point();
     uint32_t v = vt3s_load_u32(addend) - 1u;
     vt3s_store_u32(addend, v);
     return (LONG)v;
@@ -123,6 +125,7 @@ LONG WINAPI InterlockedDecrement(LPLONG addend)
 
 LONG WINAPI InterlockedExchange(LPLONG target, LONG value)
 {
+    vt3s_spin_point();
     uint32_t old = vt3s_load_u32(target);
     vt3s_store_u32(target, (uint32_t)value);
     return (LONG)old;

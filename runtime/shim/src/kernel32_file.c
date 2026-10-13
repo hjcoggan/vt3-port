@@ -262,6 +262,15 @@ typedef struct vfind {
     size_t pos;     /* index of the entry the next FindNextFileA returns */
 } vfind;
 
+/* Win32 attributes for a host file: DIRECTORY, or NORMAL. READONLY when the owner has no
+ * write bit. */
+static DWORD attrs_of(const struct stat *st)
+{
+    DWORD a = S_ISDIR(st->st_mode) ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
+    if (!(st->st_mode & S_IWUSR)) a |= FILE_ATTRIBUTE_READONLY;
+    return a;
+}
+
 static int wild_match(const char *pat, const char *s)
 {
     if (strcmp(pat, "*.*") == 0) return 1;
@@ -333,8 +342,7 @@ static vfind *find_scan(const char *dir, const char *pat, DWORD *err)
         vfind_entry *e = &s->e[s->n++];
         snprintf(e->name, sizeof e->name, "%s", de->d_name);
         int is_dir = S_ISDIR(st.st_mode);
-        e->attrs = is_dir ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
-        if (!(st.st_mode & S_IWUSR)) e->attrs |= FILE_ATTRIBUTE_READONLY;
+        e->attrs = attrs_of(&st);
         e->size = is_dir ? 0 : (int64_t)st.st_size;
         e->mtime = (int64_t)st.st_mtime;
         e->atime = (int64_t)st.st_atime;
@@ -458,6 +466,45 @@ BOOL WINAPI FindClose(HANDLE find)
     }
     find_free(s);
     return TRUE;
+}
+
+/* Error for a path that did not resolve. ERROR_PATH_NOT_FOUND when a directory on the way is
+ * missing or is a file. ERROR_FILE_NOT_FOUND when only the final name is missing. */
+static DWORD missing_error(const char *win)
+{
+    const char *last = NULL;
+    for (const char *q = win; *q; q++) {
+        if (*q == '\\' || *q == '/') last = q;
+    }
+    if (!last) return ERROR_FILE_NOT_FOUND;   /* a bare name is looked up in the game root */
+    size_t dl = (size_t)(last - win);
+    char dirpart[PATH_MAX];
+    if (dl >= sizeof dirpart) return ERROR_PATH_NOT_FOUND;
+    memcpy(dirpart, win, dl);
+    dirpart[dl] = '\0';
+    char dir[PATH_MAX];
+    struct stat st;
+    if (resolve_path(dirpart, dir, sizeof dir) != 0) return ERROR_PATH_NOT_FOUND;
+    if (stat(dir, &st) == 0 && !S_ISDIR(st.st_mode)) return ERROR_PATH_NOT_FOUND;
+    return ERROR_FILE_NOT_FOUND;
+}
+
+DWORD WINAPI GetFileAttributesA(LPCSTR name)
+{
+    const char *win = (const char *)vt3_g2h(name);
+    if (!win) {
+        vt3s_set_last_error(ERROR_INVALID_PARAMETER);
+        return INVALID_FILE_ATTRIBUTES;
+    }
+    char path[PATH_MAX];
+    struct stat st;
+    if (resolve_path(win, path, sizeof path) != 0 || stat(path, &st) != 0) {
+        VT3_DEBUG("GetFileAttributesA: not found: %s", win);
+        vt3s_set_last_error(missing_error(win));
+        return INVALID_FILE_ATTRIBUTES;
+    }
+    vt3s_set_last_error(ERROR_SUCCESS);
+    return attrs_of(&st);
 }
 
 BOOL WINAPI CloseHandle(HANDLE h)

@@ -19,6 +19,8 @@ static const uint8_t iid_IDirect3DStateBlock9[16] = { 0xE5, 0x4F, 0x7C, 0xB0, 0x
 static const uint8_t iid_IDirect3DQuery9[16] = { 0x60, 0x14, 0x77, 0xD9, 0x95, 0xA6, 0x26, 0x4F, 0xBB, 0xD3, 0x27, 0xB8, 0x40, 0xB5, 0x41, 0xCC };
 static const uint8_t iid_IDirectSound[16] = { 0x83, 0xFA, 0x9A, 0x27, 0x81, 0x49, 0xCE, 0x11, 0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60 };
 static const uint8_t iid_IDirectSoundBuffer[16] = { 0x85, 0xFA, 0x9A, 0x27, 0x81, 0x49, 0xCE, 0x11, 0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60 };
+static const uint8_t iid_ID3DXBuffer[16] = { 0x08, 0xFB, 0xA5, 0x8B, 0x95, 0x51, 0xE2, 0x40, 0xAC, 0x58, 0x0D, 0x98, 0x9C, 0x3A, 0x01, 0x02 };
+static const uint8_t iid_ID3DXConstantTable[16] = { 0x8F, 0x75, 0x3C, 0xAB, 0x3E, 0x09, 0x56, 0x43, 0xB7, 0x62, 0x4D, 0xB1, 0x8F, 0x1B, 0x3A, 0x01 };
 
 const uint8_t *d3d9_iid_of_kind(uint32_t kind)
 {
@@ -40,6 +42,8 @@ const uint8_t *d3d9_iid_of_kind(uint32_t kind)
     case D3D9_KIND_VOLUME: return iid_IDirect3DVolume9;
     case D3D9_KIND_DSOUND: return iid_IDirectSound;
     case D3D9_KIND_DSBUFFER: return iid_IDirectSoundBuffer;
+    case D3D9_KIND_D3DXBUFFER: return iid_ID3DXBuffer;
+    case D3D9_KIND_D3DXCONSTTABLE: return iid_ID3DXConstantTable;
     default: return NULL;
     }
 }
@@ -620,6 +624,46 @@ DWORD WINAPI IDirectSoundBuffer_AddRef(GPTR This)
 }
 
 DWORD WINAPI IDirectSoundBuffer_Release(GPTR This)
+{
+    (void)This;
+    return d3d9_release(This);
+}
+
+HRESULT WINAPI ID3DXBuffer_QueryInterface(GPTR This, GPTR riid, GPTR out)
+{
+    (void)This;
+    (void)(riid);
+    (void)(out);
+    return d3d9_qi_kind(This, riid, out, D3D9_KIND_D3DXBUFFER);
+}
+
+DWORD WINAPI ID3DXBuffer_AddRef(GPTR This)
+{
+    (void)This;
+    return d3d9_add_ref(This);
+}
+
+DWORD WINAPI ID3DXBuffer_Release(GPTR This)
+{
+    (void)This;
+    return d3d9_release(This);
+}
+
+HRESULT WINAPI ID3DXConstantTable_QueryInterface(GPTR This, GPTR iid, GPTR out)
+{
+    (void)This;
+    (void)(iid);
+    (void)(out);
+    return d3d9_qi_kind(This, iid, out, D3D9_KIND_D3DXCONSTTABLE);
+}
+
+DWORD WINAPI ID3DXConstantTable_AddRef(GPTR This)
+{
+    (void)This;
+    return d3d9_add_ref(This);
+}
+
+DWORD WINAPI ID3DXConstantTable_Release(GPTR This)
 {
     (void)This;
     return d3d9_release(This);

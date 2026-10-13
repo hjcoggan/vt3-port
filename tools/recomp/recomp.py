@@ -651,11 +651,13 @@ class Analysis:
         if is_jcc(mn) or mn in LOOPS or mn in ('jecxz', 'jcxz'):
             return [ins.ops[0].imm & M32], True
         if mn == 'call':
-            # Calls that never return end the path. A fallthrough that is not
-            # code (padding after a noreturn call) also ends it.
+            # Calls that never return end the path. So does a fallthrough that is not
+            # code, or is int3 padding: MSVC pads the end of a function that finishes with
+            # a call that does not return. Codegen traps if such a call does return.
             if self.is_noreturn_call(ins):
                 return [], False
-            if self.dec.at(ins.addr + ins.size) is None:
+            nxt = self.dec.at(ins.addr + ins.size)
+            if nxt is None or nxt.mn == 'int3':
                 return [], False
         return [], True
 
@@ -803,6 +805,8 @@ class Analysis:
             if ins.mn == 'jmp':
                 if ins.ops[0].kind != 'imm' or (ins.ops[0].imm & M32) not in seen:
                     return True
+            if ins.mn == 'call' and not self.flow(ins)[1]:
+                return True   # a call that ends the path: noreturn, or padding after it
         return False
 
     def build_entries(self, reloc_sites, seeds=(), scan_pointers=True):
@@ -1913,6 +1917,10 @@ def gen_function(an, entry, hard):
                 out.append(f"{{ VT_SPILL(); {fname(nxt)}(c); return; }}")
             else:
                 raise TranslateError(f"internal: flow to {nxt:#x} from {a:#x} not covered")
+        elif mn == 'call':
+            # The path ends at this call (see Analysis.flow). If the callee does return,
+            # the code after it is not translated, so stop loudly instead of falling through.
+            out.append(f'vt_unsupported_at(0x{nxt:x}u, "returned from a call that does not return");')
     out.append("}")
     return out, len(order), unsup
 

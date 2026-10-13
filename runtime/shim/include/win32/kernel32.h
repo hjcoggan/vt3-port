@@ -38,6 +38,8 @@ typedef GPTR LPWIN32_FIND_DATAA;
 HANDLE WINAPI FindFirstFileA(LPCSTR pattern, LPWIN32_FIND_DATAA data);
 BOOL   WINAPI FindNextFileA(HANDLE find, LPWIN32_FIND_DATAA data);
 BOOL   WINAPI FindClose(HANDLE find);
+#define INVALID_FILE_ATTRIBUTES  0xFFFFFFFFu
+DWORD  WINAPI GetFileAttributesA(LPCSTR name);
 
 /* Errors. */
 DWORD  WINAPI GetLastError(void);

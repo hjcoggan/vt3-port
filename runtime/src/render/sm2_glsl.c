@@ -132,6 +132,14 @@ static void mask_str(uint32_t wm, char *out)
 }
 
 /* Base name of a register (no swizzle). Marks what the shader uses. */
+/* A GLSL float literal for v. Non-finite values have no literal, so they become 0. */
+static void glsl_float(float v, char *buf, size_t cap)
+{
+    snprintf(buf, cap, "%.9g", (double)v);
+    if (strpbrk(buf, "ni")) snprintf(buf, cap, "0.0");
+    else if (!strpbrk(buf, ".e")) strncat(buf, ".0", cap - strlen(buf) - 1);
+}
+
 static void reg_base(ctx *c, int type, uint32_t idx, int has_rel, uint32_t rel_tok,
                      char *out, size_t cap)
 {
@@ -167,6 +175,12 @@ static void reg_base(ctx *c, int type, uint32_t idx, int has_rel, uint32_t rel_t
         if (has_rel) {
             snprintf(out, cap, "%sc[%u + %s]", vs ? "vs" : "ps", idx, rel);
             if (c->out->const_max < VT3_SM2_MAX_CONST) c->out->const_max = VT3_SM2_MAX_CONST;
+        } else if (c->out->cdef_set[idx]) {
+            /* A def constant belongs to the shader: its value is part of the code, and it
+             * does not come from the device's constant store. */
+            char f[4][40];
+            for (int i = 0; i < 4; i++) glsl_float(c->out->cdef[idx][i], f[i], sizeof f[i]);
+            snprintf(out, cap, "vec4(%s, %s, %s, %s)", f[0], f[1], f[2], f[3]);
         } else {
             snprintf(out, cap, "%sc[%u]", vs ? "vs" : "ps", idx);
         }
@@ -461,6 +475,24 @@ static void close_block(ctx *c, int expect, const char *what)
 
 /* ---- main walk -------------------------------------------------------- */
 
+/* Def constants hold for the whole shader, so they are collected before the walk. */
+static void prescan_defs(ctx *c)
+{
+    size_t pos = 1;
+    while (pos < c->nt) {
+        uint32_t tok = c->t[pos];
+        uint32_t op = tok & 0xFFFFu;
+        if (op == OP_END) break;
+        if (op == OP_COMMENT) {
+            pos += 1 + ((tok >> 16) & 0x7FFFu);
+            continue;
+        }
+        size_t len = (tok >> 24) & 0xFu;
+        if (op == OP_DEF && len == 5 && pos + 5 < c->nt) do_def(c, OP_DEF, c->t[pos + 1], &c->t[pos + 2]);
+        pos += 1 + len;
+    }
+}
+
 static int translate_walk(ctx *c)
 {
     size_t pos = 1;   /* token 0 is the version */
@@ -705,6 +737,7 @@ int vt3_sm2_translate(const uint32_t *tokens, size_t ntokens, vt3_sm2_shader *ou
     c.out = out;
     for (int i = 0; i < VT3_SM2_MAX_ATTR; i++) c.in_loc[i] = -1;
 
+    prescan_defs(&c);
     if (translate_walk(&c) != 0 || c.failed) {
         free(c.body.p);
         if (!out->error[0]) snprintf(out->error, sizeof out->error, "translation failed");

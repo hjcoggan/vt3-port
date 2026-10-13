@@ -58,9 +58,11 @@ def load_prototypes(shim_root):
     protos = {}
     for path in sorted(glob.glob(os.path.join(shim_root, 'include', 'win32', '*.h'))):
         text = strip_comments(open(path, errors='replace').read())
-        for m in re.finditer(r'([A-Za-z_][\w \t\*]*?)\bWINAPI\s+([A-Za-z_]\w*)\s*\(([^;{)]*)\)\s*;', text):
-            ret, name, params = m.group(1).strip(), m.group(2), m.group(3)
-            protos.setdefault(name, (ret, parse_params(params), os.path.basename(path)))
+        # WINAPIV marks a cdecl variadic function. Its last parameter is the guest address
+        # of the first variadic argument, which the adapter computes from the stack.
+        for m in re.finditer(r'([A-Za-z_][\w \t\*]*?)\bWINAPI(V?)\s+([A-Za-z_]\w*)\s*\(([^;{)]*)\)\s*;', text):
+            ret, cdecl, name, params = m.group(1).strip(), m.group(2) == 'V', m.group(3), m.group(4)
+            protos.setdefault(name, (ret, parse_params(params), os.path.basename(path), cdecl))
     return protos
 
 
@@ -86,14 +88,15 @@ def emit(protos, names):
     ]
     table = []
     for name in names:
-        ret, params, _ = protos[name]
-        slot_counts = [slots_for(p) for p in params]
+        ret, params, _, cdecl = protos[name]
+        fixed = params[:-1] if cdecl else params
+        slot_counts = [slots_for(p) for p in fixed]
         nslots = sum(slot_counts)
         out.append(f"static void imp_{name}(vt3_cpu *c)")
         out.append("{")
         idx = 0
         args = []
-        for p, n in zip(params, slot_counts):
+        for p, n in zip(fixed, slot_counts):
             if n == 1:
                 out.append(f"    uint32_t a{idx} = VT_ARG(c, {idx});")
                 args.append(f"({p})a{idx}")
@@ -102,6 +105,9 @@ def emit(protos, names):
                 out.append(f"    uint64_t a{idx} = ((uint64_t)VT_ARG(c, {idx + 1}) << 32) | VT_ARG(c, {idx});")
                 args.append(f"({p})a{idx}")
                 idx += 2
+        if cdecl:
+            out.append(f"    uint32_t a{idx} = c->esp + 4u + 4u * {idx}u;   /* first variadic argument */")
+            args.append(f"({params[-1]})a{idx}")
         call = f"{name}({', '.join(args)})"
         base_ret = ret.split()[-1] if ret.split() else ret
         if ret == 'void':
@@ -112,7 +118,10 @@ def emit(protos, names):
             out.append("    c->edx = (uint32_t)(r >> 32);")
         else:
             out.append(f"    c->eax = (uint32_t)({call});")
-        out.append(f"    c->esp += 4u + {4 * nslots}u;")
+        if cdecl:
+            out.append("    c->esp += 4u;   /* cdecl: the caller pops the arguments */")
+        else:
+            out.append(f"    c->esp += 4u + {4 * nslots}u;")
         out.append("}")
         out.append("")
         table.append(f'    {{"{name}", imp_{name}}},')

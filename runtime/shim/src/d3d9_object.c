@@ -71,6 +71,8 @@ d3d9_host *d3d9_host_of(GPTR obj, uint32_t kind)
 #define NAME_IDirect3DVolume9(n) "IDirect3DVolume9_" #n,
 #define NAME_IDirectSound(n) "IDirectSound_" #n,
 #define NAME_IDirectSoundBuffer(n) "IDirectSoundBuffer_" #n,
+#define NAME_ID3DXBuffer(n) "ID3DXBuffer_" #n,
+#define NAME_ID3DXConstantTable(n) "ID3DXConstantTable_" #n,
 
 static const char *const k_names_d3d9[] = { VT3_IDIRECT3D9_SLOTS(NAME_IDirect3D9) };
 static const char *const k_names_dev[] = { VT3_IDIRECT3DDEVICE9_SLOTS(NAME_IDirect3DDevice9) };
@@ -89,6 +91,8 @@ static const char *const k_names_query[] = { VT3_IDIRECT3DQUERY9_SLOTS(NAME_IDir
 static const char *const k_names_volume[] = { VT3_IDIRECT3DVOLUME9_SLOTS(NAME_IDirect3DVolume9) };
 static const char *const k_names_dsound[] = { VT3_IDIRECTSOUND_SLOTS(NAME_IDirectSound) };
 static const char *const k_names_dsbuffer[] = { VT3_IDIRECTSOUNDBUFFER_SLOTS(NAME_IDirectSoundBuffer) };
+static const char *const k_names_d3dxbuf[] = { VT3_ID3DXBUFFER_SLOTS(NAME_ID3DXBuffer) };
+static const char *const k_names_d3dxct[] = { VT3_ID3DXCONSTANTTABLE_SLOTS(NAME_ID3DXConstantTable) };
 
 static GPTR build_vtbl(const char *const *names, size_t n)
 {
@@ -126,6 +130,8 @@ static GPTR vtbl_for_kind(uint32_t kind)
     PICK(D3D9_KIND_VOLUME, k_names_volume)
     PICK(D3D9_KIND_DSOUND, k_names_dsound)
     PICK(D3D9_KIND_DSBUFFER, k_names_dsbuffer)
+    PICK(D3D9_KIND_D3DXBUFFER, k_names_d3dxbuf)
+    PICK(D3D9_KIND_D3DXCONSTTABLE, k_names_d3dxct)
     default: return 0;
     }
 #undef PICK
@@ -171,6 +177,10 @@ static void free_data(uint32_t kind, void *data)
     case D3D9_KIND_DSOUND:
     case D3D9_KIND_DSBUFFER:
         dsound_free(kind, data);
+        break;
+    case D3D9_KIND_D3DXBUFFER:
+    case D3D9_KIND_D3DXCONSTTABLE:
+        d3dx_obj_free(kind, data);
         break;
     case D3D9_KIND_VSHADER:
     case D3D9_KIND_PSHADER: {
