@@ -41,3 +41,14 @@ Tools and outputs:
 - Interpret the BTID block fields more fully and check the other BTID-tagged sectors.
 - Decide with the owner whether any key material from outside this image may be used. Nothing outside the image has been searched or tried.
 - Without a key, DISK0.IMG cannot be decrypted, so no x86 binary has been extracted.
+
+## External reference: LindyLiberation (community write-up, reviewed 2026-10-14)
+
+Source: https://github.com/ArcadeHustle/LindyLiberation (no license file). Read as background only. No code or text is copied here.
+
+- The write-up describes game discs as a Sega header, then an ISO9660 image with several partitions. One small partition is decrypted with a key held by the PIC security chip. That partition holds a bash script. The script decrypts the large game partition with static keys.
+- That matches what we see. The two ISO9660 volumes sit at sectors 1376 and 1904. `DISK9.IMG` (372 KB) fits the PIC-protected partition, and `DISK0.IMG` (1.7 GB) fits the game partition.
+- The static keys are not in this repo or in the image. The write-up says they come from pre-decrypted images found online. We won't use those, since they are pirated game copies.
+- `makekey/main.cpp` derives ATA unlock keys from a physical drive's 512-byte identify response. It does not apply to an image file, and we don't have the drive.
+
+Conclusion: the arcade route stays blocked until a legitimate key source is found or the PIC is dealt with. Parked for now.
