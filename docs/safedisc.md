@@ -108,3 +108,41 @@ Next:
 - Give system DLLs a real module record, or change the handle scheme so the helper can read from them.
 - Once the helper runs, log its `DeviceIoControl` codes and compare them with the reference values. The fixed-answer test needs the real request layout, which is not yet confirmed.
 - Log any disc reads, to see whether the helper or driver touches the ISO or a raw CD device.
+
+## Progress note 2: Wine run with an analysis shim
+
+Status: still not decrypted. `.text` is byte-identical to the file in every snapshot. Work is in `tools/safedisc/wineshim/` (vt3shim.c, version.def). It is not committed.
+
+What works under Wine 11.18 (Rosetta, analysis only):
+- Device open: ntdll hooks redirect `\\.\SecDrv` / `\\.\Global\SecDrv` to a decoy handle (duplicated from one cached handle).
+- The helper sends its driver requests. `0x3e`, `0x3c` and `0x3f` get replies. The copier (`0x6675aa10`) and validator (`0x6675a730`) pass, and the copier returns `0x6e`.
+- Validator inputs: one argument, the output buffer (block + 0x514). It reads version major/minor/patch, and a gate `0x6675a6d0` (IsWow64Process) selects a branch. With version 4.00.48 or 4.3.86 it returns success. Failure returns 0, so the copier returns `0x6f`, and the wrapper `0x6675aa90` returns 0. The copier's timing check fails with `0x70` when `KUSER[0] - stored > 0x190`. Neither check fires in these runs.
+
+Blocker: the helper's user-mode anti-debug probes. After the `0x3f` loop (indices 0 to 0x60) the helper runs the probe at `0x66708410` inside an SEH frame. The probe executes `SIDT`, then reads and writes through the IDT base, then `CLI`, `MOV DR0..DR6` and `DIV 0`, and expects the exception to be dispatched through `0x66781328` to `0x6676c483` and a table at `0x6679b4d4`. Under Wine/WOW64 the read of the IDT base at `0xfff88190` is an unhandled page fault. Wine's crash debugger then waits, which looks like a stall but is a crash. Tracing SEH with Wine's `+seh` channel shows only the stub's own unwinds.
+
+Driver answers, re-derived from `SECDRV.SYS`:
+- `0x3c` returns DR7 & 0x500 (`0x400` by default). Input extra size must be 0.
+- `0x3d` returns the constant `0x2c8`. Input extra size must be 0.
+- `0x3e` returns `0x5278d11b`. Input extra size must be 0.
+- `0x3f` returns the IDT entry for an index (0 to 0x60). Input extra size must be 4. This build computes real IDT entries, unlike the reference's fixed 0.
+- `0x43` needs input extra size 0xC, and returns DR values by sub-command.
+- The common tail writes version 4.00.48, and the verification words come from a time-based source (`[0x12be0]`) with `ntoskrnl` randomness.
+
+Next steps:
+1. Patch or emulate the probe function `0x66708410` in-process so it does not fault, or find why the dispatcher table does not resume execution.
+2. Try a Wine prefix without WOW64, to see whether the unwinder behaves differently.
+3. Once the helper passes the probe, check the `0x40` to `0x43` replies and then watch for `.text` writes.
+
+## Closing note: decryption route retired
+
+The Wine-based unpacking route is retired, on the owner's decision. The owner also asked that no more decryption runs be made and that the anti-debug probe not be neutralised.
+
+Why:
+- Under Wine/WOW64, the helper's user-mode anti-debug probe faults on the IDT-base read and the fault is not caught. The game then crashes and Wine's crash debugger waits. Getting past it would mean neutralising the probe, which the owner has ruled out.
+- Without the probe passing, no decrypted `.text` was obtained. `.text` stayed byte-identical to the file in every snapshot.
+
+Replacement: a NoCD 1.0.1 build of `VT3.exe` has been found, with no SafeDisc stub and plain `.text`. It takes the place of the decryption step. Its path is `dump/patches/Virtua-Tennis-3_NoCD_Win_EN_for-version-101/VT3.exe`. It was not inspected or modified in this work.
+
+Status of the artefacts from this route:
+- The analysis shim source (`tools/safedisc/wineshim/`) stays uncommitted. Its answer logic was derived partly from SafeDiscShim, which the owner has approved for analysis.
+- The static analysis, the Unicorn harness (`tools/safedisc/emu_stub.py`), the disassembly helper and the snapshot dumps in `dump/pc/safedisc/` remain as records of the work.
