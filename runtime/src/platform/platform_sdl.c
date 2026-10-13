@@ -1,0 +1,112 @@
+/* Platform layer on SDL3: window, GL 3.3 core context, events, input. */
+#include "vt3/vt3_log.h"
+#include "vt3/vt3_platform.h"
+
+#include <SDL3/SDL.h>
+
+/* Defined in src/input/input_sdl.c */
+void vt3_input_sdl_event(const SDL_Event *e);
+void vt3_input_sdl_poll(void);
+void vt3_input_sdl_shutdown(void);
+
+static SDL_Window *g_win;
+static SDL_GLContext g_ctx;
+
+void vt3_config_defaults(vt3_config *c)
+{
+    c->title = "VT3 runtime";
+    c->window_w = 640;
+    c->window_h = 480;
+    c->logical_w = 640;
+    c->logical_h = 480;
+    c->aspect_w = 4;
+    c->aspect_h = 3;
+    c->integer_scale = 0;
+    c->vsync = 1;
+    c->audio = 1;
+    c->frames = 0;
+    c->game_root = NULL;
+}
+
+int vt3_platform_init(const vt3_config *c)
+{
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
+        VT3_ERROR("SDL_Init failed: %s", SDL_GetError());
+        return -1;
+    }
+
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    /* macOS only gives a 3.2+ core context when forward-compatible is set. */
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+
+    g_win = SDL_CreateWindow(c->title, c->window_w, c->window_h,
+                             SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    if (!g_win) {
+        VT3_ERROR("SDL_CreateWindow failed: %s", SDL_GetError());
+        return -1;
+    }
+
+    g_ctx = SDL_GL_CreateContext(g_win);
+    if (!g_ctx) {
+        VT3_ERROR("SDL_GL_CreateContext (3.3 core) failed: %s", SDL_GetError());
+        return -1;
+    }
+    SDL_GL_MakeCurrent(g_win, g_ctx);
+    SDL_GL_SetSwapInterval(c->vsync ? 1 : 0);
+
+    int pw, ph;
+    SDL_GetWindowSizeInPixels(g_win, &pw, &ph);
+    VT3_INFO("window: %dx%d points, %dx%d pixels", c->window_w, c->window_h, pw, ph);
+    return 0;
+}
+
+void vt3_platform_shutdown(void)
+{
+    vt3_input_sdl_shutdown();
+    if (g_ctx) SDL_GL_DestroyContext(g_ctx);
+    if (g_win) SDL_DestroyWindow(g_win);
+    g_ctx = NULL;
+    g_win = NULL;
+    SDL_Quit();
+}
+
+int vt3_platform_pump_events(void)
+{
+    SDL_Event e;
+    int running = 1;
+    while (SDL_PollEvent(&e)) {
+        switch (e.type) {
+        case SDL_EVENT_QUIT:
+        case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+            running = 0;
+            break;
+        case SDL_EVENT_KEY_DOWN:
+            if (e.key.scancode == SDL_SCANCODE_ESCAPE) running = 0;
+            vt3_input_sdl_event(&e);
+            break;
+        default:
+            vt3_input_sdl_event(&e);
+            break;
+        }
+    }
+    vt3_input_sdl_poll();
+    return running;
+}
+
+void vt3_platform_drawable_size(int *w, int *h)
+{
+    SDL_GetWindowSizeInPixels(g_win, w, h);
+}
+
+void vt3_platform_swap(void)
+{
+    SDL_GL_SwapWindow(g_win);
+}
+
+void *vt3_platform_gl_proc(const char *name)
+{
+    return (void *)SDL_GL_GetProcAddress(name);
+}

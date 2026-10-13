@@ -12,7 +12,7 @@ Goal: a native port of the **PC release** of Virtua Tennis 3 (2007, Windows, Dir
 | Audio | CRI ADX confirmed. Decodes to WAV with ffmpeg (checked on one clip) |
 | Game code | **Blocked.** `VT3.exe` is SafeDisc-protected (see below) |
 | Arcade (Lindbergh) build | Not readable. Disk images are encrypted-looking from the first byte |
-| Port runtime | Not started (needs code first) |
+| Port runtime | Skeleton builds and runs on macOS (SDL3, GL 3.3, ADX audio). See `runtime/` |
 
 ## Blocker: SafeDisc on `VT3.exe`
 
