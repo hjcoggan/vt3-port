@@ -111,7 +111,7 @@ Next:
 
 ## Progress note 2: Wine run with an analysis shim
 
-Status: still not decrypted. `.text` is byte-identical to the file in every snapshot. Work is in `tools/safedisc/wineshim/` (vt3shim.c, version.def). It is not committed.
+Status: still not decrypted. `.text` is byte-identical to the file in every snapshot. Work is in `dump/safedisc-shim/wineshim/` (vt3shim.c, version.def), outside the repo. It is not committed.
 
 What works under Wine 11.18 (Rosetta, analysis only):
 - Device open: ntdll hooks redirect `\\.\SecDrv` / `\\.\Global\SecDrv` to a decoy handle (duplicated from one cached handle).
@@ -144,5 +144,5 @@ Why:
 Replacement: a NoCD 1.0.1 build of `VT3.exe` has been found, with no SafeDisc stub and plain `.text`. It takes the place of the decryption step. Its path is `dump/patches/Virtua-Tennis-3_NoCD_Win_EN_for-version-101/VT3.exe`. It was not inspected or modified in this work.
 
 Status of the artefacts from this route:
-- The analysis shim source (`tools/safedisc/wineshim/`) stays uncommitted. Its answer logic was derived partly from SafeDiscShim, which the owner has approved for analysis.
+- The analysis shim source is kept outside the repo, in `dump/safedisc-shim/wineshim/`. Its answer logic was derived partly from SafeDiscShim, which the owner approved for analysis. It was moved out of the repo on the owner's decision.
 - The static analysis, the Unicorn harness (`tools/safedisc/emu_stub.py`), the disassembly helper and the snapshot dumps in `dump/pc/safedisc/` remain as records of the work.
