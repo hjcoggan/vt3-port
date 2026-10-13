@@ -339,6 +339,15 @@ def fl_sub(bits, sbb):
             "af = ((a ^ b ^ r) >> 4) & 1u;"] + zsp(bits)
 
 
+FLAG_NEUTRAL = {'mov', 'lea', 'push', 'pop', 'movzx', 'movsx', 'movss', 'movsd', 'movaps',
+                'movups', 'movd', 'movq', 'fld', 'fst', 'fstp', 'fild', 'fistp', 'fxch'}
+
+
+def flag_neutral(ins):
+    """True if the instruction leaves EFLAGS alone."""
+    return ins.mn in FLAG_NEUTRAL
+
+
 def is_jcc(mn):
     return mn[0] == 'j' and mn[1:] in CC
 
@@ -401,23 +410,29 @@ class Analysis:
           2. and idx,M as the last write to idx before end (index 0..M).
           3. cmp idx,N ; jb end (the table dispatch is the taken target, index 0..N-1).
         """
+        def neutral(x):
+            # Instructions that leave EFLAGS alone are skipped, unless they write the index.
+            return flag_neutral(x) and not (
+                x.ops and x.ops[0].kind == 'reg' and x.ops[0].reg == idx_reg)
+
         for seq in self._windows(end):
-            if len(seq) < 2:
+            k = len(seq) - 1
+            while k >= 0 and neutral(seq[k]):
+                k -= 1
+            if k < 0 or seq[k].mn not in ('ja', 'jae', 'jnb'):
                 continue
-            j = seq[-1]
-            if j.mn not in ('ja', 'jae', 'jnb'):
+            j = seq[k]
+            # Between the compare and the branch, the same rule applies.
+            m = k - 1
+            while m >= 0 and neutral(seq[m]):
+                m -= 1
+            if m < 0:
                 continue
-            # The compare sets the flags. Moves, lea, and push/pop between it and the branch
-            # leave the flags alone, so they can be skipped if they do not write the index.
-            for c in reversed(seq[:-1]):
-                if c.mn == 'cmp' and len(c.ops) == 2 and c.ops[0].kind == 'reg' and \
-                        c.ops[0].reg == idx_reg and c.ops[1].kind == 'imm':
-                    n = c.ops[1].imm & M32
+            c = seq[m]
+            if c.mn == 'cmp' and len(c.ops) == 2 and c.ops[0].kind == 'reg' and c.ops[0].reg == idx_reg:
+                n = self._cmp_limit(c, seq[:m])
+                if n is not None:
                     return n + 1 if j.mn == 'ja' else n
-                if c.mn in ('mov', 'lea', 'push', 'pop') and not (
-                        c.ops and c.ops[0].kind == 'reg' and c.ops[0].reg == idx_reg):
-                    continue
-                break
         for seq in self._windows(end):
             for ins in reversed(seq):
                 if len(ins.ops) >= 1 and ins.ops[0].kind == 'reg' and ins.ops[0].reg == idx_reg:
@@ -445,17 +460,39 @@ class Analysis:
     def _function_bound(self, jaddr, seen):
         """Bound for an unbounded jump, from the function's own instructions.
 
-        Looks at the last instruction before the jump that writes the index register. If it
-        is and idx,M, the index is in 0..M. Any other write, or none, gives no bound."""
+        Two patterns, both found by walking back in address order through the function:
+          * the last write to the index is and idx,M (index 0..M), or
+          * a ja/jae default branch, preceded by cmp idx,N, with flag-neutral moves allowed
+            between them (the index is bounded by N, or N+1 for ja)."""
         table, idx = self.unbounded[jaddr]
-        for a in sorted((x for x in seen if x < jaddr), reverse=True):
+
+        def neutral(x):
+            return x.mn in ('mov', 'lea', 'push', 'pop') and not (
+                x.ops and x.ops[0].kind == 'reg' and x.ops[0].reg == idx)
+
+        back = sorted((x for x in seen if x < jaddr), reverse=True)
+        for a in back:
             ins = seen[a]
-            if not ins.ops or ins.ops[0].kind != 'reg' or ins.ops[0].reg != idx:
+            if neutral(ins):
                 continue
-            if ins.mn == 'and' and len(ins.ops) == 2 and ins.ops[1].kind == 'imm' and \
-                    (ins.ops[1].imm & M32) >= 1:
+            if ins.ops and ins.ops[0].kind == 'reg' and ins.ops[0].reg == idx and ins.mn == 'and' \
+                    and len(ins.ops) == 2 and ins.ops[1].kind == 'imm' and (ins.ops[1].imm & M32) >= 1:
                 return (ins.ops[1].imm & M32) + 1
-            if ins.mn not in ('cmp', 'test'):
+            if ins.mn in ('ja', 'jae', 'jnb'):
+                # The compare sets the flags, so it is the next flag-setter back.
+                for b in back:
+                    if b >= a:
+                        continue
+                    c = seen[b]
+                    if neutral(c):
+                        continue
+                    if c.mn == 'cmp' and len(c.ops) == 2 and c.ops[0].kind == 'reg' and c.ops[0].reg == idx:
+                        n = self._cmp_limit(c, [seen[x] for x in sorted(x for x in seen if x < b)])
+                        if n is not None:
+                            return n + 1 if ins.mn == 'ja' else n
+                    return None
+                return None
+            if ins.ops and ins.ops[0].kind == 'reg' and ins.ops[0].reg == idx and ins.mn not in ('cmp', 'test'):
                 return None
         return None
 
@@ -504,7 +541,14 @@ class Analysis:
         op = ins.ops[0]
         res = None
         if op.kind == 'mem' and op.index and not op.base and op.scale == 4:
-            res = self._make_table(ins.addr, op.disp & M32, op.index, ins.addr)
+            byte_count = self._byte_index_count(ins.addr, op.index)
+            if byte_count is not None:
+                try:
+                    res = self._table_from_count(ins.addr, op.disp & M32, byte_count)
+                except DecodeError:
+                    res = JTable(ins.addr, op.disp & M32, 0, [], bad="byte table outside image")
+            else:
+                res = self._make_table(ins.addr, op.disp & M32, op.index, ins.addr)
         elif op.kind == 'reg':
             seq = self._windows(ins.addr)
             load = None
@@ -520,6 +564,48 @@ class Analysis:
                 res = self._make_table(ins.addr, m.disp & M32, m.index, load.addr)
         self.tables[ins.addr] = res
         return res
+
+    def _cmp_limit(self, cmp_ins, before):
+        """The constant the compare tests the index against: an immediate, or a register
+        loaded by mov reg, imm earlier in `before` (instructions in address order)."""
+        opnd = cmp_ins.ops[1]
+        if opnd.kind == 'imm':
+            return opnd.imm & M32
+        if opnd.kind != 'reg':
+            return None
+        for x in reversed(before):
+            if x.ops and x.ops[0].kind == 'reg' and x.ops[0].reg == opnd.reg:
+                if x.mn == 'mov' and len(x.ops) == 2 and x.ops[1].kind == 'imm':
+                    return x.ops[1].imm & M32
+                return None
+        return None
+
+    def _byte_index_count(self, jaddr, idx):
+        """Dispatch count for movzx idx, byte [idx + T]; jmp [idx*4 + D].
+
+        The compare before the movzx bounds the byte-table index to N entries. The dispatch
+        index is then a byte, so it is at most the largest byte in those N entries."""
+        for seq in self._windows(jaddr):
+            if not seq:
+                continue
+            last = seq[-1]
+            # movzx dst, byte [src + T]: the dispatch index is dst. The compare bounds src.
+            if last.mn != 'movzx' or len(last.ops) != 2 or last.ops[0].kind != 'reg' or \
+                    last.ops[0].reg != idx or last.ops[1].kind != 'mem':
+                continue
+            m = last.ops[1]
+            if not m.base or m.index or m.disp is None:
+                continue
+            pre = self._bound_before(last.addr, m.base)
+            if pre is None:
+                return None
+            tbl = m.disp & M32
+            try:
+                vals = [self.img.mem[tbl + i - self.img.base] for i in range(pre)]
+            except IndexError:
+                return None
+            return max(vals) + 1 if vals else None
+        return None
 
     def _make_table(self, jaddr, table, idx_reg, bound_end):
         if jaddr in self.table_sizes:
@@ -695,6 +781,14 @@ class Analysis:
             if not self._leaves_function(seen):
                 continue
             if any(i.mn == 'add' and 'byte ptr [eax], al' in i.text for i in seen.values()):
+                continue
+            # A body with an instruction the translator cannot lower is data decoded as code.
+            # Blockers that are only rejected jump tables do not count against it.
+            try:
+                _, _, unsup = gen_function(self, c, False)
+            except (DecodeError, TranslateError):
+                continue
+            if any(not why.startswith('jump table') for _, why, _ in unsup):
                 continue
             good.append((c, False))
         before = len(self.E)
@@ -1735,7 +1829,14 @@ def x87(ins):
                     *(["FPOP();"] * pops))]
     if mn in ('fcomi', 'fcomip', 'fucomi', 'fucomip', 'fcompi', 'fucompi'):
         pop = mn.endswith('p') or mn.endswith('pi')
-        sv = f"FST({sti(ops[1])})" if len(ops) > 1 else "FST(1)"
+        # Two operands: st(0) against st(i). One operand: st(0) against that operand. The
+        # one-operand form is fcompi st(i), which is not always st(1).
+        if len(ops) > 1:
+            sv = f"FST({sti(ops[1])})"
+        elif ops:
+            sv = f"FST({sti(ops[0])})"
+        else:
+            sv = "FST(1)"
         return [blk(f"uint32_t f = vt_fcmp(FST(0), {sv});",
                     "cf = f & 1u; zf = (f >> 1) & 1u; pf = (f >> 2) & 1u; of = 0u; sf = 0u; af = 0u;",
                     "FPOP();" if pop else "")]

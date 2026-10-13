@@ -21,7 +21,8 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 RT = os.path.join(os.path.dirname(HERE), 'rt')
 RECOMP = os.path.join(HERE, '..', 'recomp.py')
-REPO_RUNTIME = os.path.join(HERE, '..', '..', '..', 'runtime')
+# VT3_RUNTIME overrides the runtime tree, for example a committed snapshot under dump/recomp/.
+REPO_RUNTIME = os.environ.get('VT3_RUNTIME') or os.path.join(HERE, '..', '..', '..', 'runtime')
 ROOT = '/Users/heath/Virtua Tennis 3/dump/recomp'
 PY = '/Users/heath/Virtua Tennis 3/tools/venv/bin/python'
 GCC = 'i686-w64-mingw32-gcc'
@@ -51,6 +52,7 @@ VARIANTS = {
                     ('rep_O2', ['-O2', '-minline-all-stringops', '-mstringop-strategy=rep_byte'])],
     't12_bits': [('O0', ['-O0']), ('O2', ['-O2'])],
     't13_calls': [('O0', ['-O0']), ('O2', ['-O2'])],
+    't15_mmx': [('O0', ['-O0', '-mmmx', '-msse']), ('O2', ['-O2', '-mmmx', '-msse'])],
     't14_sim': [('sse_O2', ['-O2', '-msse2', '-mfpmath=sse']),
                 ('x87_O2', ['-O2', '-mfpmath=387'])],
 }

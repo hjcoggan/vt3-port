@@ -103,14 +103,16 @@ Startup on the translated binary: the CRT initializes, the game reads its option
 
 A table is accepted only when its entry count is known. The count comes from one of these, in order:
 
-1. `cmp idx, N` followed by `ja` (N+1 entries) or `jae`/`jnb` (N entries) just before the jump. Moves, lea, and push/pop between the compare and the branch are skipped if they do not write `idx`, since they leave the flags alone.
+1. `cmp idx, N` followed by `ja` (N+1 entries) or `jae`/`jnb` (N entries) before the jump. Instructions that leave EFLAGS alone (mov, lea, push, pop, movzx, x87 loads and stores, SSE moves) may sit between the compare, the branch, and the jump. They are skipped if they do not write `idx`. The compare may use an immediate, or a register loaded with `mov reg, imm` before it.
 2. `and idx, M` as the last write to `idx` before the jump (M+1 entries), in the same function.
 3. `cmp idx, N` followed by a taken `jb` whose target is the jump (N entries). Found by indexing all short and near `jb` and `ja` branch targets in the executable bytes.
-4. An explicit size from `--table-sizes FILE`, with a source note. Each entry in `dump/recomp/vt3_table_sizes.txt` was checked by hand against the Ghidra decompile. It currently holds one entry, `_memcpy`, `switch (_Size & 3)`, 4 entries.
+4. An index loaded from a byte table, `movzx idx, byte [src + T]`, where the compare bounds `src` to N entries. The dispatch count is the largest of those N bytes plus one.
+5. A search of the owning function, in address order, for the last `and idx, M` or for a `cmp idx` followed by the default branch. This covers compares far before the jump.
+6. An explicit size from `--table-sizes FILE`, with a source note. Each entry in `dump/recomp/vt3_table_sizes.txt` was checked by hand against the Ghidra decompile. It currently holds one entry, `_memcpy`, `switch (_Size & 3)`, 4 entries.
 
 A table with no bound, or with fewer than two entries, or with an entry that is not code, is rejected. The jump traps at run time and is counted as unsupported. There is no heuristic count any more. The old rule, which read entries until one was not code, produced counts of 0 and 1 on VT3.exe.
 
-On VT3.exe, 532 jump tables are found and 161 are rejected. Each rejection is loud in the translator log and traps at run time.
+On VT3.exe, 535 jump tables are found and 47 are rejected, in 41 functions. Each rejection is loud in the translator log and traps at run time. The list is in `dump/recomp/rejected_tables.tsv`.
 
 ## Pointer scan
 
@@ -118,7 +120,7 @@ Some functions are reached only through stored addresses: `atexit` and `onexit` 
 
 - **Sources.** Immediates in translated code (`push offset label`, `mov [slot], offset label`), and dwords in non-executable sections that point into executable ones. Round 1 found 57,006 distinct candidates.
 - **Exclusions.** Candidates already inside a known function body, which are almost always switch case labels. Jump-table targets, which are case labels by definition.
-- **Acceptance.** The candidate must decode in full, must reach a `ret` or leave its body by a `jmp` (a thunk that tail-jumps), and must not contain data-like bytes (`add [eax], al`).
+- **Acceptance.** The candidate must decode in full, must reach a `ret` or leave its body by a `jmp` (a thunk that tail-jumps), must not contain data-like bytes (`add [eax], al`), and must not contain an instruction the translator cannot lower. A body blocked only by a rejected jump table is accepted.
 
 Result on VT3.exe: 3,082 soft entries, 85.9% of executable bytes covered (up from 75.7% from the Ghidra list alone, +297 KB). Three rounds added 2,847, 234, and 1 entries. Two of the accepted candidates were `0x6c6800` and `0x6c66b0`, which are destructor thunks pushed onto the `atexit` table by static C++ initializers. Earlier rules rejected them: one because its body ends in a tail `jmp`, and the other because a single-instruction body was rejected.
 
