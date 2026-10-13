@@ -23,13 +23,15 @@ typedef union vt_xmm {
 
 /* Register file passed to every guest function. The GPRs live in C locals
  * inside a function. They are spilled here around calls and returns. */
+#include "vt3fpu.h"
+
 typedef struct vt3_cpu {
     uint32_t eax, ecx, edx, ebx, esp, ebp, esi, edi;
     uint32_t fs_base;     /* linear base of FS (the TEB) */
     uint32_t ftop;        /* x87 top of stack, 0..7 */
     uint32_t fcw;         /* x87 control word */
     uint32_t fsw;         /* x87 status word, TOP field is kept in ftop */
-    double fp[8];        /* x87 physical registers; st(i) = fp[(ftop+i)&7] */
+    vt_x80 fp[8];        /* x87 physical registers, 80-bit (vt3fpu.h); st(i) = fp[(ftop+i)&7] */
     vt_xmm xmm[8];
     uint64_t mm[8];       /* MMX registers. Not aliased to the x87 stack. */
 } vt3_cpu;
@@ -104,15 +106,11 @@ void vt_unsupported_at(uint32_t addr, const char *text) __attribute__((noreturn)
 /* x87 support. Double precision internally. */
 double vt_ldf32(uint32_t a);
 double vt_ldf64(uint32_t a);
-double vt_ldf80(uint32_t a);
 void vt_stf32(uint32_t a, double v);
 void vt_stf64(uint32_t a, double v);
-void vt_stf80(uint32_t a, double v);
 /* Round by rc (0 nearest, 1 down, 2 up, 3 truncate), then convert. */
-double vt_round(double v, uint32_t rc);
-int64_t vt_fint(double v, uint32_t rc, int bits);     /* FIST/FISTP/FISTTP */
 uint32_t vt_cvt_i32(double v, int trunc);            /* CVT(T)SS/SD2SI */
-uint32_t vt_fcmp(double a, double b);                /* bit0 CF, bit1 ZF, bit2 PF */
+uint32_t vt_fcmp_d(double a, double b);              /* SSE COMISD/UCOMISD: bit0 CF, bit1 ZF, bit2 PF */
 
 /* 128-bit memory access for SSE moves. */
 vt_xmm vt_ldx(uint32_t a);
@@ -161,7 +159,7 @@ void vt_stx(uint32_t a, vt_xmm v);
     esp = c->esp; ebp = c->ebp; esi = c->esi; edi = c->edi; } while (0)
 
 #define FST(i) (c->fp[(c->ftop + (uint32_t)(i)) & 7u])
-#define FPUSH(v) do { double vt_t_ = (v); c->ftop = (c->ftop - 1u) & 7u; c->fp[c->ftop] = vt_t_; } while (0)
+#define FPUSH(v) do { vt_x80 vt_t_ = (v); c->ftop = (c->ftop - 1u) & 7u; c->fp[c->ftop] = vt_t_; } while (0)
 #define FPOP() do { c->ftop = (c->ftop + 1u) & 7u; } while (0)
 
 #endif /* VT3RT_H */

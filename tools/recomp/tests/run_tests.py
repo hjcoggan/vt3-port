@@ -94,6 +94,7 @@ def build_runtime(objdir):
         os.path.join(RT, 'vt3rt.c'),
         os.path.join(RT, 'vt3main.c'),
         os.path.join(RT, 'vt3simd.c'),
+        os.path.join(RT, 'vt3fpu.c'),
         adapters,
         os.path.join(REPO_RUNTIME, 'src', 'core', 'log.c'),
         os.path.join(REPO_RUNTIME, 'src', 'core', 'guest.c'),

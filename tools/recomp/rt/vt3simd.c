@@ -255,7 +255,7 @@ void vt_fldenv(vt3_cpu *c, uint32_t a)
 void vt_fnsave(vt3_cpu *c, uint32_t a)
 {
     vt_fnstenv(c, a);
-    for (int i = 0; i < 8; i++) vt_stf80(a + 28 + 10 * (uint32_t)i, FST(i));
+    for (int i = 0; i < 8; i++) vt_fst80(a + 28 + 10 * (uint32_t)i, FST(i));
     /* FNSAVE leaves the FPU initialised. */
     c->fcw = 0x37Fu;
     c->fsw = 0;
@@ -265,7 +265,7 @@ void vt_fnsave(vt3_cpu *c, uint32_t a)
 void vt_frstor(vt3_cpu *c, uint32_t a)
 {
     vt_fldenv(c, a);
-    for (int i = 0; i < 8; i++) FST(i) = vt_ldf80(a + 28 + 10 * (uint32_t)i);
+    for (int i = 0; i < 8; i++) FST(i) = vt_fld80(a + 28 + 10 * (uint32_t)i);
 }
 
 /* PMADDWD: multiply signed words, add adjacent pairs into signed dwords. */

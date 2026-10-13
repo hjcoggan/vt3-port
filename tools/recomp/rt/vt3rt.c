@@ -116,20 +116,6 @@ double vt_ldf64(uint32_t a)
     return d;
 }
 
-double vt_ldf80(uint32_t a)
-{
-    uint64_t m;
-    uint16_t se;
-    memcpy(&m, vt_mem + a, 8);
-    memcpy(&se, vt_mem + a + 8, 2);
-    int sign = se >> 15;
-    int e = se & 0x7FFF;
-    double v;
-    if (e == 0 && m == 0) v = 0.0;
-    else if (e == 0x7FFF) v = ((m << 1) == 0) ? INFINITY : NAN;
-    else v = ldexp((double)m, e - 16383 - 63);
-    return sign ? -v : v;
-}
 
 void vt_stf32(uint32_t a, double v)
 {
@@ -142,50 +128,8 @@ void vt_stf64(uint32_t a, double v)
     memcpy(vt_mem + a, &v, 8);
 }
 
-void vt_stf80(uint32_t a, double v)
-{
-    uint64_t m = 0;
-    uint16_t se;
-    int sign = signbit(v) ? 1 : 0;
-    double av = fabs(v);
-    if (av == 0.0) {
-        se = 0;
-    } else if (isinf(av)) {
-        m = 0x8000000000000000ull;
-        se = 0x7FFF;
-    } else if (isnan(av)) {
-        m = 0xC000000000000000ull;
-        se = 0x7FFF;
-    } else {
-        int ex;
-        double f = frexp(av, &ex);          /* f in [0.5, 1) */
-        m = (uint64_t)ldexp(f, 64);          /* explicit integer bit set */
-        se = (uint16_t)(ex - 1 + 16383);
-    }
-    se |= (uint16_t)(sign << 15);
-    memcpy(vt_mem + a, &m, 8);
-    memcpy(vt_mem + a + 8, &se, 2);
-}
 
-double vt_round(double v, uint32_t rc)
-{
-    switch (rc & 3u) {
-    case 0: return nearbyint(v);
-    case 1: return floor(v);
-    case 2: return ceil(v);
-    default: return trunc(v);
-    }
-}
 
-int64_t vt_fint(double v, uint32_t rc, int bits)
-{
-    double r = vt_round(v, rc);
-    double lim = (double)((uint64_t)1 << (bits - 1));
-    if (!(r >= -lim && r < lim)) {
-        return bits == 16 ? (int64_t)INT16_MIN : bits == 32 ? (int64_t)INT32_MIN : INT64_MIN;
-    }
-    return (int64_t)r;
-}
 
 uint32_t vt_cvt_i32(double v, int tr)
 {
@@ -194,7 +138,7 @@ uint32_t vt_cvt_i32(double v, int tr)
     return (uint32_t)(int32_t)r;
 }
 
-uint32_t vt_fcmp(double a, double b)
+uint32_t vt_fcmp_d(double a, double b)
 {
     if (isnan(a) || isnan(b)) return 0x7u;
     if (a < b) return 0x1u;

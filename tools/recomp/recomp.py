@@ -1293,8 +1293,8 @@ def sse(ins):
     if mn in ('ucomiss', 'comiss', 'ucomisd', 'comisd'):
         d, s = ops
         if mn.endswith('sd'):
-            return [blk(f"uint32_t f = vt_fcmp(c->xmm[{_xmm(d)}].f64[0], {_f64src(s)});", *_eflags_from_f())]
-        return [blk(f"uint32_t f = vt_fcmp(c->xmm[{_xmm(d)}].f32[0], {_f32src(s)});", *_eflags_from_f())]
+            return [blk(f"uint32_t f = vt_fcmp_d(c->xmm[{_xmm(d)}].f64[0], {_f64src(s)});", *_eflags_from_f())]
+        return [blk(f"uint32_t f = vt_fcmp_d(c->xmm[{_xmm(d)}].f32[0], {_f32src(s)});", *_eflags_from_f())]
     if mn in ('cvtsi2ss', 'cvtsi2sd'):
         d, s = ops
         di = _xmm(d)
@@ -1640,94 +1640,94 @@ def _eflags_from_f():
 # -- x87 (double precision internally; see design note for the gap) ----------
 
 def x87(ins):
+    """x87 lowering. Values are 80-bit (rt/vt3fpu.c). Each operation rounds to the
+    precision and rounding mode of the live control word, c->fcw."""
     mn, ops = ins.mn, ins.ops
+    CW = "c->fcw"
 
     def sti(op):
         return int(op.reg[3:-1]) if op.reg.startswith('st(') else 0
 
-    if mn in ('fld',):
+    def src(op):
+        """80-bit value of a memory or st(i) operand."""
+        if op.kind == 'mem':
+            return f"vt_fld{ {4: 32, 8: 64, 10: 80}[op.size] }({ea(op)})"
+        return f"FST({sti(op)})"
+
+    if mn == 'fld':
         o = ops[0]
-        if o.kind == 'mem':
-            fn = {4: 'vt_ldf32', 8: 'vt_ldf64', 10: 'vt_ldf80'}[o.size]
-            return [blk(f"double t = {fn}({ea(o)});", "FPUSH(t);")]
-        return [blk(f"double t = FST({sti(o)});", "FPUSH(t);")]
+        return [blk(f"vt_x80 t = {src(o)};", "FPUSH(t);")]
     if mn in ('fst', 'fstp'):
-        o = ops[0] if ops else None
         pop = mn == 'fstp'
+        o = ops[0] if ops else None
         if o is None or o.kind == 'reg':
             i = sti(o) if o is not None else 1
             return [blk(f"FST({i}) = FST(0);", "FPOP();" if pop else "")]
-        fn = {4: 'vt_stf32', 8: 'vt_stf64', 10: 'vt_stf80'}[o.size]
-        return [blk(f"{fn}({ea(o)}, FST(0));", "FPOP();" if pop else "")]
-    if mn in ('fild',):
+        if o.size == 10:
+            store = f"vt_fst80({ea(o)}, FST(0));"
+        else:
+            store = f"vt_fst{ {4: 32, 8: 64}[o.size] }({ea(o)}, FST(0), {CW});"
+        return [blk(store, "FPOP();" if pop else "")]
+    if mn == 'fild':
         o = ops[0]
-        cast = {2: 'int16_t', 4: 'int32_t', 8: 'int64_t'}[o.size]
-        rdf = {2: 'rd16', 4: 'rd32', 8: 'rd64'}[o.size]
-        return [blk(f"double t = (double)({cast})({rdf}({ea(o)}));", "FPUSH(t);")]
+        cast, rd = {2: ('int16_t', 'rd16'), 4: ('int32_t', 'rd32'), 8: ('int64_t', 'rd64')}[o.size]
+        return [blk(f"vt_x80 t = vt_fild((int64_t)({cast})({rd}({ea(o)})));", "FPUSH(t);")]
     if mn in ('fist', 'fistp', 'fisttp'):
         o = ops[0]
-        # fist/fistp round per the RC field of the control word. gcc switches RC
-        # to truncate around (int) casts. fisttp always truncates.
         rc = "3u" if mn == 'fisttp' else "((c->fcw >> 10) & 3u)"
         bits = {2: 16, 4: 32, 8: 64}[o.size]
         wr = {2: 'wr16', 4: 'wr32', 8: 'wr64'}[o.size]
         pop = mn in ('fistp', 'fisttp')
         return [blk(f"int64_t iv = vt_fint(FST(0), {rc}, {bits});", f"{wr}({ea(o)}, (uint64_t)iv);",
                     "FPOP();" if pop else "")]
-    if mn in ('fadd', 'fsub', 'fsubr', 'fmul', 'fdiv', 'fdivr', 'faddp', 'fsubp', 'fsubrp',
-              'fmulp', 'fdivp', 'fdivrp'):
-        pop = mn.endswith('p')
-        base = mn[:-1] if pop else mn
-        oc = {'fadd': '+', 'fsub': '-', 'fsubr': 'r-', 'fmul': '*', 'fdiv': '/', 'fdivr': 'r/'}[base]
+    arith = {'fadd': 'vt_fadd', 'fsub': 'vt_fsub', 'fsubr': 'vt_fsub', 'fmul': 'vt_fmul',
+             'fdiv': 'vt_fdiv', 'fdivr': 'vt_fdiv'}
+    base = mn[:-1] if (mn.endswith('p') and mn[:-1] in arith) else mn
+    if base in arith:
+        pop = base != mn
+        reverse = base in ('fsubr', 'fdivr')   # the destination gets src op dst
         if len(ops) == 0:
-            dst, src = 1, None
+            dst, sv = 1, "FST(0)"
         elif len(ops) == 1:
-            # One operand. Memory or st(i) without a pop: ST(0) op= src (D8 form).
-            # st(i) with a pop: ST(i) op= ST(0) (DE form, operand is the destination).
             if ops[0].kind == 'mem':
-                dst, src = 0, ops[0]
+                dst, sv = 0, src(ops[0])
             elif pop:
-                dst, src = sti(ops[0]), None
+                dst, sv = sti(ops[0]), "FST(0)"       # DE forms: st(i) op= st(0)
             else:
-                dst, src = 0, ops[0]
+                dst, sv = 0, f"FST({sti(ops[0])})"    # D8 forms: st(0) op= st(i)
         else:
-            dst = sti(ops[0])
-            src = ops[1]
-        if src is None:
-            sv = "FST(0)"
-        elif src.kind == 'mem':
-            sv = f"{'vt_ldf32' if src.size == 4 else 'vt_ldf64'}({ea(src)})"
-        else:
-            sv = f"FST({sti(src)})"
-        if oc.startswith('r'):
-            expr = f"s {oc[1:]} d"
-        else:
-            expr = f"d {oc} s"
-        return [blk(f"double s = {sv};", f"double d = FST({dst});", f"FST({dst}) = {expr};",
+            dst, sv = sti(ops[0]), src(ops[1])
+        fn = arith[base]
+        call = f"{fn}(s, d, {CW})" if reverse else f"{fn}(d, s, {CW})"
+        return [blk(f"vt_x80 s = {sv};", f"vt_x80 d = FST({dst});", f"FST({dst}) = {call};",
                     "FPOP();" if pop else "")]
-    if mn in ('fchs', 'fabs', 'fsqrt', 'frndint', 'fxch', 'fld1', 'fldz', 'fldpi'):
-        if mn == 'fchs':
-            return ["FST(0) = -FST(0);"]
-        if mn == 'fabs':
-            return ["FST(0) = fabs(FST(0));"]
-        if mn == 'fsqrt':
-            return ["FST(0) = sqrt(FST(0));"]
-        if mn == 'frndint':
-            return ["FST(0) = vt_round(FST(0), (c->fcw >> 10) & 3u);"]
-        if mn == 'fxch':
-            # capstone lists fxch as (st(0), st(i)). The swapped slot is the non-zero one.
-            i = next((sti(o) for o in ops if sti(o) != 0), 1)
-            return [blk(f"double t = FST(0);", f"FST(0) = FST({i});", f"FST({i}) = t;")]
-        const = {'fld1': '1.0', 'fldz': '0.0', 'fldpi': '3.14159265358979323846'}[mn]
-        return [blk(f"double t = {const};", "FPUSH(t);")]
+    if mn in ('fiadd', 'fimul', 'fisub', 'fisubr', 'fidiv', 'fidivr'):
+        o = ops[0]
+        cast, rd = {2: ('int16_t', 'rd16'), 4: ('int32_t', 'rd32')}[o.size]
+        fn, reverse = {'fiadd': ('vt_fadd', 0), 'fimul': ('vt_fmul', 0), 'fisub': ('vt_fsub', 0),
+                       'fisubr': ('vt_fsub', 1), 'fidiv': ('vt_fdiv', 0), 'fidivr': ('vt_fdiv', 1)}[mn]
+        sv = f"vt_fild((int64_t)({cast})({rd}({ea(o)})))"
+        call = f"{fn}(s, d, {CW})" if reverse else f"{fn}(d, s, {CW})"
+        return [blk(f"vt_x80 s = {sv};", "vt_x80 d = FST(0);", f"FST(0) = {call};")]
+    if mn in ('fchs', 'fabs', 'fsqrt', 'frndint'):
+        f = {'fchs': 'vt_fneg(FST(0))', 'fabs': 'vt_fabs(FST(0))',
+             'fsqrt': f'vt_fsqrt(FST(0), {CW})', 'frndint': f'vt_frndint(FST(0), {CW})'}[mn]
+        return [f"FST(0) = {f};"]
+    if mn == 'fxch':
+        i = next((sti(o) for o in ops if sti(o) != 0), 1)
+        return [blk("vt_x80 t = FST(0);", f"FST(0) = FST({i});", f"FST({i}) = t;")]
+    consts = {'fld1': 'VT_FC_1', 'fldz': 'VT_FC_ZERO', 'fldpi': 'VT_FC_PI', 'fldl2e': 'VT_FC_L2E',
+              'fldln2': 'VT_FC_LN2', 'fldlg2': 'VT_FC_LG2', 'fldl2t': 'VT_FC_L2T'}
+    if mn in consts:
+        return [f"FPUSH(vt_fconst({consts[mn]}));"]
     if mn in ('fcom', 'fcomp', 'fcompp', 'fucom', 'fucomp', 'fucompp', 'ftst'):
         pops = {'fcomp': 1, 'fucomp': 1, 'fcompp': 2, 'fucompp': 2}.get(mn, 0)
         if mn == 'ftst':
-            sv = "0.0"
+            sv = "vt_fconst(VT_FC_ZERO)"
         elif not ops:
             sv = "FST(1)"
         elif ops[0].kind == 'mem':
-            sv = f"{'vt_ldf32' if ops[0].size == 4 else 'vt_ldf64'}({ea(ops[0])})"
+            sv = src(ops[0])
         else:
             sv = f"FST({sti(ops[0])})"
         return [blk(f"uint32_t f = vt_fcmp(FST(0), {sv});",
@@ -1736,7 +1736,9 @@ def x87(ins):
     if mn in ('fcomi', 'fcomip', 'fucomi', 'fucomip', 'fcompi', 'fucompi'):
         pop = mn.endswith('p') or mn.endswith('pi')
         sv = f"FST({sti(ops[1])})" if len(ops) > 1 else "FST(1)"
-        return [blk(f"uint32_t f = vt_fcmp(FST(0), {sv});", *_eflags_from_f(), "FPOP();" if pop else "")]
+        return [blk(f"uint32_t f = vt_fcmp(FST(0), {sv});",
+                    "cf = f & 1u; zf = (f >> 1) & 1u; pf = (f >> 2) & 1u; of = 0u; sf = 0u; af = 0u;",
+                    "FPOP();" if pop else "")]
     if mn == 'fnstsw' or mn == 'fstsw':
         o = ops[0]
         expr = "((c->fsw & 0xC7FFu) | ((c->ftop & 7u) << 11))"
@@ -1758,40 +1760,23 @@ def x87(ins):
     if mn == 'ffree':
         return []
     if mn in ('fsin', 'fcos'):
-        return [f"FST(0) = {mn[1:]}(FST(0));"]
+        op = 'VT_FD_SIN' if mn == 'fsin' else 'VT_FD_COS'
+        return [f"FST(0) = vt_fdbl1(FST(0), {CW}, {op});"]
     if mn == 'fptan':
-        return [blk("FST(0) = tan(FST(0));", "FPUSH(1.0);")]
-    if mn == 'fpatan':
-        return [blk("double s = FST(0); double d = FST(1);", "FST(1) = atan2(d, s);", "FPOP();")]
-    if mn == 'fyl2x':
-        return [blk("double x = FST(0); double y = FST(1);", "FST(1) = y * log2(x);", "FPOP();")]
+        return [blk(f"FST(0) = vt_fdbl1(FST(0), {CW}, VT_FD_TAN);", "FPUSH(vt_fconst(VT_FC_1));")]
     if mn == 'f2xm1':
-        return ["FST(0) = exp2(FST(0)) - 1.0;"]
+        return [f"FST(0) = vt_fdbl1(FST(0), {CW}, VT_FD_F2XM1);"]
+    if mn == 'fpatan':
+        return [blk("vt_x80 s = FST(0); vt_x80 d = FST(1);",
+                    f"FST(1) = vt_fdbl2(d, s, {CW}, VT_FD2_PATAN);", "FPOP();")]
+    if mn == 'fyl2x':
+        return [blk(f"FST(1) = vt_fdbl2(FST(0), FST(1), {CW}, VT_FD2_YL2X);", "FPOP();")]
     if mn == 'fscale':
-        return ["FST(0) = FST(0) * exp2(trunc(FST(1)));"]
+        return [f"FST(0) = vt_fdbl2(FST(0), FST(1), {CW}, VT_FD2_SCALE);"]
     if mn == 'fprem':
-        return ["FST(0) = fmod(FST(0), FST(1)); c->fsw &= ~0x400u;"]
-    consts = {'fldl2e': '1.4426950408889634', 'fldln2': '0.6931471805599453',
-              'fldlg2': '0.3010299956639812', 'fldl2t': '3.3219280948873623'}
-    if mn in consts:
-        return [blk(f"double t = {consts[mn]};", "FPUSH(t);")]
+        return [f"FST(0) = vt_fdbl2(FST(0), FST(1), {CW}, VT_FD2_PREM); c->fsw &= ~0x400u;"]
     if mn == 'fxam':
-        return [blk("double v = FST(0);",
-                    "uint32_t sw = (c->fsw & ~0x4700u) | (signbit(v) ? 0x200u : 0u);",
-                    "if (isnan(v)) sw |= 0x100u;",
-                    "else if (isinf(v)) sw |= 0x500u;",
-                    "else if (v == 0.0) sw |= 0x4000u;",
-                    "else if (fpclassify(v) == FP_SUBNORMAL) sw |= 0x4400u;",
-                    "else sw |= 0x400u;",
-                    "c->fsw = sw;")]
-    if mn in ('fiadd', 'fimul', 'fisub', 'fisubr', 'fidiv', 'fidivr'):
-        o = ops[0]
-        cast, rd = {2: ('int16_t', 'rd16'), 4: ('int32_t', 'rd32')}[o.size]
-        base = mn[1:]
-        oc = {'fiadd': '+', 'fimul': '*', 'fisub': '-', 'fisubr': 'r-', 'fidiv': '/', 'fidivr': 'r/'}[mn]
-        sv = f"(double)({cast})({rd}({ea(o)}))"
-        expr = f"s {oc[1:]} d" if oc.startswith('r') else f"d {oc} s"
-        return [blk(f"double s = {sv};", "double d = FST(0);", f"FST(0) = {expr};")]
+        return ["c->fsw = (c->fsw & ~0x4700u) | vt_fxam(FST(0));"]
     raise Unsupported(mn)
 
 
