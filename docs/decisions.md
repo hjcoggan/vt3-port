@@ -31,3 +31,11 @@
   - Feb 21, 2007: a PSP UMD image (`ULUS-10246`, `PSP_GAME`). Its game data uses the same CAPX, ADB, and anim.db layouts as the PC release. Its PRX files are encrypted (`~SCE`), so they give no symbols.
   - Dec 16, 2006: a PS3 build (`PS3_GAME`, `vt3.xaf` at 4.5 GB, `PS3UPDAT.PUP`). It's not yet analysed.
 - Neither prototype is useful for PC symbols directly. They are useful as cross-platform references for the data formats.
+
+## Decisions made while the owner was asleep (2026-10-14)
+
+- **Build target:** the NoCD 1.0.1 VT3.exe. The SafeDisc route is retired.
+- **One Win32 shim:** `runtime/shim/` is the only implementation. The recompiler's `tools/recomp/rt` links against it, and its duplicate imp_* functions are folded in.
+- **Function discovery:** Ghidra's list (13,013 functions, 0 failures) seeds the recompiler, instead of direct-call discovery (1,029 functions).
+- **D3D9 scope:** taken from a Wine trace of the NoCD build, logged with `WINEDEBUG=+d3d,+d3d9,+d3dx9`. The renderer implements only that subset.
+- **Analysis runs:** the NoCD game was stopped after the save, so it doesn't hold the display.
