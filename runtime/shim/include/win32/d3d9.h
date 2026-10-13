@@ -174,4 +174,7 @@ typedef struct IDirect3DDevice9Vtbl {
 
 GPTR WINAPI Direct3DCreate9(UINT sdk_version);   /* returns IDirect3D9*, or 0 */
 
+/* Profiling hooks. The game calls SetOptions at start-up; there is no profiler. */
+void WINAPI D3DPERF_SetOptions(DWORD options);
+
 #endif /* VT3_WIN32_D3D9_H */

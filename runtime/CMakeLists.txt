@@ -51,7 +51,10 @@ add_library(vt3shim STATIC
     shim/src/kernel32_sys.c
     shim/src/user32_stub.c
     shim/src/user32_window.c
-    shim/src/d3d9_stub.c
+    shim/src/d3d9_object.c
+    shim/src/d3d9_iface.c
+    shim/src/d3d9_device.c
+    shim/src/d3d9_com_unimpl.c
     shim/src/dsound_stub.c
     shim/src/dinput8_stub.c
 )
