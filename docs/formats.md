@@ -72,22 +72,51 @@ Shared code lives in `tools/formats/`: `capx.py` (archive reader), `cri_utf.py` 
 - `VT3.exe` `.text` is packed (entropy 8.0), so constant scanning is blocked until it is unpacked.
 - Names do exist in the data: `anim.db` (see below) and the SE cue sheets.
 
-**Animation names (partly decoded)**
+**Animation names and packs (Anims/, Player set verified)**
 
-- `Anims/*/anim.db`: `u32` count, then `count` records of 48 bytes. The name is a null-terminated string at record offset 14. Size checks pass for 5 of 6 files (`Trophy/anim.db` does not match). Other fields are not yet understood.
+- `anim.db` (48-byte variant, used by Player, Ball, umpire, ballperson, Morph): `u32` count, then `count` records of 48 bytes. Name: null-terminated at record offset 14. `+0` u32 is `0x7FFFFFFF` in 813 of 1079 Player records (other values not understood). `+4` is a sequential index for records 0 to 565 and differs after that. `+8` has low 24 bits equal to k for records 0 to 565 (high byte seen as `01` in samples). `+12` is `00 FF`. `+44` is `0xCCCC0000`. Size check passes for all five skeletons.
+- `Trophy/anim.db` is a different, variable-length variant (5 records, 164 bytes). Not parsed.
+- `pack*.adb`: `u32` count, `u32` 8, then `count` `u32` entry start offsets (entry k starts at word 2+k). The last entry runs to end of file. Player packs hold 611 + 41 + ... = 1079 entries, equal to the `anim.db` count. Working hypothesis: `anim.db` record k is global pack entry k (packs in numeric order). Supported by the counts, not yet proven per clip.
+- Entry header (first 36 bytes, samples only): byte0 = `07` (`06` once), byte1 = bone count. Equals the `hierachy` count for 1076 of 1079 Player entries and 15 of 15 ballperson entries. Byte2 = frame count (guess; for example `MYA_RUN_F_NAB` = 61). `u32` at +12 = `0x24` in every sample. Offsets at +16 and +20 are not understood. Keyframe encoding is not decoded.
+- `hierachy`: `u8` bone count, then one parent byte per bone (`FF` = root). Player: 60 bones.
+- PSP prototype cross-check: `PLAYER/ANIM.DB` is byte-identical to the PC file. `PACK0.ADB` has the same header, but its per-entry offsets differ.
+- `tools/formats/anim_extract.py` writes `dump/extracted-en/anims/<skeleton>.json`.
 
-**In progress**
+**Motion.xpac (not decoded)**
 
-- Mesh and skeleton layout in `game.xpac` and `stages.xpac` (the `0x0d` table, `hierachy` files).
-- `Motion.xpac` animation layout (`0x12` payloads, `pack*.adb`).
+- 278 `0x12` payloads. Each starts with `u32` 18, `u32` 8, then 18 entry starts (the same container shape as the packs). 5004 entries in total.
+- Entry header differs: byte0 = `02`, byte1 = 60 (bones), `u16` `0x0082`, then `u32` fields with bit-packed values (for example `0x00444431`). Not decoded.
+
+**Mesh table, `game.xpac` type `0x0D` (partly decoded)**
+
+- Four `0x0D` entries: 594, 696, 959, 1080 (the PSP build has the same table, at entry 223). Layout: `u32` count (13), `u32` total size, then 13 records of 40 bytes (32-byte name, `u32` offset, `u32` size). Offsets are relative to the payload start. Sub-blocks begin at `0x4C0`.
+- Names seen: `O_ECO_*` props (winch, chain, meat, pile, alligator), `O_CMN_machine`, `O_PAN_*` (balloons, arrows, shadow).
+- Sub-blocks contain 4x4 float matrices, name tables, nested DDS textures (`O_PAN_*`), and `u16` triangle index runs. Example: entry 696, block `O_CMN_machine` at payload `0x58140`, has a 902-value run after a `u32` `1`, maximum index 412.
+- Vertex layout NOT found. Unit-length normal search, stride and offset scans, and a smoothness metric all gave no usable result. The smoothness metric is degenerate on these blocks (a ratio locks at 1/23), so it should not be trusted. No glTF or OBJ export yet.
+
+**Player database (partly decoded)**
+
+- `Resource/database/player/tns_player_tbl_ALL.bin`: 188-byte records, 25 of them. Name at offset 0 (for example `Roger Federer(CHE)`). Other fields not yet mapped. `tools/formats/db_extract.py` exports the raw words as JSON.
+- Other `tns_*.bin` tables (racket, swing, IK info, playstyle) are binary. Record sizes not confirmed.
+
+**Text**
+
+- `ConfigText/English_US.TXT` is UTF-16LE with BOM and CRLF (confirmed). It contains the `Config.exe` UI strings. `tools/formats/text_extract.py` converts it to UTF-8.
+- The game's own English strings were not found in the PC dump. The exe refers to `resource/language/*.bin`, which is not present. The PSP build's `GAME.xpac` includes a `VECT` container with plain text (`VECTOR:`, `BEGIN:`, `COLOR:`). PSP only.
+- `.ips` files are InstallShield installer tables, not game text.
+
+**Textures status**
+
+- `game.xpac`: 2500 DDS (1406 DXT1, 3 DXT3, 1091 DXT5), 2500 PNG, 0 pitch mismatches.
+- `stages.xpac`: 4217 DDS (2625 DXT1, 16 DXT3, 1487 DXT5, 87 numeric FourCC 113 float, 2 RGB32), 4130 PNG (float format has no PNG), 0 pitch mismatches.
+- Output: `dump/extracted-en/textures/{game,stages,frontend}/`.
 
 **Next**
 
-- Run DDS extraction on `game.xpac` and `stages.xpac`, and make a PNG pass.
-- Mesh converter to glTF or OBJ, once the vertex layout is known.
-- Decode `anim.db` fields and the `Motion.xpac` packs.
-- Decode the database `.bin` and `.adb` tables, and the text tables.
-- Bulk ADX to WAV for `KANSEI`, `BGM` and `VOICE_ADX` (existing `tools/capx_extract.py --wav`).
+- Mesh: find the vertex stream inside the `0x0D` sub-blocks (try packed normals and positions, and the `O_CMN_machine` index run first).
+- Animation: decode the entry header offsets (+16, +20) and the channel data. Check against `hierachy`.
+- Bulk ADX to WAV for `KANSEI`, `BGM` and `VOICE_ADX` (`tools/capx_extract.py --wav`).
+- Player table fields and the other `tns_*.bin` tables.
 
 ## CAPX name hash: QuickBMS script cross-check (2026-10-14)
 
