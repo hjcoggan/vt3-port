@@ -119,6 +119,7 @@ typedef struct vt3_gfx_ops {
     void (*prog_destroy)(vt3_prog p);
     void (*draw_program)(const vt3_draw *d);
     void (*readback)(uint8_t *rgba);        /* logical size, RGBA8, top row first */
+    void (*clear_depth)(float depth);
 } vt3_gfx_ops;
 
 int  vt3_gfx_init(const vt3_gfx_ops *ops, const vt3_gfx_config *cfg);
@@ -136,6 +137,7 @@ int  vt3_gfx_prog_create(vt3_prog *out, const char *vs_src, const char *ps_src, 
 void vt3_gfx_prog_destroy(vt3_prog p);
 void vt3_gfx_draw_program(const vt3_draw *d);
 void vt3_gfx_readback(uint8_t *rgba);
+void vt3_gfx_clear_depth(float depth);
 
 extern const vt3_gfx_ops vt3_gfx_gl33;
 

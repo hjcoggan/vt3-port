@@ -1,12 +1,10 @@
 /*
- * D3D9 COM objects: guest layout, host table, vtables, Direct3DCreate9.
- *
- * Every vtable slot is a guest address made by vt3shim_fn_token(). The recompiler
- * maps that address to the stdcall adapter for the method, so a guest call through
- * the slot reaches the shim. The slot order is the SDK's (d3d9_com.h, generated).
+ * D3D9 COM objects: guest layout, host table, per-kind vtables, IUnknown helpers,
+ * Direct3DCreate9. Every vtable slot is a guest address made by vt3shim_fn_token();
+ * the recompiler maps it to the stdcall adapter, so a guest call through the slot
+ * reaches the shim. Slot order is the SDK's (d3d9_com.h, generated).
  */
 #include "d3d9_internal.h"
-#include "win32/kernel32.h"
 #include "vt3shim/thunk.h"
 #include "vt3/vt3_log.h"
 
@@ -54,49 +52,43 @@ d3d9_host *d3d9_host_of(GPTR obj, uint32_t kind)
     return i < 0 ? NULL : &g_d3d9_host[i];
 }
 
-GPTR d3d9_obj_new(uint32_t kind, GPTR vtbl, void *data, GPTR parent)
-{
-    int slot = -1;
-    for (int i = 0; i < D3D9_MAX_HOST; i++) {
-        if (g_d3d9_host[i].kind == D3D9_KIND_NONE) { slot = i; break; }
-    }
-    if (slot < 0) return 0;
-    GPTR obj = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, D3D9_OBJ_SIZE);
-    if (!obj) return 0;
-    d3d9_wr(obj, D3D9_OFF_VTBL, vtbl);
-    d3d9_wr(obj, D3D9_OFF_REFS, 1);
-    d3d9_wr(obj, D3D9_OFF_KIND, kind);
-    d3d9_wr(obj, D3D9_OFF_HOST, (uint32_t)slot);
-    g_d3d9_host[slot].kind = kind;
-    g_d3d9_host[slot].refs = 1;
-    g_d3d9_host[slot].guest = obj;
-    g_d3d9_host[slot].data = data;
-    g_d3d9_host[slot].parent = parent;
-    return obj;
-}
-
-void d3d9_device_free(d3d9_device *d)
-{
-    free(d);     /* host allocation, made with calloc */
-}
-
-void d3d9_obj_free(GPTR obj)
-{
-    int i = host_index_of(obj, d3d9_rd(obj, D3D9_OFF_KIND));
-    if (i < 0) return;
-    if (g_d3d9_host[i].kind == D3D9_KIND_DEVICE && g_d3d9_host[i].data) {
-        d3d9_device_free((d3d9_device *)g_d3d9_host[i].data);
-    }
-    memset(&g_d3d9_host[i], 0, sizeof g_d3d9_host[i]);
-    HeapFree(GetProcessHeap(), 0, obj);   /* guest allocation */
-}
-
 /* ---- vtables -------------------------------------------------------------- */
 
-#define D3D9_NAME_D3D9(n) "IDirect3D9_" #n,
-#define D3D9_NAME_DEV(n) "IDirect3DDevice9_" #n,
-static const char *const k_names_d3d9[] = { VT3_IDIRECT3D9_SLOTS(D3D9_NAME_D3D9) };
-static const char *const k_names_dev[] = { VT3_IDIRECT3DDEVICE9_SLOTS(D3D9_NAME_DEV) };
+#define NAME_IDirect3D9(n) "IDirect3D9_" #n,
+#define NAME_IDirect3DDevice9(n) "IDirect3DDevice9_" #n,
+#define NAME_IDirect3DSwapChain9(n) "IDirect3DSwapChain9_" #n,
+#define NAME_IDirect3DTexture9(n) "IDirect3DTexture9_" #n,
+#define NAME_IDirect3DCubeTexture9(n) "IDirect3DCubeTexture9_" #n,
+#define NAME_IDirect3DVolumeTexture9(n) "IDirect3DVolumeTexture9_" #n,
+#define NAME_IDirect3DVertexBuffer9(n) "IDirect3DVertexBuffer9_" #n,
+#define NAME_IDirect3DIndexBuffer9(n) "IDirect3DIndexBuffer9_" #n,
+#define NAME_IDirect3DSurface9(n) "IDirect3DSurface9_" #n,
+#define NAME_IDirect3DVertexDeclaration9(n) "IDirect3DVertexDeclaration9_" #n,
+#define NAME_IDirect3DVertexShader9(n) "IDirect3DVertexShader9_" #n,
+#define NAME_IDirect3DPixelShader9(n) "IDirect3DPixelShader9_" #n,
+#define NAME_IDirect3DStateBlock9(n) "IDirect3DStateBlock9_" #n,
+#define NAME_IDirect3DQuery9(n) "IDirect3DQuery9_" #n,
+#define NAME_IDirect3DVolume9(n) "IDirect3DVolume9_" #n,
+#define NAME_IDirectSound(n) "IDirectSound_" #n,
+#define NAME_IDirectSoundBuffer(n) "IDirectSoundBuffer_" #n,
+
+static const char *const k_names_d3d9[] = { VT3_IDIRECT3D9_SLOTS(NAME_IDirect3D9) };
+static const char *const k_names_dev[] = { VT3_IDIRECT3DDEVICE9_SLOTS(NAME_IDirect3DDevice9) };
+static const char *const k_names_swap[] = { VT3_IDIRECT3DSWAPCHAIN9_SLOTS(NAME_IDirect3DSwapChain9) };
+static const char *const k_names_tex[] = { VT3_IDIRECT3DTEXTURE9_SLOTS(NAME_IDirect3DTexture9) };
+static const char *const k_names_cube[] = { VT3_IDIRECT3DCUBETEXTURE9_SLOTS(NAME_IDirect3DCubeTexture9) };
+static const char *const k_names_voltex[] = { VT3_IDIRECT3DVOLUMETEXTURE9_SLOTS(NAME_IDirect3DVolumeTexture9) };
+static const char *const k_names_vb[] = { VT3_IDIRECT3DVERTEXBUFFER9_SLOTS(NAME_IDirect3DVertexBuffer9) };
+static const char *const k_names_ib[] = { VT3_IDIRECT3DINDEXBUFFER9_SLOTS(NAME_IDirect3DIndexBuffer9) };
+static const char *const k_names_surf[] = { VT3_IDIRECT3DSURFACE9_SLOTS(NAME_IDirect3DSurface9) };
+static const char *const k_names_vdecl[] = { VT3_IDIRECT3DVERTEXDECLARATION9_SLOTS(NAME_IDirect3DVertexDeclaration9) };
+static const char *const k_names_vs[] = { VT3_IDIRECT3DVERTEXSHADER9_SLOTS(NAME_IDirect3DVertexShader9) };
+static const char *const k_names_ps[] = { VT3_IDIRECT3DPIXELSHADER9_SLOTS(NAME_IDirect3DPixelShader9) };
+static const char *const k_names_sb[] = { VT3_IDIRECT3DSTATEBLOCK9_SLOTS(NAME_IDirect3DStateBlock9) };
+static const char *const k_names_query[] = { VT3_IDIRECT3DQUERY9_SLOTS(NAME_IDirect3DQuery9) };
+static const char *const k_names_volume[] = { VT3_IDIRECT3DVOLUME9_SLOTS(NAME_IDirect3DVolume9) };
+static const char *const k_names_dsound[] = { VT3_IDIRECTSOUND_SLOTS(NAME_IDirectSound) };
+static const char *const k_names_dsbuffer[] = { VT3_IDIRECTSOUNDBUFFER_SLOTS(NAME_IDirectSoundBuffer) };
 
 static GPTR build_vtbl(const char *const *names, size_t n)
 {
@@ -108,30 +100,129 @@ static GPTR build_vtbl(const char *const *names, size_t n)
     return vt;
 }
 
-static GPTR g_vtbl_d3d9;
-static GPTR g_vtbl_dev;
-
-GPTR d3d9_vtbl_d3d9(void)
+static GPTR vtbl_for_kind(uint32_t kind)
 {
-    if (!g_vtbl_d3d9) g_vtbl_d3d9 = build_vtbl(k_names_d3d9, sizeof k_names_d3d9 / sizeof k_names_d3d9[0]);
-    return g_vtbl_d3d9;
+    static GPTR built[D3D9_KIND_LAST + 1];
+    if (kind == 0 || kind > D3D9_KIND_LAST) return 0;
+    if (built[kind]) return built[kind];
+    const char *const *names = NULL;
+    size_t n = 0;
+#define PICK(k, arr) case k: names = arr; n = sizeof arr / sizeof arr[0]; break;
+    switch (kind) {
+    PICK(D3D9_KIND_D3D9, k_names_d3d9)
+    PICK(D3D9_KIND_DEVICE, k_names_dev)
+    PICK(D3D9_KIND_SWAPCHAIN, k_names_swap)
+    PICK(D3D9_KIND_TEXTURE, k_names_tex)
+    PICK(D3D9_KIND_CUBETEXTURE, k_names_cube)
+    PICK(D3D9_KIND_VOLUMETEXTURE, k_names_voltex)
+    PICK(D3D9_KIND_VB, k_names_vb)
+    PICK(D3D9_KIND_IB, k_names_ib)
+    PICK(D3D9_KIND_SURFACE, k_names_surf)
+    PICK(D3D9_KIND_VDECL, k_names_vdecl)
+    PICK(D3D9_KIND_VSHADER, k_names_vs)
+    PICK(D3D9_KIND_PSHADER, k_names_ps)
+    PICK(D3D9_KIND_STATEBLOCK, k_names_sb)
+    PICK(D3D9_KIND_QUERY, k_names_query)
+    PICK(D3D9_KIND_VOLUME, k_names_volume)
+    PICK(D3D9_KIND_DSOUND, k_names_dsound)
+    PICK(D3D9_KIND_DSBUFFER, k_names_dsbuffer)
+    default: return 0;
+    }
+#undef PICK
+    built[kind] = build_vtbl(names, n);
+    return built[kind];
 }
 
-GPTR d3d9_vtbl_device(void)
+/* ---- objects -------------------------------------------------------------- */
+
+static void free_data(uint32_t kind, void *data)
 {
-    if (!g_vtbl_dev) g_vtbl_dev = build_vtbl(k_names_dev, sizeof k_names_dev / sizeof k_names_dev[0]);
-    return g_vtbl_dev;
+    if (!data) return;
+    switch (kind) {
+    case D3D9_KIND_DEVICE:
+        d3d9_device_free((d3d9_device *)data);
+        break;
+    case D3D9_KIND_TEXTURE:
+    case D3D9_KIND_CUBETEXTURE: {
+        d3d9_texture *t = data;
+        for (int f = 0; f < D3D9_MAX_FACES; f++)
+            for (int l = 0; l < D3D9_MAX_LEVELS; l++)
+                if (t->lv[f][l].data) HeapFree(GetProcessHeap(), 0, t->lv[f][l].data);
+        d3d9_gpu_tex_destroy(t->gl);
+        free(t);
+        break;
+    }
+    case D3D9_KIND_SURFACE: {
+        d3d9_surface *s = data;
+        if (!s->owner && s->data) HeapFree(GetProcessHeap(), 0, s->data);
+        free(s);
+        break;
+    }
+    case D3D9_KIND_VB:
+    case D3D9_KIND_IB: {
+        d3d9_buffer *b = data;
+        if (b->data) HeapFree(GetProcessHeap(), 0, b->data);
+        free(b);
+        break;
+    }
+    case D3D9_KIND_VDECL:
+        free(data);
+        break;
+    case D3D9_KIND_DSOUND:
+    case D3D9_KIND_DSBUFFER:
+        dsound_free(kind, data);
+        break;
+    case D3D9_KIND_VSHADER:
+    case D3D9_KIND_PSHADER: {
+        d3d9_shader *s = data;
+        vt3_sm2_free(&s->sm);
+        free(s->tok);
+        free(s);
+        break;
+    }
+    default:
+        break;
+    }
 }
 
-/* ---- IUnknown ------------------------------------------------------------- */
+GPTR d3d9_obj_new(uint32_t kind, void *data, GPTR parent)
+{
+    int slot = -1;
+    for (int i = 0; i < D3D9_MAX_HOST; i++) {
+        if (g_d3d9_host[i].kind == D3D9_KIND_NONE) { slot = i; break; }
+    }
+    if (slot < 0) return 0;
+    GPTR vt = vtbl_for_kind(kind);
+    if (!vt) return 0;
+    GPTR obj = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, D3D9_OBJ_SIZE);
+    if (!obj) return 0;
+    d3d9_wr(obj, D3D9_OFF_VTBL, vt);
+    d3d9_wr(obj, D3D9_OFF_REFS, 1);
+    d3d9_wr(obj, D3D9_OFF_KIND, kind);
+    d3d9_wr(obj, D3D9_OFF_HOST, (uint32_t)slot);
+    g_d3d9_host[slot].kind = kind;
+    g_d3d9_host[slot].refs = 1;
+    g_d3d9_host[slot].guest = obj;
+    g_d3d9_host[slot].data = data;
+    g_d3d9_host[slot].parent = parent;
+    return obj;
+}
 
-/* GUID bytes as they sit in memory (little-endian fields). */
-const uint8_t d3d9_iid_unknown[16] = {
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 };
-const uint8_t d3d9_iid_d3d9[16] = {          /* {81BDCBCA-64D4-426D-AE8D-AD0147F4275C} */
-    0xCA, 0xCB, 0xBD, 0x81, 0xD4, 0x64, 0x6D, 0x42, 0xAE, 0x8D, 0xAD, 0x01, 0x47, 0xF4, 0x27, 0x5C };
-const uint8_t d3d9_iid_device9[16] = {       /* {D0223B96-BF7A-43FD-92BD-A43B0D82B9EB} */
-    0x96, 0x3B, 0x22, 0xD0, 0x7A, 0xBF, 0xFD, 0x43, 0x92, 0xBD, 0xA4, 0x3B, 0x0D, 0x82, 0xB9, 0xEB };
+GPTR d3d9_new_stub(uint32_t kind, GPTR parent)
+{
+    return d3d9_obj_new(kind, NULL, parent);
+}
+
+void d3d9_obj_free(GPTR obj)
+{
+    int i = host_index_of(obj, d3d9_rd(obj, D3D9_OFF_KIND));
+    if (i < 0) return;
+    free_data(g_d3d9_host[i].kind, g_d3d9_host[i].data);
+    memset(&g_d3d9_host[i], 0, sizeof g_d3d9_host[i]);
+    HeapFree(GetProcessHeap(), 0, obj);
+}
+
+/* ---- IUnknown and the helpers the generated boilerplate calls ----------- */
 
 static int iid_equals(GPTR riid, const uint8_t *want)
 {
@@ -139,12 +230,15 @@ static int iid_equals(GPTR riid, const uint8_t *want)
     return p && memcmp(p, want, 16) == 0;
 }
 
-DWORD d3d9_query_interface(GPTR This, GPTR riid, GPTR ppv, const uint8_t *iface_iid)
+static const uint8_t k_iid_unknown[16] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 };
+
+DWORD d3d9_qi_kind(GPTR This, GPTR riid, GPTR ppv, uint32_t kind)
 {
     if (ppv) vt3s_store_u32(ppv, 0);
-    if (!iid_equals(riid, d3d9_iid_unknown) && !iid_equals(riid, iface_iid)) {
-        return E_NOINTERFACE;
-    }
+    if (!d3d9_host_of(This, kind)) return E_NOINTERFACE;
+    const uint8_t *own = d3d9_iid_of_kind(kind);
+    if (!iid_equals(riid, k_iid_unknown) && !(own && iid_equals(riid, own))) return E_NOINTERFACE;
     if (ppv) vt3s_store_u32(ppv, This);
     d3d9_add_ref(This);
     return S_OK;
@@ -173,14 +267,43 @@ DWORD d3d9_release(GPTR This)
     return refs;
 }
 
+HRESULT d3d9_get_device(GPTR This, GPTR ppDevice)
+{
+    int i = host_index_of(This, d3d9_rd(This, D3D9_OFF_KIND));
+    if (i < 0) return D3DERR_CHK_INVALIDCALL;
+    GPTR dev = g_d3d9_host[i].parent;
+    if (!dev) return D3DERR_CHK_INVALIDCALL;
+    d3d9_return_obj(ppDevice, dev);
+    return S_OK;
+}
+
+UINT d3d9_resource_type(uint32_t kind)
+{
+    switch (kind) {
+    case D3D9_KIND_SURFACE: return D3DRTYPE_CHK_SURFACE;
+    case D3D9_KIND_VOLUME: return D3DRTYPE_CHK_VOLUME;
+    case D3D9_KIND_TEXTURE: return D3DRTYPE_CHK_TEXTURE;
+    case D3D9_KIND_VOLUMETEXTURE: return D3DRTYPE_CHK_VOLUMETEXTURE;
+    case D3D9_KIND_CUBETEXTURE: return D3DRTYPE_CHK_CUBETEXTURE;
+    case D3D9_KIND_VB: return D3DRTYPE_CHK_VERTEXBUFFER;
+    case D3D9_KIND_IB: return D3DRTYPE_CHK_INDEXBUFFER;
+    default: return 0;
+    }
+}
+
+void d3d9_return_obj(GPTR out, GPTR obj)
+{
+    if (!out) return;
+    vt3s_store_u32(out, obj);
+    if (obj) d3d9_add_ref(obj);
+}
+
 /* ---- Direct3DCreate9 ------------------------------------------------------ */
 
 GPTR WINAPI Direct3DCreate9(UINT sdk_version)
 {
     (void)sdk_version;   /* the game passes 32 (D3D_SDK_VERSION); other values are accepted */
-    GPTR vt = d3d9_vtbl_d3d9();
-    if (!vt) return 0;
-    GPTR obj = d3d9_obj_new(D3D9_KIND_D3D9, vt, NULL, 0);
+    GPTR obj = d3d9_obj_new(D3D9_KIND_D3D9, NULL, 0);
     if (!obj) {
         VT3_ERROR("Direct3DCreate9: no free object slot or guest heap");
         return 0;

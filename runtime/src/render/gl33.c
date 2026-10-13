@@ -84,7 +84,8 @@
     X(void, glBindRenderbuffer, (GLenum, GLuint))                                         \
     X(void, glRenderbufferStorage, (GLenum, GLenum, GLsizei, GLsizei))                    \
     X(void, glFramebufferRenderbuffer, (GLenum, GLenum, GLenum, GLuint))                  \
-    X(void, glDisableVertexAttribArray, (GLuint))
+    X(void, glDisableVertexAttribArray, (GLuint))                                         \
+    X(void, glClearDepth, (GLclampd))
 
 #define VT3_DECL_TYPE(ret, name, params) typedef ret (*vt3_pfn_##name) params;
 #define VT3_DECL_VAR(ret, name, params) static vt3_pfn_##name p_##name;
@@ -609,6 +610,14 @@ static void gl_readback(uint8_t *rgba)
     free(tmp);
 }
 
+static void gl_clear_depth(float depth)
+{
+    gl_bind_logical_fbo();
+    p_glDepthMask(GL_TRUE);
+    p_glClearDepth((GLclampd)depth);
+    p_glClear(GL_DEPTH_BUFFER_BIT);
+}
+
 const vt3_gfx_ops vt3_gfx_gl33 = {
     .name = "OpenGL 3.3 core",
     .init = gl_init,
@@ -624,4 +633,5 @@ const vt3_gfx_ops vt3_gfx_gl33 = {
     .prog_destroy = gl_prog_destroy,
     .draw_program = gl_draw_program,
     .readback = gl_readback,
+    .clear_depth = gl_clear_depth,
 };

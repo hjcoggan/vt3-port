@@ -55,6 +55,14 @@ add_library(vt3shim STATIC
     shim/src/d3d9_iface.c
     shim/src/d3d9_device.c
     shim/src/d3d9_com_unimpl.c
+    shim/src/d3d9_com_generic.c
+    shim/src/d3d9_format.c
+    shim/src/d3d9_gpu.c
+    shim/src/d3d9_resource.c
+    shim/src/d3d9_draw.c
+    shim/src/gfx_weak.c
+    shim/src/d3dx9_math.c
+    shim/src/d3dx9_stub.c
     shim/src/dsound_stub.c
     shim/src/dinput8_stub.c
 )
@@ -75,6 +83,11 @@ endif()
 target_include_directories(vt3rt PRIVATE tests)
 target_link_libraries(vt3rt PRIVATE vt3shim)
 target_compile_options(vt3rt PRIVATE ${VT3_WARNINGS})
+# The weak defaults in vt3shim must lose to the real renderer, platform and translator in vt3core.
+# A static archive would not pull those members in, so force every member in.
+if(APPLE)
+    target_link_options(vt3rt PRIVATE "-Wl,-all_load")
+endif()
 
 enable_testing()
 add_test(NAME vt3_selftest COMMAND vt3rt --selftest)

@@ -91,3 +91,8 @@ void vt3_gfx_readback(uint8_t *rgba)
     if (g_ops && g_ops->readback) g_ops->readback(rgba);
 }
 
+void vt3_gfx_clear_depth(float depth)
+{
+    if (g_ops && g_ops->clear_depth) g_ops->clear_depth(depth);
+}
+

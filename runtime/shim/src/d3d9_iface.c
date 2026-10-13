@@ -73,24 +73,6 @@ void d3d9_fill_caps(GPTR caps)
     (void)CAPS_TEXOPCAPS;
 }
 
-/* ---- IUnknown -------------------------------------------------------------- */
-
-HRESULT WINAPI IDirect3D9_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject)
-{
-    if (!d3d9_host_of(This, D3D9_KIND_D3D9)) return E_NOINTERFACE;
-    return d3d9_query_interface(This, riid, ppvObject, d3d9_iid_d3d9);
-}
-
-DWORD WINAPI IDirect3D9_AddRef(GPTR This)
-{
-    return d3d9_add_ref(This);
-}
-
-DWORD WINAPI IDirect3D9_Release(GPTR This)
-{
-    return d3d9_release(This);
-}
-
 /* ---- adapters and modes ----------------------------------------------------- */
 
 HRESULT WINAPI IDirect3D9_RegisterSoftwareDevice(GPTR This, GPTR pInitializeFunction)
@@ -227,6 +209,38 @@ GPTR WINAPI IDirect3D9_GetAdapterMonitor(GPTR This, UINT Adapter)
 
 /* ---- devices ---------------------------------------------------------------- */
 
+/* D3D9's documented initial render states, for the ones the shim uses. */
+static void device_defaults(d3d9_device *d)
+{
+    d->rs[7] = 1;      /* D3DRS_ZENABLE */
+    d->rs[14] = 1;     /* D3DRS_ZWRITEENABLE */
+    d->rs[15] = 0;     /* D3DRS_ALPHATESTENABLE */
+    d->rs[19] = 2;     /* D3DRS_SRCBLEND = ONE */
+    d->rs[20] = 1;     /* D3DRS_DESTBLEND = ZERO */
+    d->rs[22] = 3;     /* D3DRS_CULLMODE = CCW */
+    d->rs[23] = 4;     /* D3DRS_ZFUNC = LESSEQUAL */
+    d->rs[24] = 0;     /* D3DRS_ALPHAREF */
+    d->rs[25] = 8;     /* D3DRS_ALPHAFUNC = ALWAYS */
+    d->rs[27] = 0;     /* D3DRS_ALPHABLENDENABLE */
+    d->rs[168] = 0xF;  /* D3DRS_COLORWRITEENABLE */
+    d->rs[171] = 1;    /* D3DRS_BLENDOP = ADD */
+    for (int s = 0; s < 8; s++) {
+        d->tss[s][1] = s == 0 ? 4u : 1u;     /* COLOROP: MODULATE, then DISABLE */
+        d->tss[s][2] = 2u;                   /* COLORARG1: TEXTURE */
+        d->tss[s][3] = 0u;                   /* COLORARG2: DIFFUSE */
+        d->tss[s][4] = s == 0 ? 4u : 1u;     /* ALPHAOP */
+        d->tss[s][5] = 2u;                   /* ALPHAARG1 */
+        d->tss[s][6] = 0u;                   /* ALPHAARG2 */
+    }
+    for (int s = 0; s < 16; s++) {
+        d->samp[s][1] = 1;   /* ADDRESSU: WRAP */
+        d->samp[s][2] = 1;   /* ADDRESSV: WRAP */
+        d->samp[s][5] = 1;   /* MAGFILTER: POINT */
+        d->samp[s][6] = 1;   /* MINFILTER: POINT */
+        d->samp[s][7] = 0;   /* MIPFILTER: NONE */
+    }
+}
+
 HRESULT WINAPI IDirect3D9_CreateDevice(GPTR This, UINT Adapter, UINT DeviceType, GPTR hFocusWindow,
                                        DWORD BehaviorFlags, GPTR pPresentationParameters,
                                        GPTR ppReturnedDeviceInterface)
@@ -234,8 +248,8 @@ HRESULT WINAPI IDirect3D9_CreateDevice(GPTR This, UINT Adapter, UINT DeviceType,
     if (!d3d9_host_of(This, D3D9_KIND_D3D9)) return D3DERR_CHK_INVALIDCALL;
     if (Adapter != 0 || DeviceType != D3DDEVTYPE_CHK_HAL) return D3DERR_CHK_INVALIDCALL;
     if (!ppReturnedDeviceInterface || !d3d9_gmem(pPresentationParameters, 56)) return D3DERR_CHK_INVALIDCALL;
-
     vt3s_store_u32(ppReturnedDeviceInterface, 0);
+
     d3d9_device *d = calloc(1, sizeof *d);
     if (!d) return E_OUTOFMEMORY_D3D9;
     d->parent = This;
@@ -243,17 +257,28 @@ HRESULT WINAPI IDirect3D9_CreateDevice(GPTR This, UINT Adapter, UINT DeviceType,
     d->devtype = DeviceType;
     d->hwnd = hFocusWindow;
     d->behavior = BehaviorFlags;
-    for (int i = 0; i < PP_WORDS; i++) d->pp[i] = d3d9_rd(pPresentationParameters, (uint32_t)(4 * i));
+    for (int i = 0; i < 14; i++) d->pp[i] = d3d9_rd(pPresentationParameters, (uint32_t)(4 * i));
+    device_defaults(d);
 
-    GPTR dev = d3d9_obj_new(D3D9_KIND_DEVICE, d3d9_vtbl_device(), d, This);
+    GPTR dev = d3d9_obj_new(D3D9_KIND_DEVICE, d, This);
     if (!dev) {
         free(d);
         return E_OUTOFMEMORY_D3D9;
     }
-    d3d9_host *h = d3d9_host_of(dev, D3D9_KIND_DEVICE);
-    if (h) h->parent = This;
+    uint32_t w = d->pp[0] ? d->pp[0] : 640, h = d->pp[1] ? d->pp[1] : 480;
+    uint32_t bbfmt = d->pp[2] ? d->pp[2] : D3DFMT_CHK_X8R8G8B8;
+    d->gpu = d3d9_gpu_init(w, h) == 0;
+
+    /* The back buffer and the auto depth-stencil are objects the game can fetch, so they exist from the start. */
+    d->backbuffer = d3d9_create_surface_obj(dev, w, h, bbfmt, 0x1u, 0, 0, 1);
+    if (!d->backbuffer) d->backbuffer = d3d9_new_stub(D3D9_KIND_SURFACE, dev);
+    d->rt[0] = d->backbuffer;
+    if (d->pp[9]) {          /* EnableAutoDepthStencil */
+        d->depth = d3d9_create_surface_obj(dev, w, h, d->pp[10], 0x2u, 0, 0, 0);
+        if (!d->depth) d->depth = d3d9_new_stub(D3D9_KIND_SURFACE, dev);
+    }
     vt3s_store_u32(ppReturnedDeviceInterface, dev);
-    VT3_INFO("CreateDevice: IDirect3DDevice9 at 0x%08x (%ux%u backbuffer)", dev,
-             (unsigned)d->pp[0], (unsigned)d->pp[1]);
+    VT3_INFO("CreateDevice: IDirect3DDevice9 at 0x%08x (%ux%u back buffer, %s)", dev, (unsigned)w,
+             (unsigned)h, d->gpu ? "GL renderer" : "headless");
     return S_OK;
 }

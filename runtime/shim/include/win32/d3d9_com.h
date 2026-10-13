@@ -147,6 +147,244 @@
     X(DeletePatch) \
     X(CreateQuery)
 
+/* IDirect3DSwapChain9: slot order, X-macro over every member. */
+#define VT3_IDIRECT3DSWAPCHAIN9_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(Present) \
+    X(GetFrontBufferData) \
+    X(GetBackBuffer) \
+    X(GetRasterStatus) \
+    X(GetDisplayMode) \
+    X(GetDevice) \
+    X(GetPresentParameters)
+
+/* IDirect3DTexture9: slot order, X-macro over every member. */
+#define VT3_IDIRECT3DTEXTURE9_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(GetDevice) \
+    X(SetPrivateData) \
+    X(GetPrivateData) \
+    X(FreePrivateData) \
+    X(SetPriority) \
+    X(GetPriority) \
+    X(PreLoad) \
+    X(GetType) \
+    X(SetLOD) \
+    X(GetLOD) \
+    X(GetLevelCount) \
+    X(SetAutoGenFilterType) \
+    X(GetAutoGenFilterType) \
+    X(GenerateMipSubLevels) \
+    X(GetLevelDesc) \
+    X(GetSurfaceLevel) \
+    X(LockRect) \
+    X(UnlockRect) \
+    X(AddDirtyRect)
+
+/* IDirect3DCubeTexture9: slot order, X-macro over every member. */
+#define VT3_IDIRECT3DCUBETEXTURE9_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(GetDevice) \
+    X(SetPrivateData) \
+    X(GetPrivateData) \
+    X(FreePrivateData) \
+    X(SetPriority) \
+    X(GetPriority) \
+    X(PreLoad) \
+    X(GetType) \
+    X(SetLOD) \
+    X(GetLOD) \
+    X(GetLevelCount) \
+    X(SetAutoGenFilterType) \
+    X(GetAutoGenFilterType) \
+    X(GenerateMipSubLevels) \
+    X(GetLevelDesc) \
+    X(GetCubeMapSurface) \
+    X(LockRect) \
+    X(UnlockRect) \
+    X(AddDirtyRect)
+
+/* IDirect3DVolumeTexture9: slot order, X-macro over every member. */
+#define VT3_IDIRECT3DVOLUMETEXTURE9_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(GetDevice) \
+    X(SetPrivateData) \
+    X(GetPrivateData) \
+    X(FreePrivateData) \
+    X(SetPriority) \
+    X(GetPriority) \
+    X(PreLoad) \
+    X(GetType) \
+    X(SetLOD) \
+    X(GetLOD) \
+    X(GetLevelCount) \
+    X(SetAutoGenFilterType) \
+    X(GetAutoGenFilterType) \
+    X(GenerateMipSubLevels) \
+    X(GetLevelDesc) \
+    X(GetVolumeLevel) \
+    X(LockBox) \
+    X(UnlockBox) \
+    X(AddDirtyBox)
+
+/* IDirect3DVertexBuffer9: slot order, X-macro over every member. */
+#define VT3_IDIRECT3DVERTEXBUFFER9_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(GetDevice) \
+    X(SetPrivateData) \
+    X(GetPrivateData) \
+    X(FreePrivateData) \
+    X(SetPriority) \
+    X(GetPriority) \
+    X(PreLoad) \
+    X(GetType) \
+    X(Lock) \
+    X(Unlock) \
+    X(GetDesc)
+
+/* IDirect3DIndexBuffer9: slot order, X-macro over every member. */
+#define VT3_IDIRECT3DINDEXBUFFER9_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(GetDevice) \
+    X(SetPrivateData) \
+    X(GetPrivateData) \
+    X(FreePrivateData) \
+    X(SetPriority) \
+    X(GetPriority) \
+    X(PreLoad) \
+    X(GetType) \
+    X(Lock) \
+    X(Unlock) \
+    X(GetDesc)
+
+/* IDirect3DSurface9: slot order, X-macro over every member. */
+#define VT3_IDIRECT3DSURFACE9_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(GetDevice) \
+    X(SetPrivateData) \
+    X(GetPrivateData) \
+    X(FreePrivateData) \
+    X(SetPriority) \
+    X(GetPriority) \
+    X(PreLoad) \
+    X(GetType) \
+    X(GetContainer) \
+    X(GetDesc) \
+    X(LockRect) \
+    X(UnlockRect) \
+    X(GetDC) \
+    X(ReleaseDC)
+
+/* IDirect3DVertexDeclaration9: slot order, X-macro over every member. */
+#define VT3_IDIRECT3DVERTEXDECLARATION9_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(GetDevice) \
+    X(GetDeclaration)
+
+/* IDirect3DVertexShader9: slot order, X-macro over every member. */
+#define VT3_IDIRECT3DVERTEXSHADER9_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(GetDevice) \
+    X(GetFunction)
+
+/* IDirect3DPixelShader9: slot order, X-macro over every member. */
+#define VT3_IDIRECT3DPIXELSHADER9_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(GetDevice) \
+    X(GetFunction)
+
+/* IDirect3DStateBlock9: slot order, X-macro over every member. */
+#define VT3_IDIRECT3DSTATEBLOCK9_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(GetDevice) \
+    X(Capture) \
+    X(Apply)
+
+/* IDirect3DQuery9: slot order, X-macro over every member. */
+#define VT3_IDIRECT3DQUERY9_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(GetDevice) \
+    X(GetType) \
+    X(GetDataSize) \
+    X(Issue) \
+    X(GetData)
+
+/* IDirect3DVolume9: slot order, X-macro over every member. */
+#define VT3_IDIRECT3DVOLUME9_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(GetDevice) \
+    X(SetPrivateData) \
+    X(GetPrivateData) \
+    X(FreePrivateData) \
+    X(GetContainer) \
+    X(GetDesc) \
+    X(LockBox) \
+    X(UnlockBox)
+
+/* IDirectSound: slot order, X-macro over every member. */
+#define VT3_IDIRECTSOUND_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(CreateSoundBuffer) \
+    X(GetCaps) \
+    X(DuplicateSoundBuffer) \
+    X(SetCooperativeLevel) \
+    X(Compact) \
+    X(GetSpeakerConfig) \
+    X(SetSpeakerConfig) \
+    X(Initialize)
+
+/* IDirectSoundBuffer: slot order, X-macro over every member. */
+#define VT3_IDIRECTSOUNDBUFFER_SLOTS(X) \
+    X(QueryInterface) \
+    X(AddRef) \
+    X(Release) \
+    X(GetCaps) \
+    X(GetCurrentPosition) \
+    X(GetFormat) \
+    X(GetVolume) \
+    X(GetPan) \
+    X(GetFrequency) \
+    X(GetStatus) \
+    X(Initialize) \
+    X(Lock) \
+    X(Play) \
+    X(SetCurrentPosition) \
+    X(SetFormat) \
+    X(SetVolume) \
+    X(SetPan) \
+    X(SetFrequency) \
+    X(Stop) \
+    X(Unlock) \
+    X(Restore)
+
 HRESULT WINAPI IDirect3D9_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
 DWORD WINAPI IDirect3D9_AddRef(GPTR This);
 DWORD WINAPI IDirect3D9_Release(GPTR This);
@@ -283,5 +521,198 @@ HRESULT WINAPI IDirect3DDevice9_DrawRectPatch(GPTR This, UINT handle, GPTR segme
 HRESULT WINAPI IDirect3DDevice9_DrawTriPatch(GPTR This, UINT handle, GPTR segment_count, GPTR patch_info);
 HRESULT WINAPI IDirect3DDevice9_DeletePatch(GPTR This, UINT Handle);
 HRESULT WINAPI IDirect3DDevice9_CreateQuery(GPTR This, UINT Type, GPTR ppQuery);
+HRESULT WINAPI IDirect3DSwapChain9_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
+DWORD WINAPI IDirect3DSwapChain9_AddRef(GPTR This);
+DWORD WINAPI IDirect3DSwapChain9_Release(GPTR This);
+HRESULT WINAPI IDirect3DSwapChain9_Present(GPTR This, GPTR src_rect, GPTR dst_rect, GPTR dst_window_override, GPTR dirty_region, DWORD flags);
+HRESULT WINAPI IDirect3DSwapChain9_GetFrontBufferData(GPTR This, GPTR pDestSurface);
+HRESULT WINAPI IDirect3DSwapChain9_GetBackBuffer(GPTR This, UINT iBackBuffer, UINT Type, GPTR ppBackBuffer);
+HRESULT WINAPI IDirect3DSwapChain9_GetRasterStatus(GPTR This, GPTR pRasterStatus);
+HRESULT WINAPI IDirect3DSwapChain9_GetDisplayMode(GPTR This, GPTR pMode);
+HRESULT WINAPI IDirect3DSwapChain9_GetDevice(GPTR This, GPTR ppDevice);
+HRESULT WINAPI IDirect3DSwapChain9_GetPresentParameters(GPTR This, GPTR pPresentationParameters);
+HRESULT WINAPI IDirect3DTexture9_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
+DWORD WINAPI IDirect3DTexture9_AddRef(GPTR This);
+DWORD WINAPI IDirect3DTexture9_Release(GPTR This);
+HRESULT WINAPI IDirect3DTexture9_GetDevice(GPTR This, GPTR ppDevice);
+HRESULT WINAPI IDirect3DTexture9_SetPrivateData(GPTR This, GPTR guid, GPTR data, DWORD data_size, DWORD flags);
+HRESULT WINAPI IDirect3DTexture9_GetPrivateData(GPTR This, GPTR refguid, GPTR pData, GPTR pSizeOfData);
+HRESULT WINAPI IDirect3DTexture9_FreePrivateData(GPTR This, GPTR refguid);
+DWORD WINAPI IDirect3DTexture9_SetPriority(GPTR This, DWORD PriorityNew);
+DWORD WINAPI IDirect3DTexture9_GetPriority(GPTR This);
+void WINAPI IDirect3DTexture9_PreLoad(GPTR This);
+UINT WINAPI IDirect3DTexture9_GetType(GPTR This);
+DWORD WINAPI IDirect3DTexture9_SetLOD(GPTR This, DWORD LODNew);
+DWORD WINAPI IDirect3DTexture9_GetLOD(GPTR This);
+DWORD WINAPI IDirect3DTexture9_GetLevelCount(GPTR This);
+HRESULT WINAPI IDirect3DTexture9_SetAutoGenFilterType(GPTR This, UINT FilterType);
+UINT WINAPI IDirect3DTexture9_GetAutoGenFilterType(GPTR This);
+void WINAPI IDirect3DTexture9_GenerateMipSubLevels(GPTR This);
+HRESULT WINAPI IDirect3DTexture9_GetLevelDesc(GPTR This, UINT Level, GPTR pDesc);
+HRESULT WINAPI IDirect3DTexture9_GetSurfaceLevel(GPTR This, UINT Level, GPTR ppSurfaceLevel);
+HRESULT WINAPI IDirect3DTexture9_LockRect(GPTR This, UINT level, GPTR locked_rect, GPTR rect, DWORD flags);
+HRESULT WINAPI IDirect3DTexture9_UnlockRect(GPTR This, UINT Level);
+HRESULT WINAPI IDirect3DTexture9_AddDirtyRect(GPTR This, GPTR dirty_rect);
+HRESULT WINAPI IDirect3DCubeTexture9_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
+DWORD WINAPI IDirect3DCubeTexture9_AddRef(GPTR This);
+DWORD WINAPI IDirect3DCubeTexture9_Release(GPTR This);
+HRESULT WINAPI IDirect3DCubeTexture9_GetDevice(GPTR This, GPTR ppDevice);
+HRESULT WINAPI IDirect3DCubeTexture9_SetPrivateData(GPTR This, GPTR guid, GPTR data, DWORD data_size, DWORD flags);
+HRESULT WINAPI IDirect3DCubeTexture9_GetPrivateData(GPTR This, GPTR refguid, GPTR pData, GPTR pSizeOfData);
+HRESULT WINAPI IDirect3DCubeTexture9_FreePrivateData(GPTR This, GPTR refguid);
+DWORD WINAPI IDirect3DCubeTexture9_SetPriority(GPTR This, DWORD PriorityNew);
+DWORD WINAPI IDirect3DCubeTexture9_GetPriority(GPTR This);
+void WINAPI IDirect3DCubeTexture9_PreLoad(GPTR This);
+UINT WINAPI IDirect3DCubeTexture9_GetType(GPTR This);
+DWORD WINAPI IDirect3DCubeTexture9_SetLOD(GPTR This, DWORD LODNew);
+DWORD WINAPI IDirect3DCubeTexture9_GetLOD(GPTR This);
+DWORD WINAPI IDirect3DCubeTexture9_GetLevelCount(GPTR This);
+HRESULT WINAPI IDirect3DCubeTexture9_SetAutoGenFilterType(GPTR This, UINT FilterType);
+UINT WINAPI IDirect3DCubeTexture9_GetAutoGenFilterType(GPTR This);
+void WINAPI IDirect3DCubeTexture9_GenerateMipSubLevels(GPTR This);
+HRESULT WINAPI IDirect3DCubeTexture9_GetLevelDesc(GPTR This, UINT Level, GPTR pDesc);
+HRESULT WINAPI IDirect3DCubeTexture9_GetCubeMapSurface(GPTR This, UINT FaceType, UINT Level, GPTR ppCubeMapSurface);
+HRESULT WINAPI IDirect3DCubeTexture9_LockRect(GPTR This, UINT face, UINT level, GPTR locked_rect, GPTR rect, DWORD flags);
+HRESULT WINAPI IDirect3DCubeTexture9_UnlockRect(GPTR This, UINT FaceType, UINT Level);
+HRESULT WINAPI IDirect3DCubeTexture9_AddDirtyRect(GPTR This, UINT face, GPTR dirty_rect);
+HRESULT WINAPI IDirect3DVolumeTexture9_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
+DWORD WINAPI IDirect3DVolumeTexture9_AddRef(GPTR This);
+DWORD WINAPI IDirect3DVolumeTexture9_Release(GPTR This);
+HRESULT WINAPI IDirect3DVolumeTexture9_GetDevice(GPTR This, GPTR ppDevice);
+HRESULT WINAPI IDirect3DVolumeTexture9_SetPrivateData(GPTR This, GPTR guid, GPTR data, DWORD data_size, DWORD flags);
+HRESULT WINAPI IDirect3DVolumeTexture9_GetPrivateData(GPTR This, GPTR refguid, GPTR pData, GPTR pSizeOfData);
+HRESULT WINAPI IDirect3DVolumeTexture9_FreePrivateData(GPTR This, GPTR refguid);
+DWORD WINAPI IDirect3DVolumeTexture9_SetPriority(GPTR This, DWORD PriorityNew);
+DWORD WINAPI IDirect3DVolumeTexture9_GetPriority(GPTR This);
+void WINAPI IDirect3DVolumeTexture9_PreLoad(GPTR This);
+UINT WINAPI IDirect3DVolumeTexture9_GetType(GPTR This);
+DWORD WINAPI IDirect3DVolumeTexture9_SetLOD(GPTR This, DWORD LODNew);
+DWORD WINAPI IDirect3DVolumeTexture9_GetLOD(GPTR This);
+DWORD WINAPI IDirect3DVolumeTexture9_GetLevelCount(GPTR This);
+HRESULT WINAPI IDirect3DVolumeTexture9_SetAutoGenFilterType(GPTR This, UINT FilterType);
+UINT WINAPI IDirect3DVolumeTexture9_GetAutoGenFilterType(GPTR This);
+void WINAPI IDirect3DVolumeTexture9_GenerateMipSubLevels(GPTR This);
+HRESULT WINAPI IDirect3DVolumeTexture9_GetLevelDesc(GPTR This, UINT Level, GPTR pDesc);
+HRESULT WINAPI IDirect3DVolumeTexture9_GetVolumeLevel(GPTR This, UINT Level, GPTR ppVolumeLevel);
+HRESULT WINAPI IDirect3DVolumeTexture9_LockBox(GPTR This, UINT level, GPTR locked_box, GPTR box, DWORD flags);
+HRESULT WINAPI IDirect3DVolumeTexture9_UnlockBox(GPTR This, UINT Level);
+HRESULT WINAPI IDirect3DVolumeTexture9_AddDirtyBox(GPTR This, GPTR dirty_box);
+HRESULT WINAPI IDirect3DVertexBuffer9_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
+DWORD WINAPI IDirect3DVertexBuffer9_AddRef(GPTR This);
+DWORD WINAPI IDirect3DVertexBuffer9_Release(GPTR This);
+HRESULT WINAPI IDirect3DVertexBuffer9_GetDevice(GPTR This, GPTR ppDevice);
+HRESULT WINAPI IDirect3DVertexBuffer9_SetPrivateData(GPTR This, GPTR guid, GPTR data, DWORD data_size, DWORD flags);
+HRESULT WINAPI IDirect3DVertexBuffer9_GetPrivateData(GPTR This, GPTR refguid, GPTR pData, GPTR pSizeOfData);
+HRESULT WINAPI IDirect3DVertexBuffer9_FreePrivateData(GPTR This, GPTR refguid);
+DWORD WINAPI IDirect3DVertexBuffer9_SetPriority(GPTR This, DWORD PriorityNew);
+DWORD WINAPI IDirect3DVertexBuffer9_GetPriority(GPTR This);
+void WINAPI IDirect3DVertexBuffer9_PreLoad(GPTR This);
+UINT WINAPI IDirect3DVertexBuffer9_GetType(GPTR This);
+HRESULT WINAPI IDirect3DVertexBuffer9_Lock(GPTR This, UINT OffsetToLock, UINT SizeToLock, GPTR ppbData, DWORD Flags);
+HRESULT WINAPI IDirect3DVertexBuffer9_Unlock(GPTR This);
+HRESULT WINAPI IDirect3DVertexBuffer9_GetDesc(GPTR This, GPTR pDesc);
+HRESULT WINAPI IDirect3DIndexBuffer9_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
+DWORD WINAPI IDirect3DIndexBuffer9_AddRef(GPTR This);
+DWORD WINAPI IDirect3DIndexBuffer9_Release(GPTR This);
+HRESULT WINAPI IDirect3DIndexBuffer9_GetDevice(GPTR This, GPTR ppDevice);
+HRESULT WINAPI IDirect3DIndexBuffer9_SetPrivateData(GPTR This, GPTR guid, GPTR data, DWORD data_size, DWORD flags);
+HRESULT WINAPI IDirect3DIndexBuffer9_GetPrivateData(GPTR This, GPTR refguid, GPTR pData, GPTR pSizeOfData);
+HRESULT WINAPI IDirect3DIndexBuffer9_FreePrivateData(GPTR This, GPTR refguid);
+DWORD WINAPI IDirect3DIndexBuffer9_SetPriority(GPTR This, DWORD PriorityNew);
+DWORD WINAPI IDirect3DIndexBuffer9_GetPriority(GPTR This);
+void WINAPI IDirect3DIndexBuffer9_PreLoad(GPTR This);
+UINT WINAPI IDirect3DIndexBuffer9_GetType(GPTR This);
+HRESULT WINAPI IDirect3DIndexBuffer9_Lock(GPTR This, UINT OffsetToLock, UINT SizeToLock, GPTR ppbData, DWORD Flags);
+HRESULT WINAPI IDirect3DIndexBuffer9_Unlock(GPTR This);
+HRESULT WINAPI IDirect3DIndexBuffer9_GetDesc(GPTR This, GPTR pDesc);
+HRESULT WINAPI IDirect3DSurface9_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
+DWORD WINAPI IDirect3DSurface9_AddRef(GPTR This);
+DWORD WINAPI IDirect3DSurface9_Release(GPTR This);
+HRESULT WINAPI IDirect3DSurface9_GetDevice(GPTR This, GPTR ppDevice);
+HRESULT WINAPI IDirect3DSurface9_SetPrivateData(GPTR This, GPTR guid, GPTR data, DWORD data_size, DWORD flags);
+HRESULT WINAPI IDirect3DSurface9_GetPrivateData(GPTR This, GPTR refguid, GPTR pData, GPTR pSizeOfData);
+HRESULT WINAPI IDirect3DSurface9_FreePrivateData(GPTR This, GPTR refguid);
+DWORD WINAPI IDirect3DSurface9_SetPriority(GPTR This, DWORD PriorityNew);
+DWORD WINAPI IDirect3DSurface9_GetPriority(GPTR This);
+void WINAPI IDirect3DSurface9_PreLoad(GPTR This);
+UINT WINAPI IDirect3DSurface9_GetType(GPTR This);
+HRESULT WINAPI IDirect3DSurface9_GetContainer(GPTR This, GPTR riid, GPTR ppContainer);
+HRESULT WINAPI IDirect3DSurface9_GetDesc(GPTR This, GPTR pDesc);
+HRESULT WINAPI IDirect3DSurface9_LockRect(GPTR This, GPTR locked_rect, GPTR rect, DWORD flags);
+HRESULT WINAPI IDirect3DSurface9_UnlockRect(GPTR This);
+HRESULT WINAPI IDirect3DSurface9_GetDC(GPTR This, GPTR phdc);
+HRESULT WINAPI IDirect3DSurface9_ReleaseDC(GPTR This, GPTR hdc);
+HRESULT WINAPI IDirect3DVertexDeclaration9_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
+DWORD WINAPI IDirect3DVertexDeclaration9_AddRef(GPTR This);
+DWORD WINAPI IDirect3DVertexDeclaration9_Release(GPTR This);
+HRESULT WINAPI IDirect3DVertexDeclaration9_GetDevice(GPTR This, GPTR ppDevice);
+HRESULT WINAPI IDirect3DVertexDeclaration9_GetDeclaration(GPTR This, GPTR arg0, GPTR pNumElements);
+HRESULT WINAPI IDirect3DVertexShader9_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
+DWORD WINAPI IDirect3DVertexShader9_AddRef(GPTR This);
+DWORD WINAPI IDirect3DVertexShader9_Release(GPTR This);
+HRESULT WINAPI IDirect3DVertexShader9_GetDevice(GPTR This, GPTR ppDevice);
+HRESULT WINAPI IDirect3DVertexShader9_GetFunction(GPTR This, GPTR arg0, GPTR pSizeOfData);
+HRESULT WINAPI IDirect3DPixelShader9_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
+DWORD WINAPI IDirect3DPixelShader9_AddRef(GPTR This);
+DWORD WINAPI IDirect3DPixelShader9_Release(GPTR This);
+HRESULT WINAPI IDirect3DPixelShader9_GetDevice(GPTR This, GPTR ppDevice);
+HRESULT WINAPI IDirect3DPixelShader9_GetFunction(GPTR This, GPTR arg0, GPTR pSizeOfData);
+HRESULT WINAPI IDirect3DStateBlock9_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
+DWORD WINAPI IDirect3DStateBlock9_AddRef(GPTR This);
+DWORD WINAPI IDirect3DStateBlock9_Release(GPTR This);
+HRESULT WINAPI IDirect3DStateBlock9_GetDevice(GPTR This, GPTR ppDevice);
+HRESULT WINAPI IDirect3DStateBlock9_Capture(GPTR This);
+HRESULT WINAPI IDirect3DStateBlock9_Apply(GPTR This);
+HRESULT WINAPI IDirect3DQuery9_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
+DWORD WINAPI IDirect3DQuery9_AddRef(GPTR This);
+DWORD WINAPI IDirect3DQuery9_Release(GPTR This);
+HRESULT WINAPI IDirect3DQuery9_GetDevice(GPTR This, GPTR ppDevice);
+UINT WINAPI IDirect3DQuery9_GetType(GPTR This);
+DWORD WINAPI IDirect3DQuery9_GetDataSize(GPTR This);
+HRESULT WINAPI IDirect3DQuery9_Issue(GPTR This, DWORD dwIssueFlags);
+HRESULT WINAPI IDirect3DQuery9_GetData(GPTR This, GPTR pData, DWORD dwSize, DWORD dwGetDataFlags);
+HRESULT WINAPI IDirect3DVolume9_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
+DWORD WINAPI IDirect3DVolume9_AddRef(GPTR This);
+DWORD WINAPI IDirect3DVolume9_Release(GPTR This);
+HRESULT WINAPI IDirect3DVolume9_GetDevice(GPTR This, GPTR ppDevice);
+HRESULT WINAPI IDirect3DVolume9_SetPrivateData(GPTR This, GPTR guid, GPTR data, DWORD data_size, DWORD flags);
+HRESULT WINAPI IDirect3DVolume9_GetPrivateData(GPTR This, GPTR refguid, GPTR pData, GPTR pSizeOfData);
+HRESULT WINAPI IDirect3DVolume9_FreePrivateData(GPTR This, GPTR refguid);
+HRESULT WINAPI IDirect3DVolume9_GetContainer(GPTR This, GPTR riid, GPTR ppContainer);
+HRESULT WINAPI IDirect3DVolume9_GetDesc(GPTR This, GPTR pDesc);
+HRESULT WINAPI IDirect3DVolume9_LockBox(GPTR This, GPTR locked_box, GPTR box, DWORD flags);
+HRESULT WINAPI IDirect3DVolume9_UnlockBox(GPTR This);
+HRESULT WINAPI IDirectSound_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
+DWORD WINAPI IDirectSound_AddRef(GPTR This);
+DWORD WINAPI IDirectSound_Release(GPTR This);
+HRESULT WINAPI IDirectSound_CreateSoundBuffer(GPTR This, GPTR lpcDSBufferDesc, GPTR lplpDirectSoundBuffer, GPTR pUnkOuter);
+HRESULT WINAPI IDirectSound_GetCaps(GPTR This, GPTR lpDSCaps);
+HRESULT WINAPI IDirectSound_DuplicateSoundBuffer(GPTR This, GPTR lpDsbOriginal, GPTR lplpDsbDuplicate);
+HRESULT WINAPI IDirectSound_SetCooperativeLevel(GPTR This, GPTR hwnd, DWORD dwLevel);
+HRESULT WINAPI IDirectSound_Compact(GPTR This);
+HRESULT WINAPI IDirectSound_GetSpeakerConfig(GPTR This, GPTR lpdwSpeakerConfig);
+HRESULT WINAPI IDirectSound_SetSpeakerConfig(GPTR This, DWORD dwSpeakerConfig);
+HRESULT WINAPI IDirectSound_Initialize(GPTR This, GPTR lpcGuid);
+HRESULT WINAPI IDirectSoundBuffer_QueryInterface(GPTR This, GPTR riid, GPTR ppvObject);
+DWORD WINAPI IDirectSoundBuffer_AddRef(GPTR This);
+DWORD WINAPI IDirectSoundBuffer_Release(GPTR This);
+HRESULT WINAPI IDirectSoundBuffer_GetCaps(GPTR This, GPTR lpDSBufferCaps);
+HRESULT WINAPI IDirectSoundBuffer_GetCurrentPosition(GPTR This, GPTR lpdwCurrentPlayCursor, GPTR lpdwCurrentWriteCursor);
+HRESULT WINAPI IDirectSoundBuffer_GetFormat(GPTR This, GPTR lpwfxFormat, DWORD dwSizeAllocated, GPTR lpdwSizeWritten);
+HRESULT WINAPI IDirectSoundBuffer_GetVolume(GPTR This, GPTR lplVolume);
+HRESULT WINAPI IDirectSoundBuffer_GetPan(GPTR This, GPTR lplpan);
+HRESULT WINAPI IDirectSoundBuffer_GetFrequency(GPTR This, GPTR lpdwFrequency);
+HRESULT WINAPI IDirectSoundBuffer_GetStatus(GPTR This, GPTR lpdwStatus);
+HRESULT WINAPI IDirectSoundBuffer_Initialize(GPTR This, GPTR lpDirectSound, GPTR lpcDSBufferDesc);
+HRESULT WINAPI IDirectSoundBuffer_Lock(GPTR This, DWORD dwOffset, DWORD dwBytes, GPTR ppvAudioPtr1, GPTR pdwAudioBytes1, GPTR ppvAudioPtr2, GPTR pdwAudioBytes2, DWORD dwFlags);
+HRESULT WINAPI IDirectSoundBuffer_Play(GPTR This, DWORD dwReserved1, DWORD dwReserved2, DWORD dwFlags);
+HRESULT WINAPI IDirectSoundBuffer_SetCurrentPosition(GPTR This, DWORD dwNewPosition);
+HRESULT WINAPI IDirectSoundBuffer_SetFormat(GPTR This, GPTR lpcfxFormat);
+HRESULT WINAPI IDirectSoundBuffer_SetVolume(GPTR This, INT lVolume);
+HRESULT WINAPI IDirectSoundBuffer_SetPan(GPTR This, INT lPan);
+HRESULT WINAPI IDirectSoundBuffer_SetFrequency(GPTR This, DWORD dwFrequency);
+HRESULT WINAPI IDirectSoundBuffer_Stop(GPTR This);
+HRESULT WINAPI IDirectSoundBuffer_Unlock(GPTR This, GPTR pvAudioPtr1, DWORD dwAudioBytes1, GPTR pvAudioPtr2, DWORD dwAudioPtr2);
+HRESULT WINAPI IDirectSoundBuffer_Restore(GPTR This);
 
 #endif /* VT3_WIN32_D3D9_COM_H */

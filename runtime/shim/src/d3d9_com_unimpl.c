@@ -30,42 +30,6 @@ BOOL WINAPI IDirect3DDevice9_ShowCursor(GPTR This, BOOL bShow)
     return 0;
 }
 
-HRESULT WINAPI IDirect3DDevice9_CreateAdditionalSwapChain(GPTR This, GPTR pPresentationParameters, GPTR pSwapChain)
-{
-    (void)This;
-    (void)(pPresentationParameters);
-    (void)(pSwapChain);
-    vt3s_unimpl("IDirect3DDevice9::CreateAdditionalSwapChain");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_GetSwapChain(GPTR This, UINT iSwapChain, GPTR pSwapChain)
-{
-    (void)This;
-    (void)(iSwapChain);
-    (void)(pSwapChain);
-    vt3s_unimpl("IDirect3DDevice9::GetSwapChain");
-    return E_NOTIMPL;
-}
-
-UINT WINAPI IDirect3DDevice9_GetNumberOfSwapChains(GPTR This)
-{
-    (void)This;
-    vt3s_unimpl("IDirect3DDevice9::GetNumberOfSwapChains");
-    return 0;
-}
-
-HRESULT WINAPI IDirect3DDevice9_GetBackBuffer(GPTR This, UINT iSwapChain, UINT iBackBuffer, UINT Type, GPTR ppBackBuffer)
-{
-    (void)This;
-    (void)(iSwapChain);
-    (void)(iBackBuffer);
-    (void)(Type);
-    (void)(ppBackBuffer);
-    vt3s_unimpl("IDirect3DDevice9::GetBackBuffer");
-    return E_NOTIMPL;
-}
-
 HRESULT WINAPI IDirect3DDevice9_GetRasterStatus(GPTR This, UINT iSwapChain, GPTR pRasterStatus)
 {
     (void)This;
@@ -98,107 +62,6 @@ void WINAPI IDirect3DDevice9_GetGammaRamp(GPTR This, UINT iSwapChain, GPTR pRamp
     (void)(iSwapChain);
     (void)(pRamp);
     vt3s_unimpl("IDirect3DDevice9::GetGammaRamp");
-}
-
-HRESULT WINAPI IDirect3DDevice9_CreateTexture(GPTR This, UINT Width, UINT Height, UINT Levels, DWORD Usage, UINT Format, UINT Pool, GPTR ppTexture, GPTR pSharedHandle)
-{
-    (void)This;
-    (void)(Width);
-    (void)(Height);
-    (void)(Levels);
-    (void)(Usage);
-    (void)(Format);
-    (void)(Pool);
-    (void)(ppTexture);
-    (void)(pSharedHandle);
-    vt3s_unimpl("IDirect3DDevice9::CreateTexture");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_CreateVolumeTexture(GPTR This, UINT Width, UINT Height, UINT Depth, UINT Levels, DWORD Usage, UINT Format, UINT Pool, GPTR ppVolumeTexture, GPTR pSharedHandle)
-{
-    (void)This;
-    (void)(Width);
-    (void)(Height);
-    (void)(Depth);
-    (void)(Levels);
-    (void)(Usage);
-    (void)(Format);
-    (void)(Pool);
-    (void)(ppVolumeTexture);
-    (void)(pSharedHandle);
-    vt3s_unimpl("IDirect3DDevice9::CreateVolumeTexture");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_CreateCubeTexture(GPTR This, UINT EdgeLength, UINT Levels, DWORD Usage, UINT Format, UINT Pool, GPTR ppCubeTexture, GPTR pSharedHandle)
-{
-    (void)This;
-    (void)(EdgeLength);
-    (void)(Levels);
-    (void)(Usage);
-    (void)(Format);
-    (void)(Pool);
-    (void)(ppCubeTexture);
-    (void)(pSharedHandle);
-    vt3s_unimpl("IDirect3DDevice9::CreateCubeTexture");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_CreateVertexBuffer(GPTR This, UINT Length, DWORD Usage, DWORD FVF, UINT Pool, GPTR ppVertexBuffer, GPTR pSharedHandle)
-{
-    (void)This;
-    (void)(Length);
-    (void)(Usage);
-    (void)(FVF);
-    (void)(Pool);
-    (void)(ppVertexBuffer);
-    (void)(pSharedHandle);
-    vt3s_unimpl("IDirect3DDevice9::CreateVertexBuffer");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_CreateIndexBuffer(GPTR This, UINT Length, DWORD Usage, UINT Format, UINT Pool, GPTR ppIndexBuffer, GPTR pSharedHandle)
-{
-    (void)This;
-    (void)(Length);
-    (void)(Usage);
-    (void)(Format);
-    (void)(Pool);
-    (void)(ppIndexBuffer);
-    (void)(pSharedHandle);
-    vt3s_unimpl("IDirect3DDevice9::CreateIndexBuffer");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_CreateRenderTarget(GPTR This, UINT Width, UINT Height, UINT Format, UINT MultiSample, DWORD MultisampleQuality, BOOL Lockable, GPTR ppSurface, GPTR pSharedHandle)
-{
-    (void)This;
-    (void)(Width);
-    (void)(Height);
-    (void)(Format);
-    (void)(MultiSample);
-    (void)(MultisampleQuality);
-    (void)(Lockable);
-    (void)(ppSurface);
-    (void)(pSharedHandle);
-    vt3s_unimpl("IDirect3DDevice9::CreateRenderTarget");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_CreateDepthStencilSurface(GPTR This, UINT Width, UINT Height, UINT Format, UINT MultiSample, DWORD MultisampleQuality, BOOL Discard, GPTR ppSurface, GPTR pSharedHandle)
-{
-    (void)This;
-    (void)(Width);
-    (void)(Height);
-    (void)(Format);
-    (void)(MultiSample);
-    (void)(MultisampleQuality);
-    (void)(Discard);
-    (void)(ppSurface);
-    (void)(pSharedHandle);
-    vt3s_unimpl("IDirect3DDevice9::CreateDepthStencilSurface");
-    return E_NOTIMPL;
 }
 
 HRESULT WINAPI IDirect3DDevice9_UpdateSurface(GPTR This, GPTR src_surface, GPTR src_rect, GPTR dst_surface, GPTR dst_point)
@@ -239,18 +102,6 @@ HRESULT WINAPI IDirect3DDevice9_GetFrontBufferData(GPTR This, UINT iSwapChain, G
     return E_NOTIMPL;
 }
 
-HRESULT WINAPI IDirect3DDevice9_StretchRect(GPTR This, GPTR src_surface, GPTR src_rect, GPTR dst_surface, GPTR dst_rect, UINT filter)
-{
-    (void)This;
-    (void)(src_surface);
-    (void)(src_rect);
-    (void)(dst_surface);
-    (void)(dst_rect);
-    (void)(filter);
-    vt3s_unimpl("IDirect3DDevice9::StretchRect");
-    return E_NOTIMPL;
-}
-
 HRESULT WINAPI IDirect3DDevice9_ColorFill(GPTR This, GPTR surface, GPTR rect, UINT color)
 {
     (void)This;
@@ -258,19 +109,6 @@ HRESULT WINAPI IDirect3DDevice9_ColorFill(GPTR This, GPTR surface, GPTR rect, UI
     (void)(rect);
     (void)(color);
     vt3s_unimpl("IDirect3DDevice9::ColorFill");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_CreateOffscreenPlainSurface(GPTR This, UINT Width, UINT Height, UINT Format, UINT Pool, GPTR ppSurface, GPTR pSharedHandle)
-{
-    (void)This;
-    (void)(Width);
-    (void)(Height);
-    (void)(Format);
-    (void)(Pool);
-    (void)(ppSurface);
-    (void)(pSharedHandle);
-    vt3s_unimpl("IDirect3DDevice9::CreateOffscreenPlainSurface");
     return E_NOTIMPL;
 }
 
@@ -371,30 +209,6 @@ HRESULT WINAPI IDirect3DDevice9_GetClipPlane(GPTR This, DWORD Index, GPTR pPlane
     return E_NOTIMPL;
 }
 
-HRESULT WINAPI IDirect3DDevice9_CreateStateBlock(GPTR This, UINT Type, GPTR ppSB)
-{
-    (void)This;
-    (void)(Type);
-    (void)(ppSB);
-    vt3s_unimpl("IDirect3DDevice9::CreateStateBlock");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_BeginStateBlock(GPTR This)
-{
-    (void)This;
-    vt3s_unimpl("IDirect3DDevice9::BeginStateBlock");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_EndStateBlock(GPTR This, GPTR ppSB)
-{
-    (void)This;
-    (void)(ppSB);
-    vt3s_unimpl("IDirect3DDevice9::EndStateBlock");
-    return E_NOTIMPL;
-}
-
 HRESULT WINAPI IDirect3DDevice9_SetClipStatus(GPTR This, GPTR clip_status)
 {
     (void)This;
@@ -408,14 +222,6 @@ HRESULT WINAPI IDirect3DDevice9_GetClipStatus(GPTR This, GPTR pClipStatus)
     (void)This;
     (void)(pClipStatus);
     vt3s_unimpl("IDirect3DDevice9::GetClipStatus");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_ValidateDevice(GPTR This, GPTR pNumPasses)
-{
-    (void)This;
-    (void)(pNumPasses);
-    vt3s_unimpl("IDirect3DDevice9::ValidateDevice");
     return E_NOTIMPL;
 }
 
@@ -499,55 +305,6 @@ DWORD WINAPI IDirect3DDevice9_GetNPatchMode(GPTR This)
     return 0;
 }
 
-HRESULT WINAPI IDirect3DDevice9_DrawPrimitive(GPTR This, UINT PrimitiveType, UINT StartVertex, UINT PrimitiveCount)
-{
-    (void)This;
-    (void)(PrimitiveType);
-    (void)(StartVertex);
-    (void)(PrimitiveCount);
-    vt3s_unimpl("IDirect3DDevice9::DrawPrimitive");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_DrawIndexedPrimitive(GPTR This, UINT arg0, INT BaseVertexIndex, UINT MinVertexIndex, UINT NumVertices, UINT startIndex, UINT primCount)
-{
-    (void)This;
-    (void)(arg0);
-    (void)(BaseVertexIndex);
-    (void)(MinVertexIndex);
-    (void)(NumVertices);
-    (void)(startIndex);
-    (void)(primCount);
-    vt3s_unimpl("IDirect3DDevice9::DrawIndexedPrimitive");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_DrawPrimitiveUP(GPTR This, UINT primitive_type, UINT primitive_count, GPTR data, UINT stride)
-{
-    (void)This;
-    (void)(primitive_type);
-    (void)(primitive_count);
-    (void)(data);
-    (void)(stride);
-    vt3s_unimpl("IDirect3DDevice9::DrawPrimitiveUP");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_DrawIndexedPrimitiveUP(GPTR This, UINT primitive_type, UINT min_vertex_idx, UINT vertex_count, UINT primitive_count, GPTR index_data, UINT index_format, GPTR data, UINT stride)
-{
-    (void)This;
-    (void)(primitive_type);
-    (void)(min_vertex_idx);
-    (void)(vertex_count);
-    (void)(primitive_count);
-    (void)(index_data);
-    (void)(index_format);
-    (void)(data);
-    (void)(stride);
-    vt3s_unimpl("IDirect3DDevice9::DrawIndexedPrimitiveUP");
-    return E_NOTIMPL;
-}
-
 HRESULT WINAPI IDirect3DDevice9_ProcessVertices(GPTR This, UINT SrcStartIndex, UINT DestIndex, UINT VertexCount, GPTR pDestBuffer, GPTR pVertexDecl, DWORD Flags)
 {
     (void)This;
@@ -558,40 +315,6 @@ HRESULT WINAPI IDirect3DDevice9_ProcessVertices(GPTR This, UINT SrcStartIndex, U
     (void)(pVertexDecl);
     (void)(Flags);
     vt3s_unimpl("IDirect3DDevice9::ProcessVertices");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_CreateVertexDeclaration(GPTR This, GPTR elements, GPTR declaration)
-{
-    (void)This;
-    (void)(elements);
-    (void)(declaration);
-    vt3s_unimpl("IDirect3DDevice9::CreateVertexDeclaration");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_SetVertexDeclaration(GPTR This, GPTR pDecl)
-{
-    (void)This;
-    (void)(pDecl);
-    vt3s_unimpl("IDirect3DDevice9::SetVertexDeclaration");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_GetVertexDeclaration(GPTR This, GPTR ppDecl)
-{
-    (void)This;
-    (void)(ppDecl);
-    vt3s_unimpl("IDirect3DDevice9::GetVertexDeclaration");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_CreateVertexShader(GPTR This, GPTR byte_code, GPTR shader)
-{
-    (void)This;
-    (void)(byte_code);
-    (void)(shader);
-    vt3s_unimpl("IDirect3DDevice9::CreateVertexShader");
     return E_NOTIMPL;
 }
 
@@ -650,15 +373,6 @@ HRESULT WINAPI IDirect3DDevice9_GetStreamSourceFreq(GPTR This, UINT StreamNumber
     (void)(StreamNumber);
     (void)(Divider);
     vt3s_unimpl("IDirect3DDevice9::GetStreamSourceFreq");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_CreatePixelShader(GPTR This, GPTR byte_code, GPTR shader)
-{
-    (void)This;
-    (void)(byte_code);
-    (void)(shader);
-    vt3s_unimpl("IDirect3DDevice9::CreatePixelShader");
     return E_NOTIMPL;
 }
 
@@ -730,11 +444,423 @@ HRESULT WINAPI IDirect3DDevice9_DeletePatch(GPTR This, UINT Handle)
     return E_NOTIMPL;
 }
 
-HRESULT WINAPI IDirect3DDevice9_CreateQuery(GPTR This, UINT Type, GPTR ppQuery)
+HRESULT WINAPI IDirect3DSwapChain9_GetFrontBufferData(GPTR This, GPTR pDestSurface)
 {
     (void)This;
-    (void)(Type);
-    (void)(ppQuery);
-    vt3s_unimpl("IDirect3DDevice9::CreateQuery");
+    (void)(pDestSurface);
+    vt3s_unimpl("IDirect3DSwapChain9::GetFrontBufferData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DSwapChain9_GetRasterStatus(GPTR This, GPTR pRasterStatus)
+{
+    (void)This;
+    (void)(pRasterStatus);
+    vt3s_unimpl("IDirect3DSwapChain9::GetRasterStatus");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DTexture9_SetPrivateData(GPTR This, GPTR guid, GPTR data, DWORD data_size, DWORD flags)
+{
+    (void)This;
+    (void)(guid);
+    (void)(data);
+    (void)(data_size);
+    (void)(flags);
+    vt3s_unimpl("IDirect3DTexture9::SetPrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DTexture9_GetPrivateData(GPTR This, GPTR refguid, GPTR pData, GPTR pSizeOfData)
+{
+    (void)This;
+    (void)(refguid);
+    (void)(pData);
+    (void)(pSizeOfData);
+    vt3s_unimpl("IDirect3DTexture9::GetPrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DTexture9_FreePrivateData(GPTR This, GPTR refguid)
+{
+    (void)This;
+    (void)(refguid);
+    vt3s_unimpl("IDirect3DTexture9::FreePrivateData");
+    return E_NOTIMPL;
+}
+
+DWORD WINAPI IDirect3DTexture9_SetLOD(GPTR This, DWORD LODNew)
+{
+    (void)This;
+    (void)(LODNew);
+    vt3s_unimpl("IDirect3DTexture9::SetLOD");
+    return 0;
+}
+
+DWORD WINAPI IDirect3DTexture9_GetLOD(GPTR This)
+{
+    (void)This;
+    vt3s_unimpl("IDirect3DTexture9::GetLOD");
+    return 0;
+}
+
+HRESULT WINAPI IDirect3DTexture9_SetAutoGenFilterType(GPTR This, UINT FilterType)
+{
+    (void)This;
+    (void)(FilterType);
+    vt3s_unimpl("IDirect3DTexture9::SetAutoGenFilterType");
+    return E_NOTIMPL;
+}
+
+UINT WINAPI IDirect3DTexture9_GetAutoGenFilterType(GPTR This)
+{
+    (void)This;
+    vt3s_unimpl("IDirect3DTexture9::GetAutoGenFilterType");
+    return 0;
+}
+
+void WINAPI IDirect3DTexture9_GenerateMipSubLevels(GPTR This)
+{
+    (void)This;
+    vt3s_unimpl("IDirect3DTexture9::GenerateMipSubLevels");
+}
+
+HRESULT WINAPI IDirect3DTexture9_AddDirtyRect(GPTR This, GPTR dirty_rect)
+{
+    (void)This;
+    (void)(dirty_rect);
+    vt3s_unimpl("IDirect3DTexture9::AddDirtyRect");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DCubeTexture9_SetPrivateData(GPTR This, GPTR guid, GPTR data, DWORD data_size, DWORD flags)
+{
+    (void)This;
+    (void)(guid);
+    (void)(data);
+    (void)(data_size);
+    (void)(flags);
+    vt3s_unimpl("IDirect3DCubeTexture9::SetPrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DCubeTexture9_GetPrivateData(GPTR This, GPTR refguid, GPTR pData, GPTR pSizeOfData)
+{
+    (void)This;
+    (void)(refguid);
+    (void)(pData);
+    (void)(pSizeOfData);
+    vt3s_unimpl("IDirect3DCubeTexture9::GetPrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DCubeTexture9_FreePrivateData(GPTR This, GPTR refguid)
+{
+    (void)This;
+    (void)(refguid);
+    vt3s_unimpl("IDirect3DCubeTexture9::FreePrivateData");
+    return E_NOTIMPL;
+}
+
+DWORD WINAPI IDirect3DCubeTexture9_SetLOD(GPTR This, DWORD LODNew)
+{
+    (void)This;
+    (void)(LODNew);
+    vt3s_unimpl("IDirect3DCubeTexture9::SetLOD");
+    return 0;
+}
+
+DWORD WINAPI IDirect3DCubeTexture9_GetLOD(GPTR This)
+{
+    (void)This;
+    vt3s_unimpl("IDirect3DCubeTexture9::GetLOD");
+    return 0;
+}
+
+HRESULT WINAPI IDirect3DCubeTexture9_SetAutoGenFilterType(GPTR This, UINT FilterType)
+{
+    (void)This;
+    (void)(FilterType);
+    vt3s_unimpl("IDirect3DCubeTexture9::SetAutoGenFilterType");
+    return E_NOTIMPL;
+}
+
+UINT WINAPI IDirect3DCubeTexture9_GetAutoGenFilterType(GPTR This)
+{
+    (void)This;
+    vt3s_unimpl("IDirect3DCubeTexture9::GetAutoGenFilterType");
+    return 0;
+}
+
+void WINAPI IDirect3DCubeTexture9_GenerateMipSubLevels(GPTR This)
+{
+    (void)This;
+    vt3s_unimpl("IDirect3DCubeTexture9::GenerateMipSubLevels");
+}
+
+HRESULT WINAPI IDirect3DCubeTexture9_AddDirtyRect(GPTR This, UINT face, GPTR dirty_rect)
+{
+    (void)This;
+    (void)(face);
+    (void)(dirty_rect);
+    vt3s_unimpl("IDirect3DCubeTexture9::AddDirtyRect");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DVolumeTexture9_SetPrivateData(GPTR This, GPTR guid, GPTR data, DWORD data_size, DWORD flags)
+{
+    (void)This;
+    (void)(guid);
+    (void)(data);
+    (void)(data_size);
+    (void)(flags);
+    vt3s_unimpl("IDirect3DVolumeTexture9::SetPrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DVolumeTexture9_GetPrivateData(GPTR This, GPTR refguid, GPTR pData, GPTR pSizeOfData)
+{
+    (void)This;
+    (void)(refguid);
+    (void)(pData);
+    (void)(pSizeOfData);
+    vt3s_unimpl("IDirect3DVolumeTexture9::GetPrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DVolumeTexture9_FreePrivateData(GPTR This, GPTR refguid)
+{
+    (void)This;
+    (void)(refguid);
+    vt3s_unimpl("IDirect3DVolumeTexture9::FreePrivateData");
+    return E_NOTIMPL;
+}
+
+DWORD WINAPI IDirect3DVolumeTexture9_SetLOD(GPTR This, DWORD LODNew)
+{
+    (void)This;
+    (void)(LODNew);
+    vt3s_unimpl("IDirect3DVolumeTexture9::SetLOD");
+    return 0;
+}
+
+DWORD WINAPI IDirect3DVolumeTexture9_GetLOD(GPTR This)
+{
+    (void)This;
+    vt3s_unimpl("IDirect3DVolumeTexture9::GetLOD");
+    return 0;
+}
+
+HRESULT WINAPI IDirect3DVolumeTexture9_SetAutoGenFilterType(GPTR This, UINT FilterType)
+{
+    (void)This;
+    (void)(FilterType);
+    vt3s_unimpl("IDirect3DVolumeTexture9::SetAutoGenFilterType");
+    return E_NOTIMPL;
+}
+
+UINT WINAPI IDirect3DVolumeTexture9_GetAutoGenFilterType(GPTR This)
+{
+    (void)This;
+    vt3s_unimpl("IDirect3DVolumeTexture9::GetAutoGenFilterType");
+    return 0;
+}
+
+void WINAPI IDirect3DVolumeTexture9_GenerateMipSubLevels(GPTR This)
+{
+    (void)This;
+    vt3s_unimpl("IDirect3DVolumeTexture9::GenerateMipSubLevels");
+}
+
+HRESULT WINAPI IDirect3DVolumeTexture9_GetLevelDesc(GPTR This, UINT Level, GPTR pDesc)
+{
+    (void)This;
+    (void)(Level);
+    (void)(pDesc);
+    vt3s_unimpl("IDirect3DVolumeTexture9::GetLevelDesc");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DVolumeTexture9_LockBox(GPTR This, UINT level, GPTR locked_box, GPTR box, DWORD flags)
+{
+    (void)This;
+    (void)(level);
+    (void)(locked_box);
+    (void)(box);
+    (void)(flags);
+    vt3s_unimpl("IDirect3DVolumeTexture9::LockBox");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DVolumeTexture9_UnlockBox(GPTR This, UINT Level)
+{
+    (void)This;
+    (void)(Level);
+    vt3s_unimpl("IDirect3DVolumeTexture9::UnlockBox");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DVolumeTexture9_AddDirtyBox(GPTR This, GPTR dirty_box)
+{
+    (void)This;
+    (void)(dirty_box);
+    vt3s_unimpl("IDirect3DVolumeTexture9::AddDirtyBox");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DVertexBuffer9_SetPrivateData(GPTR This, GPTR guid, GPTR data, DWORD data_size, DWORD flags)
+{
+    (void)This;
+    (void)(guid);
+    (void)(data);
+    (void)(data_size);
+    (void)(flags);
+    vt3s_unimpl("IDirect3DVertexBuffer9::SetPrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DVertexBuffer9_GetPrivateData(GPTR This, GPTR refguid, GPTR pData, GPTR pSizeOfData)
+{
+    (void)This;
+    (void)(refguid);
+    (void)(pData);
+    (void)(pSizeOfData);
+    vt3s_unimpl("IDirect3DVertexBuffer9::GetPrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DVertexBuffer9_FreePrivateData(GPTR This, GPTR refguid)
+{
+    (void)This;
+    (void)(refguid);
+    vt3s_unimpl("IDirect3DVertexBuffer9::FreePrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DIndexBuffer9_SetPrivateData(GPTR This, GPTR guid, GPTR data, DWORD data_size, DWORD flags)
+{
+    (void)This;
+    (void)(guid);
+    (void)(data);
+    (void)(data_size);
+    (void)(flags);
+    vt3s_unimpl("IDirect3DIndexBuffer9::SetPrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DIndexBuffer9_GetPrivateData(GPTR This, GPTR refguid, GPTR pData, GPTR pSizeOfData)
+{
+    (void)This;
+    (void)(refguid);
+    (void)(pData);
+    (void)(pSizeOfData);
+    vt3s_unimpl("IDirect3DIndexBuffer9::GetPrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DIndexBuffer9_FreePrivateData(GPTR This, GPTR refguid)
+{
+    (void)This;
+    (void)(refguid);
+    vt3s_unimpl("IDirect3DIndexBuffer9::FreePrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DSurface9_SetPrivateData(GPTR This, GPTR guid, GPTR data, DWORD data_size, DWORD flags)
+{
+    (void)This;
+    (void)(guid);
+    (void)(data);
+    (void)(data_size);
+    (void)(flags);
+    vt3s_unimpl("IDirect3DSurface9::SetPrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DSurface9_GetPrivateData(GPTR This, GPTR refguid, GPTR pData, GPTR pSizeOfData)
+{
+    (void)This;
+    (void)(refguid);
+    (void)(pData);
+    (void)(pSizeOfData);
+    vt3s_unimpl("IDirect3DSurface9::GetPrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DSurface9_FreePrivateData(GPTR This, GPTR refguid)
+{
+    (void)This;
+    (void)(refguid);
+    vt3s_unimpl("IDirect3DSurface9::FreePrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DSurface9_GetDC(GPTR This, GPTR phdc)
+{
+    (void)This;
+    (void)(phdc);
+    vt3s_unimpl("IDirect3DSurface9::GetDC");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DSurface9_ReleaseDC(GPTR This, GPTR hdc)
+{
+    (void)This;
+    (void)(hdc);
+    vt3s_unimpl("IDirect3DSurface9::ReleaseDC");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DVolume9_SetPrivateData(GPTR This, GPTR guid, GPTR data, DWORD data_size, DWORD flags)
+{
+    (void)This;
+    (void)(guid);
+    (void)(data);
+    (void)(data_size);
+    (void)(flags);
+    vt3s_unimpl("IDirect3DVolume9::SetPrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DVolume9_GetPrivateData(GPTR This, GPTR refguid, GPTR pData, GPTR pSizeOfData)
+{
+    (void)This;
+    (void)(refguid);
+    (void)(pData);
+    (void)(pSizeOfData);
+    vt3s_unimpl("IDirect3DVolume9::GetPrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DVolume9_FreePrivateData(GPTR This, GPTR refguid)
+{
+    (void)This;
+    (void)(refguid);
+    vt3s_unimpl("IDirect3DVolume9::FreePrivateData");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DVolume9_GetDesc(GPTR This, GPTR pDesc)
+{
+    (void)This;
+    (void)(pDesc);
+    vt3s_unimpl("IDirect3DVolume9::GetDesc");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DVolume9_LockBox(GPTR This, GPTR locked_box, GPTR box, DWORD flags)
+{
+    (void)This;
+    (void)(locked_box);
+    (void)(box);
+    (void)(flags);
+    vt3s_unimpl("IDirect3DVolume9::LockBox");
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI IDirect3DVolume9_UnlockBox(GPTR This)
+{
+    (void)This;
+    vt3s_unimpl("IDirect3DVolume9::UnlockBox");
     return E_NOTIMPL;
 }
