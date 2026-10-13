@@ -88,3 +88,10 @@ Shared code lives in `tools/formats/`: `capx.py` (archive reader), `cri_utf.py` 
 - Decode `anim.db` fields and the `Motion.xpac` packs.
 - Decode the database `.bin` and `.adb` tables, and the text tables.
 - Bulk ADX to WAV for `KANSEI`, `BGM` and `VOICE_ADX` (existing `tools/capx_extract.py --wav`).
+
+## CAPX name hash: QuickBMS script cross-check (2026-10-14)
+
+- The community QuickBMS script for CAPX (`virtua_tennis_xpac.bms`, from the QuickBMS script set) matches our layout. It reads the magic, the file count, a 0x10 header size, and the alignment. It then reads 16-byte records: a field it calls `SOME_CRC`, the offset, the size, and an `ID`. Our `tools/capx_extract.py` already reads the same fields.
+- The script doesn't name files. It extracts with empty names, so it doesn't solve the hash.
+- Tested: zlib CRC32, JAMCRC, CRC32-BZIP2, CRC32-MPEG2, and CRC32C. Each was run over about 3,600 printable strings from the first 128 KB of `SE.xpac`, in original, lowercase, and uppercase forms, with and without the path. None matched any of the 9 stored hashes.
+- Next option: the hash may be seeded or use a different polynomial. Test it against names with known source, such as the cue names and file names inside the ACB sheets.
