@@ -45,3 +45,4 @@
 - **Threads:** the translated game gets real host threads. Each guest thread has its own guest stack and TLS. CreateThread, ResumeThread and SetThreadPriority map onto pthreads. Events and critical sections map onto pthread primitives. Owner: recompiler agent (kernel32).
 - **Timers:** timeSetEvent and the other winmm timers run on a timer thread. Owner: recompiler agent (winmm).
 - **D3DXCompileShader:** the first attempt must succeed, because the game treats failure as fatal. Find the source it passes in, then return a precompiled blob or implement the smallest compile that covers it. Owner: runtime agent (D3DX).
+- **Graphics API:** OpenGL 3.3 core on macOS and OpenGL ES 3.0 on Android, behind the renderer interface in `runtime/include/vt3/vt3_renderer.h`. Vulkan is not used for now. It would need SM2 to SPIR-V instead of GLSL, and MoltenVK on macOS. It can be added later as a second renderer backend, if Android performance needs it.
