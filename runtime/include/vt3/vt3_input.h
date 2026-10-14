@@ -40,9 +40,32 @@ typedef struct vt3_input_state {
     float    axis[VT3_AXIS_COUNT];
 } vt3_input_state;
 
+/*
+ * Merged game state (buttons from keyboard and pad, axes from the pad).
+ * The raw state below keeps the sources apart, for the DirectInput shim.
+ */
 void vt3_input_init(void);
 void vt3_input_set_button(uint32_t mask, int down);
 void vt3_input_set_axis(enum vt3_axis axis, float value);
 const vt3_input_state *vt3_input_get(void);
+
+/* Raw keyboard. Scancodes are SDL_Scancode values, which are USB HID usages (0..511). */
+#define VT3_KEY_COUNT 512
+typedef struct vt3_key_event {
+    uint32_t scancode;
+    int      down;
+    uint32_t ms;                       /* event time, milliseconds (from SDL) */
+} vt3_key_event;
+
+void vt3_input_set_key(uint32_t scancode, int down, uint32_t ms);
+int  vt3_input_key_down(uint32_t scancode);
+/* Copies up to max queued key transitions, oldest first. Consumes them unless peek is nonzero. */
+uint32_t vt3_input_take_keys(vt3_key_event *out, uint32_t max, int peek);
+
+/* Raw gamepad buttons, in enum vt3_button bits. The d-pad is UP, DOWN, LEFT, RIGHT. */
+void     vt3_input_set_pad_button(uint32_t mask, int down);
+uint32_t vt3_input_pad_buttons(void);
+void     vt3_input_set_pad_connected(int connected);
+int      vt3_input_pad_connected(void);
 
 #endif /* VT3_INPUT_H */

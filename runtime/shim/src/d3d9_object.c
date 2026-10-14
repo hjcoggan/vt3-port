@@ -132,7 +132,10 @@ static GPTR vtbl_for_kind(uint32_t kind)
     PICK(D3D9_KIND_DSBUFFER, k_names_dsbuffer)
     PICK(D3D9_KIND_D3DXBUFFER, k_names_d3dxbuf)
     PICK(D3D9_KIND_D3DXCONSTTABLE, k_names_d3dxct)
-    default: return 0;
+    default:
+        names = dinput_vtbl_names(kind, &n);
+        if (!names) return 0;
+        break;
     }
 #undef PICK
     built[kind] = build_vtbl(names, n);
@@ -181,6 +184,10 @@ static void free_data(uint32_t kind, void *data)
     case D3D9_KIND_D3DXBUFFER:
     case D3D9_KIND_D3DXCONSTTABLE:
         d3dx_obj_free(kind, data);
+        break;
+    case D3D9_KIND_DINPUT:
+    case D3D9_KIND_DIDEVICE:
+        dinput_obj_free(kind, data);
         break;
     case D3D9_KIND_VSHADER:
     case D3D9_KIND_PSHADER: {

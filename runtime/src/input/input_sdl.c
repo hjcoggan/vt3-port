@@ -60,12 +60,22 @@ static const key_button_map k_key_map[] = {
 
 static SDL_Gamepad *g_pads[VT3_MAX_PADS];
 
+/* The raw pad state follows the open pads: connected while one is open, buttons cleared with the last. */
+static void pads_changed(void)
+{
+    int any = 0;
+    for (int i = 0; i < VT3_MAX_PADS; i++) any |= g_pads[i] != NULL;
+    vt3_input_set_pad_connected(any);
+    if (!any) vt3_input_set_pad_button(0xFFFFFFFFu, 0);
+}
+
 static void open_pad(SDL_JoystickID id)
 {
     for (int i = 0; i < VT3_MAX_PADS; i++) {
         if (g_pads[i]) continue;
         g_pads[i] = SDL_OpenGamepad(id);
         if (g_pads[i]) VT3_INFO("gamepad %d: %s", i, SDL_GetGamepadName(g_pads[i]));
+        pads_changed();
         return;
     }
 }
@@ -78,6 +88,7 @@ static void close_pad(SDL_JoystickID id)
             g_pads[i] = NULL;
         }
     }
+    pads_changed();
 }
 
 void vt3_input_sdl_event(const SDL_Event *e)
@@ -94,6 +105,7 @@ void vt3_input_sdl_event(const SDL_Event *e)
         for (size_t i = 0; i < sizeof k_pad_map / sizeof k_pad_map[0]; i++) {
             if (k_pad_map[i].sdl == e->gbutton.button) {
                 vt3_input_set_button(k_pad_map[i].vt3, e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN);
+                vt3_input_set_pad_button(k_pad_map[i].vt3, e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN);
                 break;
             }
         }
@@ -101,6 +113,8 @@ void vt3_input_sdl_event(const SDL_Event *e)
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP:
         if (e->key.repeat) break;
+        vt3_input_set_key((uint32_t)e->key.scancode, e->type == SDL_EVENT_KEY_DOWN,
+                          (uint32_t)(e->key.timestamp / 1000000u));
         for (size_t i = 0; i < sizeof k_key_map / sizeof k_key_map[0]; i++) {
             if (k_key_map[i].key == e->key.scancode) {
                 vt3_input_set_button(k_key_map[i].vt3, e->type == SDL_EVENT_KEY_DOWN);
@@ -139,4 +153,5 @@ void vt3_input_sdl_shutdown(void)
         if (g_pads[i]) SDL_CloseGamepad(g_pads[i]);
         g_pads[i] = NULL;
     }
+    pads_changed();
 }

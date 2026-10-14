@@ -10,6 +10,7 @@
 #include "win32/d3d9_com.h"
 #include "win32/kernel32.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
 /* Guest object layout. A COM object is 16 bytes of guest memory:
@@ -30,9 +31,10 @@ enum {
     D3D9_KIND_SURFACE, D3D9_KIND_VDECL, D3D9_KIND_VSHADER, D3D9_KIND_PSHADER,
     D3D9_KIND_STATEBLOCK, D3D9_KIND_QUERY, D3D9_KIND_VOLUME,
     D3D9_KIND_DSOUND, D3D9_KIND_DSBUFFER,    /* DirectSound objects (dsound_stub.c) */
-    D3D9_KIND_D3DXBUFFER, D3D9_KIND_D3DXCONSTTABLE   /* D3DX objects (d3dx9_compile.c, d3dx9_stub.c) */
+    D3D9_KIND_D3DXBUFFER, D3D9_KIND_D3DXCONSTTABLE,  /* D3DX objects (d3dx9_compile.c, d3dx9_stub.c) */
+    D3D9_KIND_DINPUT, D3D9_KIND_DIDEVICE             /* DirectInput objects (dinput8.c) */
 };
-#define D3D9_KIND_LAST D3D9_KIND_D3DXCONSTTABLE
+#define D3D9_KIND_LAST D3D9_KIND_DIDEVICE
 
 #define D3D9_MAX_HOST 4096
 
@@ -58,6 +60,9 @@ d3d9_host *d3d9_host_of(GPTR obj, uint32_t kind);             /* NULL unless kin
 void d3d9_obj_free(GPTR obj);
 void dsound_free(uint32_t kind, void *data);                   /* host data of a DirectSound object (dsound_stub.c) */
 void d3dx_obj_free(uint32_t kind, void *data);                 /* host data of an ID3DX object (d3dx9_compile.c) */
+/* DirectInput objects (dinput8.c): vtable method names for a kind (NULL for other kinds), and frees. */
+const char *const *dinput_vtbl_names(uint32_t kind, size_t *count);
+void dinput_obj_free(uint32_t kind, void *data);
 DWORD d3d9_qi_kind(GPTR This, GPTR riid, GPTR ppv, uint32_t kind);
 DWORD d3d9_add_ref(GPTR This);
 DWORD d3d9_release(GPTR This);

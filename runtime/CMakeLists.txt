@@ -68,7 +68,7 @@ add_library(vt3shim STATIC
     shim/src/d3dx9_compile.c
     shim/src/d3dx9_stub.c
     shim/src/dsound_stub.c
-    shim/src/dinput8_stub.c
+    shim/src/dinput8.c
 )
 target_include_directories(vt3shim PUBLIC shim/include)
 target_link_libraries(vt3shim PUBLIC vt3core)
