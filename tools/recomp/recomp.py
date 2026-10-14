@@ -1873,7 +1873,7 @@ def x87(ins):
         return [f"FST(0) = vt_fdbl1(FST(0), {CW}, VT_FD_F2XM1);"]
     if mn == 'fpatan':
         return [blk("vt_x80 s = FST(0); vt_x80 d = FST(1);",
-                    f"FST(1) = vt_fdbl2(d, s, {CW}, VT_FD2_PATAN);", "FPOP();")]
+                    f"FST(1) = vt_fdbl2(s, d, {CW}, VT_FD2_PATAN);", "FPOP();")]
     if mn == 'fyl2x':
         return [blk(f"FST(1) = vt_fdbl2(FST(0), FST(1), {CW}, VT_FD2_YL2X);", "FPOP();")]
     if mn == 'fscale':

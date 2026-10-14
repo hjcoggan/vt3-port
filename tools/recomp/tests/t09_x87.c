@@ -42,6 +42,23 @@ static double newton_sqrt(double v)
     return x;
 }
 
+/* fpatan computes atan2(ST1, ST0) with ST0 = x and ST1 = y: y is pushed first. The test runs the
+ * instruction itself, so the operand order is the one the x87 defines. A swapped order gives the
+ * wrong quadrant or angle at every point below. */
+static double atan2_x87(double y, double x)
+{
+    double r;
+    __asm__ volatile(
+        "fldl %1\n\t"
+        "fldl %2\n\t"
+        "fpatan\n\t"
+        "fstpl %0\n\t"
+        : "=m"(r)
+        : "m"(y), "m"(x)
+        : "st", "st(1)", "st(2)", "st(3)", "st(4)", "st(5)", "st(6)", "st(7)");
+    return r;
+}
+
 int vt_main(void)
 {
     scaled("add", da + db);
@@ -71,5 +88,13 @@ int vt_main(void)
     scaled("fact10", (double)ld);
     long double ldd = (long double)da * (long double)db;
     scaled("ld_mul", (double)ldd);
+
+    /* fpatan in all four quadrants, with the axes and one point off the diagonal. */
+    scaled("atan2_q1", atan2_x87(1.0, 2.0));
+    scaled("atan2_q2", atan2_x87(1.0, -2.0));
+    scaled("atan2_q3", atan2_x87(-1.0, -2.0));
+    scaled("atan2_q4", atan2_x87(-1.0, 2.0));
+    scaled("atan2_neg_x_axis", atan2_x87(0.0, -1.0));
+    scaled("atan2_34", atan2_x87(3.0, 4.0));
     return cnt & 0x7F;
 }
