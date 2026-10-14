@@ -9,6 +9,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define DEV(This) d3d9_device_of(This)
 #define PP_SIZE 56
@@ -147,6 +148,25 @@ HRESULT WINAPI IDirect3DDevice9_Present(GPTR This, GPTR src_rect, GPTR dst_rect,
     d3d9_device *d = DEV(This);
     if (!d) return D3DERR_CHK_INVALIDCALL;
     d3d9_gpu_present();
+    /* VT3_TRACE_FPS=1 logs the frames presented each second, to check the game's frame pacing. */
+    static int fps_on = -1;
+    static uint32_t frames;
+    static struct timespec window;
+    if (fps_on < 0) {
+        fps_on = getenv("VT3_TRACE_FPS") != NULL;
+        clock_gettime(CLOCK_MONOTONIC, &window);
+    }
+    if (fps_on) {
+        frames++;
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        double dt = (double)(now.tv_sec - window.tv_sec) + (double)(now.tv_nsec - window.tv_nsec) * 1e-9;
+        if (dt >= 1.0) {
+            VT3_INFO("present: %.1f frames per second", frames / dt);
+            frames = 0;
+            window = now;
+        }
+    }
     return S_OK;
 }
 
