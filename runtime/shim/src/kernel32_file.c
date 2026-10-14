@@ -226,6 +226,35 @@ DWORD WINAPI SetFilePointer(HANDLE hf, LONG distance, LPLONG distance_high, DWOR
     return (DWORD)((uint64_t)pos & 0xFFFFFFFFu);
 }
 
+/* 64-bit seek. The distance is a LARGE_INTEGER passed by value (two stack slots). On failure
+ * the file pointer and *new_pos are unchanged. A position before the start of the file is
+ * ERROR_NEGATIVE_SEEK. */
+BOOL WINAPI SetFilePointerEx(HANDLE hf, LONGLONG distance, LPLONGLONG new_pos, DWORD method)
+{
+    vfile *f = vt3s_handle_get(hf, VT3S_H_FILE);
+    if (!f) {
+        vt3s_set_last_error(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    int whence;
+    switch (method) {
+    case FILE_BEGIN:   whence = SEEK_SET; break;
+    case FILE_CURRENT: whence = SEEK_CUR; break;
+    case FILE_END:     whence = SEEK_END; break;
+    default:
+        vt3s_set_last_error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    off_t pos = lseek(f->fd, (off_t)distance, whence);
+    if (pos < 0) {
+        vt3s_set_last_error(errno == EINVAL ? ERROR_NEGATIVE_SEEK : ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    vt3s_store_u64(new_pos, (uint64_t)pos);   /* a NULL pointer is ignored */
+    vt3s_set_last_error(ERROR_SUCCESS);
+    return TRUE;
+}
+
 DWORD WINAPI GetFileSize(HANDLE hf, LPDWORD size_high)
 {
     vfile *f = vt3s_handle_get(hf, VT3S_H_FILE);

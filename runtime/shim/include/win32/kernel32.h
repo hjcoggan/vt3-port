@@ -23,6 +23,8 @@ HANDLE WINAPI CreateFileA(LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATT
 BOOL   WINAPI ReadFile(HANDLE file, LPVOID buffer, DWORD bytes, LPDWORD bytes_read, LPOVERLAPPED ovl);
 BOOL   WINAPI WriteFile(HANDLE file, LPCVOID buffer, DWORD bytes, LPDWORD bytes_written, LPOVERLAPPED ovl);
 DWORD  WINAPI SetFilePointer(HANDLE file, LONG distance, LPLONG distance_high, DWORD method);
+BOOL   WINAPI SetFilePointerEx(HANDLE file, LONGLONG distance, LPLONGLONG new_pos, DWORD method);
+#define ERROR_NEGATIVE_SEEK      131u
 DWORD  WINAPI GetFileSize(HANDLE file, LPDWORD size_high);
 BOOL   WINAPI CloseHandle(HANDLE handle);
 

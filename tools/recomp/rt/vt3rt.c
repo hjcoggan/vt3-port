@@ -120,7 +120,11 @@ void vt_icall(vt3_cpu *c, uint32_t target)
         if (msg_kind) msg_arg = rd32(c->esp + 4);
         if (msg_kind == 2) vt_trace_msg("dispatch", msg_arg);
     }
+    /* A shim may call guest code (window procedures). Record this frame's stack pointer so the
+     * nested call starts below it. */
+    uint32_t saved_sp = vt3shim_guest_sp_swap(c->esp);
     e->fn(c);
+    vt3shim_guest_sp_swap(saved_sp);
     if (msg_kind == 1 && c->eax) vt_trace_msg("returned", msg_arg);
 }
 
@@ -277,6 +281,7 @@ int vt3_run(const vt3_module *m, const char *image_path)
     if (vt3shim_init() != 0) return 1;
     vt3shim_set_guest_call(guest_call_hook);
     vt3shim_thread_begin_main();
+    vt3shim_set_main_teb(VT_STACK_TOP, VT_TEB);
 
     /* Imports: each IAT slot gets a unique token. Calls through the slot land in
      * the icall table, which maps the token to a shim. */
