@@ -228,14 +228,24 @@ BOOL WINAPI ReadFile(HANDLE hf, LPVOID buffer, DWORD bytes, LPDWORD bytes_read, 
         vt3s_set_last_error(ERROR_INVALID_HANDLE);
         return FALSE;
     }
-    if (ovl) {
-        vt3s_unimpl("ReadFile(overlapped)");
-        vt3s_set_last_error(ERROR_CALL_NOT_IMPLEMENTED);
-        return FALSE;
-    }
     if (bytes && !vt3s_guest_range_ok(buffer, bytes)) {
         vt3s_set_last_error(ERROR_INVALID_PARAMETER);
         return FALSE;
+    }
+    if (ovl) {
+        /* An overlapped read on a synchronous handle. The read completes before ReadFile
+         * returns, so the result goes into the OVERLAPPED block now. Win32 reads at the
+         * OVERLAPPED offset and moves the file pointer past the data, as a synchronous read
+         * does. Layout (32-bit): Internal, InternalHigh, Offset, OffsetHigh, hEvent. */
+        if (!vt3s_guest_range_ok(ovl, 20)) {
+            vt3s_set_last_error(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        uint64_t off = (uint64_t)vt3s_load_u32(ovl + 8) | ((uint64_t)vt3s_load_u32(ovl + 12) << 32);
+        if (lseek(f->fd, (off_t)off, SEEK_SET) < 0) {
+            vt3s_set_last_error(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
     }
     ssize_t r = bytes ? read(f->fd, vt3_g2h(buffer), bytes) : 0;
     if (r < 0) {
@@ -243,6 +253,29 @@ BOOL WINAPI ReadFile(HANDLE hf, LPVOID buffer, DWORD bytes, LPDWORD bytes_read, 
         return FALSE;
     }
     vt3s_store_u32(bytes_read, (uint32_t)r);
+    if (ovl) {
+        vt3s_store_u32(ovl + 0, 0u);                    /* Internal: STATUS_SUCCESS */
+        vt3s_store_u32(ovl + 4, (uint32_t)r);           /* InternalHigh: bytes transferred */
+        HANDLE ev = vt3s_load_u32(ovl + 16);
+        if (ev) SetEvent(ev);                           /* the completion signal, if the game set one */
+    }
+    vt3s_set_last_error(ERROR_SUCCESS);
+    return TRUE;
+}
+
+/* The read finished inside ReadFile, so there is nothing to wait for; bWait is ignored. */
+BOOL WINAPI GetOverlappedResult(HANDLE hf, LPOVERLAPPED ovl, LPDWORD transferred, BOOL wait)
+{
+    (void)wait;
+    if (!vt3s_handle_get(hf, VT3S_H_FILE)) {
+        vt3s_set_last_error(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    if (!vt3s_guest_range_ok(ovl, 20)) {
+        vt3s_set_last_error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    vt3s_store_u32(transferred, vt3s_load_u32(ovl + 4));
     vt3s_set_last_error(ERROR_SUCCESS);
     return TRUE;
 }

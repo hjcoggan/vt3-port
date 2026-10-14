@@ -21,6 +21,7 @@ SIZE_T WINAPI HeapSize(HANDLE heap, DWORD flags, GPTR mem);
 HANDLE WINAPI CreateFileA(LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES sa,
                           DWORD disposition, DWORD flags, HANDLE template_file);
 BOOL   WINAPI ReadFile(HANDLE file, LPVOID buffer, DWORD bytes, LPDWORD bytes_read, LPOVERLAPPED ovl);
+BOOL   WINAPI GetOverlappedResult(HANDLE file, LPOVERLAPPED ovl, LPDWORD transferred, BOOL wait);
 BOOL   WINAPI WriteFile(HANDLE file, LPCVOID buffer, DWORD bytes, LPDWORD bytes_written, LPOVERLAPPED ovl);
 DWORD  WINAPI SetFilePointer(HANDLE file, LONG distance, LPLONG distance_high, DWORD method);
 BOOL   WINAPI SetFilePointerEx(HANDLE file, LONGLONG distance, LPLONGLONG new_pos, DWORD method);

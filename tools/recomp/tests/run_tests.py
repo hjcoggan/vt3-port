@@ -29,6 +29,11 @@ GCC = 'i686-w64-mingw32-gcc'
 CC = 'clang'
 WINE = '/Users/heath/Virtua Tennis 3/tools/wine/Wine Devel.app/Contents/Resources/wine/bin/wine'
 PREFIX = os.path.join(ROOT, 'wineprefix')
+# SDL3 from Homebrew: the runtime's vt3core (platform, renderer, input, audio) links against it,
+# as it does in the game build (dump/recomp/vt3_nocd/build_native.py).
+SDL = subprocess.run(['brew', '--prefix', 'sdl3'], capture_output=True, text=True, check=True).stdout.strip()
+SDL_LINK = ['-L', os.path.join(SDL, 'lib'), '-lSDL3', '-Wl,-rpath,' + os.path.join(SDL, 'lib'),
+            '-framework', 'OpenGL']
 
 BASE_CFLAGS = ['-fno-stack-protector', '-fno-builtin', '-fno-math-errno', '-fno-tree-loop-distribute-patterns',
                '-fno-asynchronous-unwind-tables', '-fno-ident', '-nostdlib', '-nostartfiles']
@@ -55,6 +60,7 @@ VARIANTS = {
     't16_entry': [('O0', ['-O0']), ('O2', ['-O2'])],
     't17_seek': [('O0', ['-O0']), ('O2', ['-O2'])],
     't18_save': [('O0', ['-O0']), ('O2', ['-O2'])],
+    't19_overlapped': [('O0', ['-O0']), ('O2', ['-O2'])],
     't15_mmx': [('O0', ['-O0', '-mmmx', '-msse']), ('O2', ['-O2', '-mmmx', '-msse'])],
     't14_sim': [('sse_O2', ['-O2', '-msse2', '-mfpmath=sse']),
                 ('x87_O2', ['-O2', '-mfpmath=387'])],
@@ -81,6 +87,15 @@ def shim_sources():
             if p.strip().endswith('.c') and 'shim/src/' in p]
 
 
+def core_sources():
+    """The vt3core sources (platform, renderer, audio, input, ADX) that CMake builds, as the game links them."""
+    text = open(os.path.join(REPO_RUNTIME, 'CMakeLists.txt')).read()
+    block = text[text.index('add_library(vt3core STATIC'):]
+    block = block[:block.index(')')]
+    return [os.path.join(REPO_RUNTIME, p.strip()) for p in block.splitlines()
+            if p.strip().endswith('.c') and p.strip().startswith('src/')]
+
+
 def build_runtime(objdir):
     """Compile the native runtime (guest arena, shim) and the translator's loader.
 
@@ -101,10 +116,9 @@ def build_runtime(objdir):
         os.path.join(RT, 'vt3simd.c'),
         os.path.join(RT, 'vt3fpu.c'),
         adapters,
-        os.path.join(REPO_RUNTIME, 'src', 'core', 'log.c'),
-        os.path.join(REPO_RUNTIME, 'src', 'core', 'guest.c'),
-    ] + shim_src
-    incs = ['-I', RT, '-I', os.path.join(REPO_RUNTIME, 'include'), '-I', os.path.join(shim, 'include')]
+    ] + core_sources() + shim_src
+    incs = ['-I', RT, '-I', os.path.join(REPO_RUNTIME, 'include'), '-I', os.path.join(shim, 'include'),
+            '-I', os.path.join(SDL, 'include')]
     objs = []
     for src in sources:
         obj = os.path.join(objdir, os.path.basename(src).replace('.c', '.o'))
@@ -153,7 +167,7 @@ def build_one(test, vname, vflags, objs):
     if r.returncode:
         return expected, f"C compile failed: {r.stderr.decode()[-1200:]}"
     native = os.path.join(tdir, 'native')
-    r = run([CC, '-o', native, modo] + objs + ['-lm', '-lpthread'])
+    r = run([CC, '-o', native, modo] + objs + ['-lm', '-lpthread'] + SDL_LINK)
     if r.returncode:
         return expected, f"link failed: {r.stderr.decode()[-800:]}"
 
