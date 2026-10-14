@@ -95,6 +95,8 @@ typedef struct IDirectInputDevice8AVtbl {
 #define DI8DEVTYPE_KEYBOARD        0x13
 #define DI8DEVTYPE_JOYSTICK        0x14
 #define DI8DEVTYPE_GAMEPAD         0x15
+#define DI8DEVCLASS_POINTER        2
+#define DI8DEVTYPE_MOUSE           0x12
 
 #define DIEDFL_ALLDEVICES          0x00000000u
 #define DIEDFL_ATTACHEDONLY        0x00000001u

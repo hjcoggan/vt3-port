@@ -38,6 +38,7 @@
 #define WM_MOVE 0x0003u
 #define WM_SIZE 0x0005u
 #define WM_ACTIVATE 0x0006u
+#define WM_ACTIVATEAPP 0x001Cu
 #define WM_SETFOCUS 0x0007u
 #define WM_KILLFOCUS 0x0008u
 #define WM_CLOSE 0x0010u
@@ -314,6 +315,7 @@ BOOL WINAPI ShowWindow(HANDLE h, int cmd)
     if (now && !was) {
         send_wm(h, WM_SHOWWINDOW, 1, 0);
         send_wm(h, WM_SIZE, 0, mk_lparam(cw, ch));
+        send_wm(h, WM_ACTIVATEAPP, 1, 1);          /* the game's "application active" flag */
         send_wm(h, WM_ACTIVATE, WA_ACTIVE, 0);
         send_wm(h, WM_SETFOCUS, 0, 0);
     } else if (!now && was) {
@@ -431,10 +433,12 @@ static void pump(void)
             post(h, WM_SIZE, 0, mk_lparam(ev.w, ev.h));
             break;
         case VT3_EV_FOCUS:
+            post(h, WM_ACTIVATEAPP, 1, 1);
             post(h, WM_ACTIVATE, WA_ACTIVE, 0);
             post(h, WM_SETFOCUS, 0, 0);
             break;
         case VT3_EV_BLUR:
+            post(h, WM_ACTIVATEAPP, 0, 1);
             post(h, WM_ACTIVATE, WA_INACTIVE, 0);
             post(h, WM_KILLFOCUS, 0, 0);
             break;

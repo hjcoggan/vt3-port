@@ -7,6 +7,8 @@
  * Devices:
  *   GUID_SysKeyboard  DI8DEVTYPE_KEYBOARD. Always present.
  *   GUID_Joystick     DI8DEVTYPE_GAMEPAD. Present while a pad is connected.
+ *   GUID_SysMouse     DI8DEVTYPE_MOUSE. Always present; reads zeros (the game takes the cursor
+ *                     from GetCursorPos), and Acquire always succeeds.
  *
  * A device reports the data format the game gave to SetDataFormat. Objects are placed by byte
  * offset, as in c_dfDIKeyboard and DIJOYSTATE:
@@ -57,6 +59,7 @@ static const di_guid G_IDI8A       = { 0xBF798030u, 0x483A, 0x4DA2, { 0xAA, 0x99
 static const di_guid G_IDID8A      = { 0x54D41080u, 0xDC15, 0x4833, { 0xA4, 0x1B, 0x74, 0x8F, 0x73, 0xA3, 0x81, 0x79 } };
 static const di_guid G_SYSKEYBOARD = { 0x6F1D2B61u, 0xD5A0, 0x11CF, { 0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00 } };
 static const di_guid G_JOYSTICK    = { 0x6F1D2B70u, 0xD5A0, 0x11CF, { 0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00 } };
+static const di_guid G_SYSMOUSE    = { 0x6F1D2B60u, 0xD5A0, 0x11CF, { 0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00 } };
 
 /* ---- keys ----------------------------------------------------------------- */
 
@@ -153,12 +156,15 @@ static HRESULT unsupported(const char *api)
 
 /* ---- objects ---------------------------------------------------------------- */
 
+enum { DI_KIND_KEYBOARD, DI_KIND_PAD, DI_KIND_MOUSE };
+
 typedef struct di_obj {
     uint32_t ofs, type;          /* DIOBJECTDATAFORMAT dwOfs and dwType */
 } di_obj;
 
 typedef struct di_device {
-    int keyboard;                /* 1: keyboard, 0: gamepad */
+    int keyboard;                /* 1: keyboard */
+    int mouse;                   /* 1: system mouse; with keyboard == 0 and mouse == 0 it is the gamepad */
     int acquired;
     int has_format;
     uint32_t data_size;          /* bytes per GetDeviceState, from SetDataFormat */
@@ -195,29 +201,46 @@ static HRESULT di_qi(GPTR This, GPTR riid, GPTR ppv, uint32_t kind, const di_gui
 /* ---- device enumeration ----------------------------------------------------- */
 
 /* A DIDEVICEINSTANCE for the keyboard or the gamepad, written into b (580 bytes). */
-static void fill_instance(uint8_t *b, int keyboard)
+static const char *kind_name(int kind)
+{
+    return kind == DI_KIND_KEYBOARD ? "keyboard" : kind == DI_KIND_MOUSE ? "mouse" : "gamepad";
+}
+
+static int kind_of(const di_device *d)
+{
+    return d->keyboard ? DI_KIND_KEYBOARD : d->mouse ? DI_KIND_MOUSE : DI_KIND_PAD;
+}
+
+/* The gamepad is the only device whose state depends on a pad being attached. */
+static int is_pad(const di_device *d)
+{
+    return kind_of(d) == DI_KIND_PAD;
+}
+
+static void fill_instance(uint8_t *b, int kind)
 {
     memset(b, 0, DIDEVICEINSTANCE_SIZE);
     st32(b, 0, DIDEVICEINSTANCE_SIZE);
-    const di_guid *g = keyboard ? &G_SYSKEYBOARD : &G_JOYSTICK;
+    const di_guid *g = kind == DI_KIND_KEYBOARD ? &G_SYSKEYBOARD : kind == DI_KIND_MOUSE ? &G_SYSMOUSE : &G_JOYSTICK;
     memcpy(b + 4, g, 16);
     memcpy(b + 20, g, 16);
-    st32(b, 36, keyboard ? DI8DEVTYPE_KEYBOARD : DI8DEVTYPE_GAMEPAD);
-    const char *name = keyboard ? "Keyboard" : "Gamepad";
+    st32(b, 36, kind == DI_KIND_KEYBOARD ? DI8DEVTYPE_KEYBOARD
+                 : kind == DI_KIND_MOUSE ? DI8DEVTYPE_MOUSE : DI8DEVTYPE_GAMEPAD);
+    const char *name = kind == DI_KIND_KEYBOARD ? "Keyboard" : kind == DI_KIND_MOUSE ? "Mouse" : "Gamepad";
     size_t n = strlen(name);
     memcpy(b + 40, name, n);
     memcpy(b + 300, name, n);
     st16(b, 576, 1);                              /* generic desktop page */
-    st16(b, 578, keyboard ? 6 : 5);               /* keyboard, gamepad */
+    st16(b, 578, kind == DI_KIND_KEYBOARD ? 6 : kind == DI_KIND_MOUSE ? 2 : 5);   /* keyboard, mouse, gamepad */
 }
 
 /* Calls the guest enumeration callback with one device. Returns 1 to keep enumerating. */
-static int call_enum(GPTR fn, GPTR pvref, int keyboard)
+static int call_enum(GPTR fn, GPTR pvref, int kind)
 {
     GPTR buf = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, DIDEVICEINSTANCE_SIZE);
     if (!buf) return 1;
     uint8_t *b = d3d9_gmem(buf, DIDEVICEINSTANCE_SIZE);
-    if (b) fill_instance(b, keyboard);
+    if (b) fill_instance(b, kind);
     uint32_t args[2] = { buf, pvref };
     DWORD r = vt3s_call_guest_nested(fn, args, 2);
     HeapFree(GetProcessHeap(), 0, buf);
@@ -347,11 +370,15 @@ HRESULT WINAPI IDirectInput8A_CreateDevice(GPTR This, GPTR rguid, GPTR lplpDirec
     put32(lplpDirectInputDevice, 0);
     if (!is_root(This) || !rguid || !lplpDirectInputDevice) return DIERR_INVALIDPARAM;
     if (pUnkOuter) return DIERR_NOAGGREGATION;
-    int kb = guid_is(rguid, &G_SYSKEYBOARD);
-    if (!kb && !(guid_is(rguid, &G_JOYSTICK) && vt3_input_pad_connected())) return DIERR_DEVICENOTREG;
+    int kind;
+    if (guid_is(rguid, &G_SYSKEYBOARD)) kind = DI_KIND_KEYBOARD;
+    else if (guid_is(rguid, &G_SYSMOUSE)) kind = DI_KIND_MOUSE;
+    else if (guid_is(rguid, &G_JOYSTICK) && vt3_input_pad_connected()) kind = DI_KIND_PAD;
+    else return DIERR_DEVICENOTREG;
     di_device *d = calloc(1, sizeof *d);
     if (!d) return DIERR_OUTOFMEMORY;
-    d->keyboard = kb;
+    d->keyboard = kind == DI_KIND_KEYBOARD;
+    d->mouse = kind == DI_KIND_MOUSE;
     d->lo = 0;
     d->hi = 65535;
     tables_init();
@@ -360,7 +387,7 @@ HRESULT WINAPI IDirectInput8A_CreateDevice(GPTR This, GPTR rguid, GPTR lplpDirec
         free(d);
         return DIERR_OUTOFMEMORY;
     }
-    VT3_INFO("IDirectInput8A::CreateDevice: %s at 0x%08x", kb ? "keyboard" : "gamepad", obj);
+    VT3_INFO("IDirectInput8A::CreateDevice: %s at 0x%08x", kind_name(kind), obj);
     put32(lplpDirectInputDevice, obj);
     return DI_OK;
 }
@@ -371,10 +398,12 @@ HRESULT WINAPI IDirectInput8A_EnumDevices(GPTR This, DWORD dwDevType, GPTR lpCal
     (void)dwFlags;                                    /* every device listed here is attached */
     int all = dwDevType == DI8DEVCLASS_ALL;
     int want_kb = all || dwDevType == DI8DEVCLASS_KEYBOARD || dwDevType == DI8DEVTYPE_KEYBOARD;
+    int want_mouse = all || dwDevType == DI8DEVCLASS_POINTER || dwDevType == DI8DEVTYPE_MOUSE;
     int want_pad = all || dwDevType == DI8DEVCLASS_GAMECTRL || dwDevType == DI8DEVTYPE_GAMEPAD ||
                    dwDevType == DI8DEVTYPE_JOYSTICK;
-    if (want_kb && !call_enum(lpCallback, pvRef, 1)) return DI_OK;
-    if (want_pad && vt3_input_pad_connected()) call_enum(lpCallback, pvRef, 0);
+    if (want_kb && !call_enum(lpCallback, pvRef, DI_KIND_KEYBOARD)) return DI_OK;
+    if (want_mouse && !call_enum(lpCallback, pvRef, DI_KIND_MOUSE)) return DI_OK;
+    if (want_pad && vt3_input_pad_connected()) call_enum(lpCallback, pvRef, DI_KIND_PAD);
     return DI_OK;
 }
 
@@ -444,11 +473,13 @@ HRESULT WINAPI IDirectInputDevice8A_GetCapabilities(GPTR This, GPTR lpDIDevCaps)
     uint8_t c[DIDEVCAPS_SIZE];
     memset(c, 0, sizeof c);
     st32(c, 0, size);
-    st32(c, 4, DIDC_ATTACHED | (d->keyboard ? 0u : DIDC_POLLEDDEVICE));
-    st32(c, 8, d->keyboard ? DI8DEVTYPE_KEYBOARD : DI8DEVTYPE_GAMEPAD);
-    st32(c, 12, d->keyboard ? 0u : 7u);              /* axes */
-    st32(c, 16, d->keyboard ? 256u : 11u);           /* buttons */
-    st32(c, 20, d->keyboard ? 0u : 1u);              /* POVs */
+    int kind = kind_of(d);
+    st32(c, 4, DIDC_ATTACHED | (kind == DI_KIND_PAD ? DIDC_POLLEDDEVICE : 0u));
+    st32(c, 8, kind == DI_KIND_KEYBOARD ? DI8DEVTYPE_KEYBOARD
+                : kind == DI_KIND_MOUSE ? DI8DEVTYPE_MOUSE : DI8DEVTYPE_GAMEPAD);
+    st32(c, 12, kind == DI_KIND_PAD ? 7u : kind == DI_KIND_MOUSE ? 3u : 0u);      /* axes */
+    st32(c, 16, kind == DI_KIND_KEYBOARD ? 256u : kind == DI_KIND_MOUSE ? 8u : 11u);   /* buttons */
+    st32(c, 20, kind == DI_KIND_PAD ? 1u : 0u);      /* POVs */
     memcpy(out, c, sizeof c);
     return DI_OK;
 }
@@ -536,10 +567,10 @@ HRESULT WINAPI IDirectInputDevice8A_Acquire(GPTR This)
 {
     di_device *d = dev_of(This);
     if (!d) return DIERR_INVALIDPARAM;
-    if (!d->keyboard && !vt3_input_pad_connected()) return DIERR_INPUTLOST;
+    if (is_pad(d) && !vt3_input_pad_connected()) return DIERR_INPUTLOST;
     if (d->acquired) return DI_NOEFFECT;
     d->acquired = 1;
-    VT3_INFO("IDirectInputDevice8A::Acquire: %s", d->keyboard ? "keyboard" : "gamepad");
+    VT3_INFO("IDirectInputDevice8A::Acquire: %s", kind_name(kind_of(d)));
     return DI_OK;
 }
 
@@ -558,12 +589,12 @@ HRESULT WINAPI IDirectInputDevice8A_GetDeviceState(GPTR This, DWORD cbData, GPTR
     if (!d) return DIERR_INVALIDPARAM;
     if (!d->acquired) return DIERR_NOTACQUIRED;
     if (!d->has_format || cbData != d->data_size || !lpvData) return DIERR_INVALIDPARAM;
-    if (!d->keyboard && !vt3_input_pad_connected()) return DIERR_INPUTLOST;
+    if (is_pad(d) && !vt3_input_pad_connected()) return DIERR_INPUTLOST;
     uint8_t *buf = d3d9_gmem(lpvData, cbData);
     if (!buf) return DIERR_INVALIDPARAM;
     memset(buf, 0, cbData);
     if (d->keyboard) fill_keyboard(d, buf, cbData);
-    else fill_pad(d, buf, cbData);
+    else if (!d->mouse) fill_pad(d, buf, cbData);     /* the mouse reads zeros */
     static int said_key;                 /* first key-down seen by the game, for diagnosis */
     if (!said_key && d->keyboard) {
         for (uint32_t i = 0; i < cbData; i++) {
@@ -638,7 +669,7 @@ HRESULT WINAPI IDirectInputDevice8A_SetDataFormat(GPTR This, GPTR lpdf)
     d->data_size = data_size;
     d->has_format = 1;
     VT3_INFO("IDirectInputDevice8A::SetDataFormat: %s, %u objects, %u bytes",
-             d->keyboard ? "keyboard" : "gamepad", (unsigned)nobj, (unsigned)data_size);
+             kind_name(kind_of(d)), (unsigned)nobj, (unsigned)data_size);
     return DI_OK;
 }
 
@@ -669,7 +700,7 @@ HRESULT WINAPI IDirectInputDevice8A_GetDeviceInfo(GPTR This, GPTR pdidi)
     uint8_t *out = d3d9_gmem(pdidi, size);
     if (!out || size < 4) return DIERR_INVALIDPARAM;
     uint8_t full[DIDEVICEINSTANCE_SIZE];
-    fill_instance(full, d->keyboard);
+    fill_instance(full, kind_of(d));
     memcpy(out, full, size < DIDEVICEINSTANCE_SIZE ? size : DIDEVICEINSTANCE_SIZE);
     st32(out, 0, size);                              /* dwSize is the caller's */
     return DI_OK;
@@ -727,7 +758,7 @@ HRESULT WINAPI IDirectInputDevice8A_Poll(GPTR This)
     di_device *d = dev_of(This);
     if (!d) return DIERR_INVALIDPARAM;
     if (!d->acquired) return DIERR_NOTACQUIRED;
-    return d->keyboard ? DI_NOEFFECT : DI_OK;        /* the keyboard is not a polled device */
+    return (d->keyboard || d->mouse) ? DI_NOEFFECT : DI_OK;   /* keyboard and mouse are not polled devices */
 }
 
 HRESULT WINAPI IDirectInputDevice8A_SendDeviceData(GPTR This, DWORD cbObjectData, GPTR rgdod, GPTR pdwInOut,
