@@ -43,23 +43,25 @@ static void *timer_main(void *arg)
     for (;;) {
         uint32_t now = vt3s_now_ms();
 
-        /* Fire what is due. A callback runs guest code, so it runs with the lock held. */
+        /* Fire what is due. A callback runs guest code, so it runs with the lock held. The slot
+         * is settled before the callback runs: a periodic timer has its next deadline set, and a
+         * one-shot timer is switched off. Then the callback may kill this timer or re-arm into the
+         * same slot. The loop never reads the slot again after the callback, so it cannot switch
+         * off a timer that the callback just re-armed. */
         for (int i = 0; i < VT3_MAX_TIMERS; i++) {
             struct vt3_timer *t = &timers[i];
             if (!t->active || (int32_t)(now - t->next) < 0) continue;
-            if (t->flags & (TIME_CALLBACK_EVENT_SET | TIME_CALLBACK_EVENT_PULSE)) {
-                HANDLE h = t->callback;
-                if (t->flags & TIME_CALLBACK_EVENT_PULSE) PulseEvent(h);
+            struct vt3_timer f = *t;
+            if (f.flags & TIME_PERIODIC) t->next += f.period ? f.period : 1u;
+            else t->active = 0;
+            if (f.flags & (TIME_CALLBACK_EVENT_SET | TIME_CALLBACK_EVENT_PULSE)) {
+                HANDLE h = f.callback;
+                if (f.flags & TIME_CALLBACK_EVENT_PULSE) PulseEvent(h);
                 else SetEvent(h);
-            } else if (t->callback) {
+            } else if (f.callback) {
                 /* TimeProc(uTimerID, uMsg, dwUser, dw1, dw2), stdcall. */
-                uint32_t args[5] = {t->id, 0, t->user, 0, 0};
-                vt3s_call_guest_current(t->callback, args, 5);
-            }
-            if (t->flags & TIME_PERIODIC) {
-                t->next += t->period ? t->period : 1u;
-            } else {
-                t->active = 0;
+                uint32_t args[5] = {f.id, 0, f.user, 0, 0};
+                vt3s_call_guest_current(f.callback, args, 5);
             }
         }
 
