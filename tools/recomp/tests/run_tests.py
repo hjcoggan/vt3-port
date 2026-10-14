@@ -52,6 +52,7 @@ VARIANTS = {
                     ('rep_O2', ['-O2', '-minline-all-stringops', '-mstringop-strategy=rep_byte'])],
     't12_bits': [('O0', ['-O0']), ('O2', ['-O2'])],
     't13_calls': [('O0', ['-O0']), ('O2', ['-O2'])],
+    't16_entry': [('O0', ['-O0']), ('O2', ['-O2'])],
     't15_mmx': [('O0', ['-O0', '-mmmx', '-msse']), ('O2', ['-O2', '-mmmx', '-msse'])],
     't14_sim': [('sse_O2', ['-O2', '-msse2', '-mfpmath=sse']),
                 ('x87_O2', ['-O2', '-mfpmath=387'])],

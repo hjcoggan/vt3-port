@@ -1895,6 +1895,12 @@ def gen_function(an, entry, hard):
     order = sorted(seen)
     gen = FnGen(an, entry)
     out = [f"void {fname(entry)}(vt3_cpu *c) {{", "  VT_LOAD();", "  VT_FLAGS();"]
+    # The labels are emitted in address order, but a body can hold blocks below its entry
+    # (reached by a jump from the entry). Control must start at the entry, not at order[0].
+    if entry not in seen:
+        raise TranslateError(f"internal: entry {entry:#x} is not in its own body")
+    if order[0] != entry:
+        out.append(f"goto L_{entry:x};")
     unsup = []
     for idx, a in enumerate(order):
         ins = seen[a]
