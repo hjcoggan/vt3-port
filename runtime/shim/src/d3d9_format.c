@@ -5,7 +5,20 @@
  */
 #include "d3d9_internal.h"
 
+#include <math.h>
 #include <string.h>
+
+/* One 16-bit IEEE half at p, as an 8-bit colour channel: clamped to 0..1, rounded. */
+static uint8_t half_to_u8(const uint8_t *p)
+{
+    uint32_t h = (uint32_t)p[0] | ((uint32_t)p[1] << 8);
+    uint32_t sign = (h >> 15) & 1u, exp = (h >> 10) & 31u, man = h & 1023u;
+    if (exp == 31u) return (sign || man) ? 0 : 255;          /* infinity clamps, NaN is 0 */
+    float f = exp == 0 ? ldexpf((float)man, -24) : ldexpf((float)(man | 1024u), (int)exp - 25);
+    if (sign) return 0;
+    if (f >= 1.0f) return 255;
+    return (uint8_t)(f * 255.0f + 0.5f);
+}
 
 int d3d9_fmt_is_dxt(uint32_t fmt)
 {
@@ -176,8 +189,17 @@ int d3d9_to_bgra(uint32_t fmt, const uint8_t *src, uint32_t pitch, uint32_t w, u
                 out[x * 4 + 3] = (c & 0x8000u) ? 255 : 0;
             }
             break;
+        case D3DFMT_CHK_A16B16G16R16F:
+            for (uint32_t x = 0; x < w; x++) {
+                const uint8_t *p = row + 8 * (size_t)x;   /* R, G, B, A as 16-bit halves */
+                out[x * 4 + 0] = half_to_u8(p + 4);
+                out[x * 4 + 1] = half_to_u8(p + 2);
+                out[x * 4 + 2] = half_to_u8(p + 0);
+                out[x * 4 + 3] = half_to_u8(p + 6);
+            }
+            break;
         default:
-            return -1;   /* floats and depth formats are not uploaded */
+            return -1;   /* depth and other float formats are not uploaded */
         }
     }
     return 0;

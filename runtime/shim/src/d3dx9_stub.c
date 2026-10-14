@@ -172,24 +172,189 @@ HRESULT WINAPI D3DXCreateTexture(GPTR device, UINT width, UINT height, UINT mipl
     return S_OK;
 }
 
+/* ---- DDS textures ---------------------------------------------------------------
+ * The game's textures are DDS files in guest memory. The header gives the size, the mip count,
+ * the format and the face count; the data follows the 128-byte header (4-byte magic plus the
+ * 124-byte DDS_HEADER). Mips are stored largest first, and a cube map stores all mips of each
+ * face in turn. The loader takes the face count from the data, not from the cube flag: the
+ * game's files set the cube flag on single 2-D textures. */
+#define D3DX_DEFAULT_U 0xFFFFFFFFu
+#define D3DX_FROM_FILE_U 0xFFFFFFFDu
+#define DDS_MAGIC 0x20534444u          /* "DDS " */
+#define DDS_TOTAL_HEADER 128u
+#define DDS_MAX_MIPS 32u
+#define DDSD_MIPMAPCOUNT 0x00020000u
+#define DDPF_ALPHAPIXELS 0x00000001u
+#define DDPF_ALPHA 0x00000002u
+#define DDPF_FOURCC 0x00000004u
+#define DDPF_RGB 0x00000040u
+#define DDSCAPS2_CUBEMAP 0x00000200u
+#define DDS_FOURCC(a, b, c, d) ((uint32_t)(a) | ((uint32_t)(b) << 8) | ((uint32_t)(c) << 16) | ((uint32_t)(d) << 24))
+#define DDS_FCC_DXT1 DDS_FOURCC('D', 'X', 'T', '1')
+#define DDS_FCC_DXT3 DDS_FOURCC('D', 'X', 'T', '3')
+#define DDS_FCC_DXT5 DDS_FOURCC('D', 'X', 'T', '5')
+#define DDS_FCC_DX10 DDS_FOURCC('D', 'X', '1', '0')
+#define DDS_FCC_D3DFMT_A16B16G16R16F 113u   /* a D3DFORMAT value used as the FourCC */
+
+typedef struct dds_info {
+    uint32_t w, h, mips, faces, fmt;
+} dds_info;
+
+typedef struct dds_want {   /* the caller's request; D3DX_DEFAULT and 0 mean "from the file" */
+    uint32_t w, h, mips, fmt;
+} dds_want;
+
+static uint32_t le32(const uint8_t *p)
+{
+    uint32_t v;
+    memcpy(&v, p, 4);
+    return v;
+}
+
+static uint32_t mip_dim(uint32_t d, uint32_t level)
+{
+    uint32_t v = d >> level;
+    return v ? v : 1u;
+}
+
+/* Reads the header and checks the data. Returns 0, or -1 with *why set. */
+static int dds_read(const uint8_t *d, uint32_t n, dds_info *o, const char **why)
+{
+    if (n < DDS_TOTAL_HEADER || le32(d) != DDS_MAGIC || le32(d + 4) != 124u) {
+        *why = "not a DDS file (other image formats are not supported)";
+        return -1;
+    }
+    uint32_t flags = le32(d + 8);
+    o->h = le32(d + 12);
+    o->w = le32(d + 16);
+    o->mips = (flags & DDSD_MIPMAPCOUNT) ? le32(d + 28) : 1u;
+    if (o->mips == 0) o->mips = 1;
+    if (o->w == 0 || o->h == 0) { *why = "DDS size is zero"; return -1; }
+    if (o->mips > DDS_MAX_MIPS) { *why = "DDS mip count is out of range"; return -1; }
+    if (le32(d + 76) != 32u) { *why = "DDS pixel format header has the wrong size"; return -1; }
+    uint32_t pflags = le32(d + 80), fcc = le32(d + 84), bits = le32(d + 88);
+    uint32_t rmask = le32(d + 92), gmask = le32(d + 96), bmask = le32(d + 100), amask = le32(d + 104);
+    if (pflags & DDPF_FOURCC) {
+        switch (fcc) {
+        case DDS_FCC_DXT1: o->fmt = D3DFMT_CHK_DXT1; break;
+        case DDS_FCC_DXT3: o->fmt = D3DFMT_CHK_DXT3; break;
+        case DDS_FCC_DXT5: o->fmt = D3DFMT_CHK_DXT5; break;
+        case DDS_FCC_D3DFMT_A16B16G16R16F: o->fmt = D3DFMT_CHK_A16B16G16R16F; break;
+        case DDS_FCC_DX10: *why = "DX10 DDS headers are not supported"; return -1;
+        default: *why = "unsupported DDS FourCC"; return -1;
+        }
+    } else if (pflags & DDPF_RGB) {
+        if (bits != 32u || rmask != 0x00ff0000u || gmask != 0x0000ff00u || bmask != 0x000000ffu) {
+            *why = "only 32-bit ARGB and XRGB DDS files are supported";
+            return -1;
+        }
+        if ((pflags & DDPF_ALPHAPIXELS) && amask == 0xff000000u) o->fmt = D3DFMT_CHK_A8R8G8B8;
+        else if (amask == 0) o->fmt = D3DFMT_CHK_X8R8G8B8;
+        else { *why = "unsupported DDS alpha mask"; return -1; }
+    } else if ((pflags & DDPF_ALPHA) && bits == 8u && amask == 0xffu) {
+        o->fmt = D3DFMT_CHK_A8;
+    } else {
+        *why = "unsupported DDS pixel format";
+        return -1;
+    }
+    /* Faces: all six if the data holds six, one if it holds one. */
+    uint64_t one_face = 0;
+    for (uint32_t l = 0; l < o->mips; l++) {
+        uint32_t pitch = 0;
+        uint32_t bytes = d3d9_level_layout(o->fmt, mip_dim(o->w, l), mip_dim(o->h, l), &pitch);
+        if (bytes == 0) { *why = "DDS format has no layout"; return -1; }
+        one_face += bytes;
+    }
+    uint64_t have = (uint64_t)n - DDS_TOTAL_HEADER;
+    uint32_t cube_flag = (le32(d + 112) & DDSCAPS2_CUBEMAP) ? 6u : 1u;
+    if (cube_flag == 6u && have >= 6u * one_face) o->faces = 6u;
+    else if (have >= one_face) o->faces = 1u;
+    else { *why = "DDS data is shorter than the header says"; return -1; }
+    return 0;
+}
+
+/* Creates a texture (a cube texture when cube is set) from DDS data in guest memory, copies its
+ * faces and mips into the texture's storage, and uploads the first level to the renderer. The
+ * caller gets the object with one reference. Returns 0, or -1 with *why set. */
+static int dds_texture(GPTR device, GPTR src, UINT size, int cube, const dds_want *want, UINT usage, UINT pool,
+                       GPTR *out, const char **why)
+{
+    const uint8_t *d = size ? d3d9_gmem(src, size) : NULL;
+    if (!d) { *why = "the source data is not in guest memory"; return -1; }
+    dds_info f;
+    if (dds_read(d, size, &f, why) < 0) return -1;
+    if (cube && f.faces != 6) { *why = "the file holds one face, not a cube map of six"; return -1; }
+    if (!cube && f.faces != 1) { *why = "the file holds a cube map: use D3DXCreateCubeTextureFromFileInMemory"; return -1; }
+    uint32_t levels = f.mips;
+    if (want) {
+        if (want->w != 0 && want->w != D3DX_DEFAULT_U && want->w != f.w) {
+            *why = "the requested width differs from the file (resizing is not implemented)";
+            return -1;
+        }
+        if (want->h != 0 && want->h != D3DX_DEFAULT_U && want->h != f.h) {
+            *why = "the requested height differs from the file (resizing is not implemented)";
+            return -1;
+        }
+        if (want->mips != 0 && want->mips != D3DX_DEFAULT_U && want->mips != D3DX_FROM_FILE_U && want->mips < levels)
+            levels = want->mips;
+        if (want->fmt != 0 && want->fmt != D3DX_FROM_FILE_U && want->fmt != f.fmt)
+            VT3_INFO("D3DX: requested format %u is not converted; the texture keeps the file's format %u",
+                     (unsigned)want->fmt, (unsigned)f.fmt);
+    }
+    GPTR obj = d3d9_create_texture_obj(device, cube ? 1u : 0u, f.w, f.h, levels, f.fmt, usage, pool);
+    if (!obj) { *why = "no memory for the texture"; return -1; }
+    d3d9_texture *t = d3d9_texture_of(obj);
+    uint32_t off = DDS_TOTAL_HEADER;
+    for (uint32_t face = 0; face < f.faces; face++) {
+        for (uint32_t l = 0; l < f.mips; l++) {
+            uint32_t pitch = 0;
+            uint32_t bytes = d3d9_level_layout(f.fmt, mip_dim(f.w, l), mip_dim(f.h, l), &pitch);
+            if (l < t->levels) {
+                d3d9_level *lv = &t->lv[face][l];
+                void *dst = d3d9_gmem(lv->data, lv->bytes);
+                if (dst && bytes <= lv->bytes) memcpy(dst, d + off, bytes);
+            }
+            off += bytes;
+        }
+    }
+    if (t->gl) {
+        d3d9_level *lv = &t->lv[0][0];
+        d3d9_gpu_tex_upload(t->gl, d3d9_gmem(lv->data, lv->bytes), lv->pitch, lv->w, lv->h, t->fmt);
+    }
+    *out = obj;
+    return 0;
+}
+
 HRESULT WINAPI D3DXCreateTextureFromFileInMemoryEx(GPTR device, GPTR srcdata, UINT srcdatasize, UINT width,
                                                    UINT height, UINT miplevels, DWORD usage, UINT format,
                                                    UINT pool, DWORD filter, DWORD mipfilter, DWORD colorkey,
                                                    GPTR srcinfo, GPTR palette, GPTR texture)
 {
-    (void)srcdata; (void)srcdatasize; (void)width; (void)height; (void)miplevels; (void)usage;
-    (void)format; (void)pool; (void)filter; (void)mipfilter; (void)colorkey; (void)srcinfo; (void)palette;
-    note_unavailable("D3DXCreateTextureFromFileInMemoryEx");
-    GPTR t = d3d9_new_stub(D3D9_KIND_TEXTURE, device);
-    vt3s_store_u32(texture, t);
+    (void)filter; (void)mipfilter; (void)colorkey; (void)srcinfo; (void)palette;
+    VT3_INFO("D3DXCreateTextureFromFileInMemoryEx: %u bytes, request %ux%u, %u mips, format %u, usage 0x%x, pool %u",
+             (unsigned)srcdatasize, (unsigned)width, (unsigned)height, (unsigned)miplevels, (unsigned)format,
+             (unsigned)usage, (unsigned)pool);
+    dds_want want = { width, height, miplevels, format };
+    GPTR obj = 0;
+    const char *why = NULL;
+    if (dds_texture(device, srcdata, srcdatasize, 0, &want, usage, pool, &obj, &why) == 0) {
+        put32(texture, obj);
+        return S_OK;
+    }
+    VT3_WARN("D3DXCreateTextureFromFileInMemoryEx: %s; returning a stub texture", why);
+    put32(texture, d3d9_new_stub(D3D9_KIND_TEXTURE, device));
     return E_FAIL_D3DX;
 }
 
 HRESULT WINAPI D3DXCreateCubeTextureFromFileInMemory(GPTR device, GPTR srcdata, UINT srcdatasize, GPTR texture)
 {
-    (void)srcdata; (void)srcdatasize;
-    note_unavailable("D3DXCreateCubeTextureFromFileInMemory");
-    GPTR t = d3d9_new_stub(D3D9_KIND_CUBETEXTURE, device);
-    vt3s_store_u32(texture, t);
+    GPTR obj = 0;
+    const char *why = NULL;
+    if (dds_texture(device, srcdata, srcdatasize, 1, NULL, 0, 0, &obj, &why) == 0) {
+        put32(texture, obj);
+        return S_OK;
+    }
+    VT3_WARN("D3DXCreateCubeTextureFromFileInMemory: %s; returning a stub cube texture", why);
+    put32(texture, d3d9_new_stub(D3D9_KIND_CUBETEXTURE, device));
     return E_FAIL_D3DX;
 }
