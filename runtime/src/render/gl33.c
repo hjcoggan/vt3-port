@@ -330,7 +330,15 @@ static int gl_tex_create(vt3_tex *out, int w, int h, vt3_texfmt fmt)
     for (int i = 0; i < VT3_MAX_TEX; i++) {
         if (!g.tex[i].used) { slot = i; break; }
     }
-    if (slot < 0 || w <= 0 || h <= 0) return -1;
+    if (slot < 0) {
+        static int warned_full;
+        if (!warned_full) {
+            warned_full = 1;
+            VT3_WARN("GL texture slots full (%d): new textures have no handle and draw white", VT3_MAX_TEX);
+        }
+        return -1;
+    }
+    if (w <= 0 || h <= 0) return -1;
 
     GLuint id;
     p_glGenTextures(1, &id);

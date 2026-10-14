@@ -87,7 +87,11 @@ GPTR d3d9_create_texture_obj(GPTR dev, uint32_t cube, uint32_t w, uint32_t h, ui
             if (lh == 0) lh = 1;
             uint32_t pitch = 0;
             uint32_t bytes = d3d9_level_layout(fmt, lw, lh, &pitch);
-            if (bytes == 0) goto fail;
+            if (bytes == 0) {
+                VT3_WARN("CreateTexture: format 0x%x has no layout (%ux%u); texture not created", (unsigned)fmt,
+                         (unsigned)w, (unsigned)h);
+                goto fail;
+            }
             GPTR data = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes);
             if (!data) goto fail;
             t->lv[f][l].data = data;

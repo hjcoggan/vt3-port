@@ -91,7 +91,14 @@ vt3_tex d3d9_gpu_tex_create(uint32_t w, uint32_t h, uint32_t fmt)
     default: tf = VT3_TEXFMT_A8R8G8B8; break;   /* everything else is converted to BGRA */
     }
     vt3_tex t = 0;
-    if (vt3_gfx_tex_create(&t, (int)w, (int)h, tf) != 0) return 0;
+    if (vt3_gfx_tex_create(&t, (int)w, (int)h, tf) != 0) {
+        static int warned_create;
+        if (!warned_create) {
+            warned_create = 1;
+            VT3_WARN("texture %ux%u fmt 0x%x: renderer could not create it (draws white)", (unsigned)w, (unsigned)h, (unsigned)fmt);
+        }
+        return 0;
+    }
     return t;
 }
 
