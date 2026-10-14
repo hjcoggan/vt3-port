@@ -120,3 +120,35 @@ void d3d9_gpu_tex_upload(vt3_tex t, const uint8_t *src, uint32_t pitch, uint32_t
         vt3_gfx_tex_upload(t, bgra, (int)(w * 4), (int)w, (int)h);
     free(bgra);
 }
+
+/* Cube maps are colour only: the renderer has no alpha-only cube. */
+vt3_tex d3d9_gpu_cube_create(uint32_t size, uint32_t fmt)
+{
+    if (!g_gpu_ok || size == 0 || fmt == D3DFMT_CHK_A8) return 0;
+    vt3_texfmt tf = fmt == D3DFMT_CHK_X8R8G8B8 ? VT3_TEXFMT_X8R8G8B8 : VT3_TEXFMT_A8R8G8B8;
+    vt3_tex t = 0;
+    if (vt3_gfx_cube_create(&t, (int)size, tf) != 0) {
+        static int warned_cube;
+        if (!warned_cube) {
+            warned_cube = 1;
+            VT3_WARN("cube texture %u fmt 0x%x: renderer could not create it (reads as zero)", (unsigned)size,
+                     (unsigned)fmt);
+        }
+        return 0;
+    }
+    return t;
+}
+
+void d3d9_gpu_cube_upload(vt3_tex t, uint32_t face, const uint8_t *src, uint32_t pitch, uint32_t size, uint32_t fmt)
+{
+    if (!g_gpu_ok || !t || !src || size == 0) return;
+    if (fmt == D3DFMT_CHK_A8R8G8B8 || fmt == D3DFMT_CHK_X8R8G8B8) {
+        vt3_gfx_cube_upload(t, (int)face, src, (int)pitch, (int)size);
+        return;
+    }
+    uint8_t *bgra = malloc((size_t)size * size * 4);
+    if (!bgra) return;
+    if (d3d9_to_bgra(fmt, src, pitch, size, size, bgra) == 0)
+        vt3_gfx_cube_upload(t, (int)face, bgra, (int)(size * 4), (int)size);
+    free(bgra);
+}

@@ -13,6 +13,7 @@
 #include <float.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define PRIM_TRIANGLELIST 4u
 #define PRIM_TRIANGLESTRIP 5u
@@ -30,7 +31,12 @@
 #define DT_FLOAT1 0u
 #define DT_FLOAT4 3u
 #define DT_D3DCOLOR 4u
+#define DT_UBYTE4 5u
+#define DT_SHORT2 6u
+#define DT_SHORT4 7u
 #define DT_UBYTE4N 8u
+#define DT_SHORT2N 9u
+#define DT_SHORT4N 10u
 #define DU_POSITION 0u
 #define DU_NORMAL 3u
 #define DU_PSIZE 4u
@@ -74,6 +80,9 @@ static void decl_from_fvf(d3d9_decl *dc, uint32_t fvf)
     dc->stride[0] = off;
 }
 
+/* The element that layout_from_decl last refused, for the warning. */
+static uint32_t g_bad_type, g_bad_usage;
+
 /* Fills a renderer layout from a declaration. Returns 0, or -1 for a type the renderer lacks. */
 static int layout_from_decl(const d3d9_decl *dc, vt3_vlayout *lay, uint32_t stride, int *swap_colour)
 {
@@ -104,7 +113,18 @@ static int layout_from_decl(const d3d9_decl *dc, vt3_vlayout *lay, uint32_t stri
         } else if (type == DT_UBYTE4N) {
             a->components = 4;
             a->type = VT3_VT_UBYTE_NORM;
+        } else if (type == DT_UBYTE4) {
+            a->components = 4;
+            a->type = VT3_VT_UBYTE;
+        } else if (type == DT_SHORT2 || type == DT_SHORT2N) {
+            a->components = 2;
+            a->type = type == DT_SHORT2 ? VT3_VT_SHORT : VT3_VT_SHORT_NORM;
+        } else if (type == DT_SHORT4 || type == DT_SHORT4N) {
+            a->components = 4;
+            a->type = type == DT_SHORT4 ? VT3_VT_SHORT : VT3_VT_SHORT_NORM;
         } else {
+            g_bad_type = type;
+            g_bad_usage = usage;
             return -1;
         }
     }
@@ -200,14 +220,52 @@ static void fill_textures(const d3d9_device *d, vt3_tex out[VT3_MAX_SAMPLERS])
         out[s] = 0;
         d3d9_texture *t = d3d9_texture_of(d->textures[s]);
         if (!t) continue;
-        if (t->faces == 6) {
-            static int warned_cube;
-            if (!warned_once(&warned_cube))
-                VT3_WARN("sampler %d: cube texture bound; using the zero texel (cube maps are not bound yet)", s);
-            out[s] = VT3_TEX_ZERO;
+        if (t->faces == 6) {                 /* a cube texture that failed to create reads as zero */
+            out[s] = t->gl ? t->gl : VT3_TEX_ZERO;
             continue;
         }
         out[s] = t->gl;
+    }
+}
+
+/* VT3_TRACE_DRAW=N logs the first N draws with at least VT3_TRACE_MIN primitives (default 0): the
+ * shaders, the first constants of each bank, and each bound sampler's texture. Sprites are small,
+ * so a minimum keeps the log on the 3D draws. It is for finding why a draw comes out dark. */
+static void trace_draw(const d3d9_device *d, const d3d9_draw_args *a, uint32_t nverts)
+{
+    static int limit = -1, min_prims, count;
+    static double after_s, first_s = -1.0;
+    if (limit < 0) {
+        const char *e = getenv("VT3_TRACE_DRAW");
+        const char *m = getenv("VT3_TRACE_MIN");
+        const char *t = getenv("VT3_TRACE_AFTER");
+        limit = e ? atoi(e) : 0;
+        min_prims = m ? atoi(m) : 0;
+        after_s = t ? atof(t) : 0.0;
+    }
+    if (count >= limit || a->prim_count < (uint32_t)min_prims) return;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    double now_s = (double)ts.tv_sec + ts.tv_nsec * 1e-9;
+    if (first_s < 0.0) first_s = now_s;
+    if (now_s - first_s < after_s) return;
+    count++;
+    VT3_INFO("draw %d: prim %u count %u verts %u vs 0x%x ps 0x%x", count, a->prim, a->prim_count, nverts,
+             d->vs, d->ps);
+    VT3_INFO("  psc c0 %g %g %g %g | c1 %g %g %g %g | c2 %g %g %g %g | c3 %g %g %g %g",
+             d->psc[0][0], d->psc[0][1], d->psc[0][2], d->psc[0][3],
+             d->psc[1][0], d->psc[1][1], d->psc[1][2], d->psc[1][3],
+             d->psc[2][0], d->psc[2][1], d->psc[2][2], d->psc[2][3],
+             d->psc[3][0], d->psc[3][1], d->psc[3][2], d->psc[3][3]);
+    VT3_INFO("  vsc c0 %g %g %g %g | c4 %g %g %g %g | c15 %g %g %g %g",
+             d->vsc[0][0], d->vsc[0][1], d->vsc[0][2], d->vsc[0][3],
+             d->vsc[4][0], d->vsc[4][1], d->vsc[4][2], d->vsc[4][3],
+             d->vsc[15][0], d->vsc[15][1], d->vsc[15][2], d->vsc[15][3]);
+    for (int s = 0; s < VT3_MAX_SAMPLERS; s++) {
+        d3d9_texture *t = d3d9_texture_of(d->textures[s]);
+        if (!t) continue;
+        VT3_INFO("  sampler %d: texture %ux%u fmt 0x%x faces %u gl %u", s, t->w, t->h, t->fmt, t->faces,
+                 (unsigned)t->gl);
     }
 }
 
@@ -357,7 +415,10 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     d3d9_shader *vsh = vh ? vh->data : NULL;
     d3d9_shader *psh = ph ? ph->data : NULL;
     if (!vsh || !vsh->translated || (d->ps && (!psh || !psh->translated))) {
-        if (!warned_once(&g_warn_no_prog)) VT3_WARN("draw: shader not translated (skipped)");
+        if (!warned_once(&g_warn_no_prog))
+            VT3_WARN("draw: shader not translated (skipped): vs 0x%x %s, ps 0x%x %s", d->vs,
+                     vsh ? (vsh->translated ? "translated" : "untranslated") : "missing", d->ps,
+                     d->ps ? (psh ? (psh->translated ? "translated" : "untranslated") : "missing") : "none");
         free(idx16);
         return S_OK;
     }
@@ -367,7 +428,8 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     vt3_vlayout lay;
     int swap = 0;
     if (layout_from_decl(dc, &lay, stride, &swap) != 0) {
-        if (!warned_once(&g_warn_layout)) VT3_WARN("draw: vertex element type not supported (skipped)");
+        if (!warned_once(&g_warn_layout))
+            VT3_WARN("draw: vertex element type %u (usage %u) not supported (skipped)", g_bad_type, g_bad_usage);
         free(idx16);
         return S_OK;
     }
@@ -401,6 +463,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     dd.psc = psc_copy;
     fill_textures(d, dd.samplers);
     fill_rstate(d, &dd.state);
+    trace_draw(d, a, nverts);
     vt3_gfx_draw_program(&dd);
 
     free(vcopy);

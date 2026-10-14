@@ -318,8 +318,12 @@ static int dds_texture(GPTR device, GPTR src, UINT size, int cube, const dds_wan
         }
     }
     if (t->gl) {
-        d3d9_level *lv = &t->lv[0][0];
-        d3d9_gpu_tex_upload(t->gl, d3d9_gmem(lv->data, lv->bytes), lv->pitch, lv->w, lv->h, t->fmt);
+        for (uint32_t face = 0; face < t->faces; face++) {
+            d3d9_level *lv = &t->lv[face][0];
+            const uint8_t *src = d3d9_gmem(lv->data, lv->bytes);
+            if (t->faces == 6) d3d9_gpu_cube_upload(t->gl, face, src, lv->pitch, lv->w, t->fmt);
+            else d3d9_gpu_tex_upload(t->gl, src, lv->pitch, lv->w, lv->h, t->fmt);
+        }
     }
     *out = obj;
     return 0;

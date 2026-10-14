@@ -119,6 +119,7 @@ typedef struct gl_tex {
     int w, h;
     vt3_texfmt fmt;
     int used;
+    int cube;                     /* GL_TEXTURE_CUBE_MAP rather than GL_TEXTURE_2D */
 } gl_tex;
 
 static struct {
@@ -126,6 +127,7 @@ static struct {
     GLuint fbo, fbo_color;
     GLuint white;                 /* 1x1 white, bound for untextured draws */
     GLuint zero;                  /* 1x1 zero texel, bound where a texture cannot be used (VT3_TEX_ZERO) */
+    GLuint zero_cube;             /* 1x1 black on each face, bound on a cube sampler with no cube texture */
     GLuint ebo, depth_rb;
     uint32_t attr_mask;           /* attribute locations currently enabled */
     float zero_consts[VT3_CONST_REGS * 4];
@@ -279,6 +281,13 @@ static int gl_init(int logical_w, int logical_h)
     p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
+    p_glGenTextures(1, &g.zero_cube);
+    p_glBindTexture(GL_TEXTURE_CUBE_MAP, g.zero_cube);
+    for (int f = 0; f < 6; f++)
+        p_glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &zero_px);
+    p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
     p_glGenFramebuffers(1, &g.fbo);
     p_glBindFramebuffer(GL_FRAMEBUFFER, g.fbo);
     p_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g.fbo_color, 0);
@@ -325,21 +334,25 @@ static void gl_shutdown(void)
     memset(&g, 0, sizeof g);
 }
 
+/* The first free texture slot, or -1 when the table is full. */
+static int gl_free_slot(void)
+{
+    for (int i = 0; i < VT3_MAX_TEX; i++) {
+        if (!g.tex[i].used) return i;
+    }
+    static int warned_full;
+    if (!warned_full) {
+        warned_full = 1;
+        VT3_WARN("GL texture slots full (%d): new textures have no handle and draw white", VT3_MAX_TEX);
+    }
+    return -1;
+}
+
 /* Handle = slot + 1, so 0 stays "no texture". */
 static int gl_tex_create(vt3_tex *out, int w, int h, vt3_texfmt fmt)
 {
-    int slot = -1;
-    for (int i = 0; i < VT3_MAX_TEX; i++) {
-        if (!g.tex[i].used) { slot = i; break; }
-    }
-    if (slot < 0) {
-        static int warned_full;
-        if (!warned_full) {
-            warned_full = 1;
-            VT3_WARN("GL texture slots full (%d): new textures have no handle and draw white", VT3_MAX_TEX);
-        }
-        return -1;
-    }
+    int slot = gl_free_slot();
+    if (slot < 0) return -1;
     if (w <= 0 || h <= 0) return -1;
 
     GLuint id;
@@ -365,6 +378,7 @@ static int gl_tex_create(vt3_tex *out, int w, int h, vt3_texfmt fmt)
     g.tex[slot].w = w;
     g.tex[slot].h = h;
     g.tex[slot].fmt = fmt;
+    g.tex[slot].cube = 0;
     g.tex[slot].used = 1;
     *out = (vt3_tex)(slot + 1);
     return 0;
@@ -372,7 +386,7 @@ static int gl_tex_create(vt3_tex *out, int w, int h, vt3_texfmt fmt)
 
 static void gl_tex_upload(vt3_tex t, const void *pixels, int pitch, int w, int h)
 {
-    if (t == 0 || t > VT3_MAX_TEX || !g.tex[t - 1].used) return;
+    if (t == 0 || t > VT3_MAX_TEX || !g.tex[t - 1].used || g.tex[t - 1].cube) return;
     gl_tex *tx = &g.tex[t - 1];
     if (w != tx->w || h != tx->h) return;   /* TODO: sub-rect uploads (UpdateTexture) */
     p_glBindTexture(GL_TEXTURE_2D, tx->id);
@@ -391,6 +405,43 @@ static void gl_tex_destroy(vt3_tex t)
     if (t == 0 || t > VT3_MAX_TEX || !g.tex[t - 1].used) return;
     p_glDeleteTextures(1, &g.tex[t - 1].id);
     g.tex[t - 1].used = 0;
+}
+
+/* A cube map: six square faces, level 0 only, BGRA like the 2D colour textures. */
+static int gl_cube_create(vt3_tex *out, int size, vt3_texfmt fmt)
+{
+    if (!out || size <= 0 || fmt == VT3_TEXFMT_A8) return -1;
+    int slot = gl_free_slot();
+    if (slot < 0) return -1;
+    GLuint id;
+    p_glGenTextures(1, &id);
+    p_glBindTexture(GL_TEXTURE_CUBE_MAP, id);
+    for (int f = 0; f < 6; f++)
+        p_glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, 0, GL_RGBA8, size, size, 0, GL_BGRA, GL_UNSIGNED_BYTE, NULL);
+    p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+    g.tex[slot].id = id;
+    g.tex[slot].w = size;
+    g.tex[slot].h = size;
+    g.tex[slot].fmt = fmt;
+    g.tex[slot].cube = 1;
+    g.tex[slot].used = 1;
+    *out = (vt3_tex)(slot + 1);
+    return 0;
+}
+
+static void gl_cube_upload(vt3_tex t, int face, const void *pixels, int pitch, int size)
+{
+    if (t == 0 || t > VT3_MAX_TEX || !g.tex[t - 1].used || !g.tex[t - 1].cube) return;
+    if (face < 0 || face >= 6 || !pixels || size != g.tex[t - 1].w) return;
+    p_glBindTexture(GL_TEXTURE_CUBE_MAP, g.tex[t - 1].id);
+    p_glPixelStorei(GL_UNPACK_ROW_LENGTH, pitch / 4);
+    p_glTexSubImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, 0, 0, size, size, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
+    p_glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 }
 
 /* D3D scissor (top-left origin, logical pixels) becomes a GL scissor (bottom-left origin).
@@ -645,8 +696,16 @@ static void gl_draw_program(const vt3_draw *d)
         const vt3_vattr *a = &d->layout->attr[i];
         if (a->location < 0 || a->location >= VT3_MAX_VATTR) continue;
         want |= 1u << a->location;
-        GLenum t = a->type == VT3_VT_UBYTE_NORM ? GL_UNSIGNED_BYTE : GL_FLOAT;
-        GLboolean norm = a->type == VT3_VT_UBYTE_NORM ? GL_TRUE : GL_FALSE;
+        /* Integer types are converted to float by GL: as values, or normalised to 0..1 or -1..1. */
+        GLenum t = GL_FLOAT;
+        GLboolean norm = GL_FALSE;
+        switch (a->type) {
+        case VT3_VT_UBYTE_NORM: t = GL_UNSIGNED_BYTE; norm = GL_TRUE; break;
+        case VT3_VT_UBYTE:      t = GL_UNSIGNED_BYTE; break;
+        case VT3_VT_SHORT:      t = GL_SHORT; break;
+        case VT3_VT_SHORT_NORM: t = GL_SHORT; norm = GL_TRUE; break;
+        default: break;
+        }
         p_glEnableVertexAttribArray((GLuint)a->location);
         p_glVertexAttribPointer((GLuint)a->location, a->components, t, norm, d->layout->stride,
                                 (const void *)(intptr_t)a->offset);
@@ -664,10 +723,18 @@ static void gl_draw_program(const vt3_draw *d)
     for (int n = 0; n < VT3_MAX_SAMPLERS; n++) {
         if (p->loc_samp[n] < 0) continue;
         vt3_tex t = d->samplers[n];
+        /* Both targets are bound on every unit. The program's sampler type reads the one it declares:
+         * a cube texture for samplerCube, a 2D texture for sampler2D. */
+        GLuint tid2 = g.zero, tidc = g.zero_cube;
+        if (t == 0 || (t != VT3_TEX_ZERO && (t > VT3_MAX_TEX || !g.tex[t - 1].used))) {
+            tid2 = g.white;                       /* no texture bound */
+        } else if (t != VT3_TEX_ZERO) {
+            if (g.tex[t - 1].cube) tidc = g.tex[t - 1].id;
+            else tid2 = g.tex[t - 1].id;
+        }
         p_glActiveTexture(GL_TEXTURE0 + (GLenum)n);
-        GLuint tid = t == VT3_TEX_ZERO ? g.zero
-                   : (t != 0 && t <= VT3_MAX_TEX && g.tex[t - 1].used) ? g.tex[t - 1].id : g.white;
-        p_glBindTexture(GL_TEXTURE_2D, tid);
+        p_glBindTexture(GL_TEXTURE_2D, tid2);
+        p_glBindTexture(GL_TEXTURE_CUBE_MAP, tidc);
         p_glUniform1i(p->loc_samp[n], n);
     }
     p_glActiveTexture(GL_TEXTURE0);
@@ -716,6 +783,8 @@ const vt3_gfx_ops vt3_gfx_gl33 = {
     .tex_create = gl_tex_create,
     .tex_upload = gl_tex_upload,
     .tex_destroy = gl_tex_destroy,
+    .cube_create = gl_cube_create,
+    .cube_upload = gl_cube_upload,
     .begin_frame = gl_begin_frame,
     .clear = gl_clear,
     .draw = gl_draw,

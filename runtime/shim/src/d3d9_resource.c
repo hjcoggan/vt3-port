@@ -102,6 +102,7 @@ GPTR d3d9_create_texture_obj(GPTR dev, uint32_t cube, uint32_t w, uint32_t h, ui
         }
     }
     if (!cube) t->gl = d3d9_gpu_tex_create(w, h, fmt);
+    else t->gl = d3d9_gpu_cube_create(w, fmt);
     GPTR obj = d3d9_obj_new(cube ? D3D9_KIND_CUBETEXTURE : D3D9_KIND_TEXTURE, t, dev);
     if (!obj) goto fail;
     return obj;
@@ -312,11 +313,11 @@ static HRESULT lock_level(d3d9_texture *t, UINT face, UINT level, GPTR locked, D
 static void unlock_level(d3d9_texture *t, UINT face, UINT level)
 {
     if (!t || face >= t->faces || level >= t->levels) return;
-    if (face == 0 && level == 0 && t->gl) {
-        d3d9_level *lv = &t->lv[0][0];
-        const uint8_t *src = d3d9_gmem(lv->data, lv->bytes);
-        d3d9_gpu_tex_upload(t->gl, src, lv->pitch, lv->w, lv->h, t->fmt);
-    }
+    if (level != 0 || !t->gl) return;
+    d3d9_level *lv = &t->lv[face][0];
+    const uint8_t *src = d3d9_gmem(lv->data, lv->bytes);
+    if (t->faces == 6) d3d9_gpu_cube_upload(t->gl, face, src, lv->pitch, lv->w, t->fmt);
+    else if (face == 0) d3d9_gpu_tex_upload(t->gl, src, lv->pitch, lv->w, lv->h, t->fmt);
 }
 
 static GPTR surface_for_level(GPTR owner, d3d9_texture *t, UINT face, UINT level, GPTR dev)

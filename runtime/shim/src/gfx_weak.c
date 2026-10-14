@@ -75,6 +75,23 @@ __attribute__((weak)) int vt3_gfx_tex_create(vt3_tex *out, int w, int h, vt3_tex
     return -1;
 }
 
+__attribute__((weak)) int vt3_gfx_cube_create(vt3_tex *out, int size, vt3_texfmt fmt)
+{
+    (void)out;
+    (void)size;
+    (void)fmt;
+    return -1;
+}
+
+__attribute__((weak)) void vt3_gfx_cube_upload(vt3_tex t, int face, const void *pixels, int pitch, int size)
+{
+    (void)t;
+    (void)face;
+    (void)pixels;
+    (void)pitch;
+    (void)size;
+}
+
 __attribute__((weak)) void vt3_gfx_tex_upload(vt3_tex t, const void *pixels, int pitch, int w, int h)
 {
     (void)t;

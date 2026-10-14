@@ -39,6 +39,16 @@ void vt3_gfx_tex_upload(vt3_tex t, const void *pixels, int pitch, int w, int h)
     if (g_ops) g_ops->tex_upload(t, pixels, pitch, w, h);
 }
 
+int vt3_gfx_cube_create(vt3_tex *out, int size, vt3_texfmt fmt)
+{
+    return g_ops ? g_ops->cube_create(out, size, fmt) : -1;
+}
+
+void vt3_gfx_cube_upload(vt3_tex t, int face, const void *pixels, int pitch, int size)
+{
+    if (g_ops) g_ops->cube_upload(t, face, pixels, pitch, size);
+}
+
 void vt3_gfx_tex_destroy(vt3_tex t)
 {
     if (g_ops) g_ops->tex_destroy(t);

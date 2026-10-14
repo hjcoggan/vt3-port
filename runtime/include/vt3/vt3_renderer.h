@@ -66,7 +66,10 @@ typedef uint32_t vt3_prog;      /* 0 = none */
 
 typedef enum vt3_vtype {
     VT3_VT_FLOAT = 0,           /* 1-4 floats */
-    VT3_VT_UBYTE_NORM = 1       /* 4 unsigned bytes, normalised (D3DCOLOR order B,G,R,A) */
+    VT3_VT_UBYTE_NORM = 1,      /* 4 unsigned bytes, normalised (D3DCOLOR order B,G,R,A) */
+    VT3_VT_UBYTE = 2,           /* 1-4 unsigned bytes, as values (D3DDECLTYPE_UBYTE4: blend indices) */
+    VT3_VT_SHORT = 3,           /* 2 or 4 signed 16-bit values, as values (SHORT2, SHORT4) */
+    VT3_VT_SHORT_NORM = 4       /* 2 or 4 signed 16-bit values, normalised (SHORT2N, SHORT4N) */
 } vt3_vtype;
 
 typedef struct vt3_vattr {
@@ -117,6 +120,8 @@ typedef struct vt3_gfx_ops {
     int  (*tex_create)(vt3_tex *out, int w, int h, vt3_texfmt fmt);
     void (*tex_upload)(vt3_tex t, const void *pixels, int pitch, int w, int h);
     void (*tex_destroy)(vt3_tex t);
+    int  (*cube_create)(vt3_tex *out, int size, vt3_texfmt fmt);   /* colour formats only */
+    void (*cube_upload)(vt3_tex t, int face, const void *pixels, int pitch, int size);
     void (*begin_frame)(void);
     void (*clear)(uint32_t argb);
     void (*draw)(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex);
@@ -134,6 +139,9 @@ void vt3_gfx_shutdown(void);
 int  vt3_gfx_tex_create(vt3_tex *out, int w, int h, vt3_texfmt fmt);
 void vt3_gfx_tex_upload(vt3_tex t, const void *pixels, int pitch, int w, int h);
 void vt3_gfx_tex_destroy(vt3_tex t);
+/* A cube map, size x size per face, level 0 only. Face order is D3D's: +X, -X, +Y, -Y, +Z, -Z. */
+int  vt3_gfx_cube_create(vt3_tex *out, int size, vt3_texfmt fmt);
+void vt3_gfx_cube_upload(vt3_tex t, int face, const void *pixels, int pitch, int size);
 void vt3_gfx_begin_frame(void);
 void vt3_gfx_clear(uint32_t argb);
 void vt3_gfx_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex);

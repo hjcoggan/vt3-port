@@ -175,6 +175,9 @@ void d3d9_gpu_present(void);
 vt3_tex d3d9_gpu_tex_create(uint32_t w, uint32_t h, uint32_t fmt);
 void d3d9_gpu_tex_destroy(vt3_tex t);
 void d3d9_gpu_tex_upload(vt3_tex t, const uint8_t *src, uint32_t pitch, uint32_t w, uint32_t h, uint32_t fmt);
+vt3_tex d3d9_gpu_cube_create(uint32_t size, uint32_t fmt);           /* 0 when the renderer refuses */
+void d3d9_gpu_cube_upload(vt3_tex t, uint32_t face, const uint8_t *src, uint32_t pitch, uint32_t size,
+                          uint32_t fmt);
 /* One draw call, as the device methods describe it. */
 typedef struct d3d9_draw_args {
     uint32_t prim;                      /* D3DPRIMITIVETYPE */
