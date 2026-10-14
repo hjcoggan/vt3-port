@@ -28,6 +28,7 @@
     X(void, glEnable, (GLenum))                                                           \
     X(void, glDisable, (GLenum))                                                          \
     X(void, glBlendFunc, (GLenum, GLenum))                                                \
+    X(void, glBlendEquation, (GLenum))                                                    \
     X(void, glPixelStorei, (GLenum, GLint))                                               \
     X(const GLubyte *, glGetString, (GLenum))                                             \
     X(void, glGenTextures, (GLsizei, GLuint *))                                           \
@@ -392,7 +393,7 @@ static void apply_state(const vt3_rstate *s);
 static void gl_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex)
 {
     gl_bind_logical_fbo();
-    static const vt3_rstate tl_state = { 1, 5, 6, 0, 0, 8, 1 };   /* alpha blend, no depth, no cull */
+    static const vt3_rstate tl_state = { 1, 5, 6, 0, 0, 8, 1, 1 };   /* alpha blend, no depth, no cull, ADD */
     apply_state(&tl_state);
     p_glBindVertexArray(g.vao_tl);
     p_glBindBuffer(GL_ARRAY_BUFFER, g.vbo_tl);
@@ -430,6 +431,18 @@ static void gl_present(const vt3_rect *dst, int nearest, int drawable_w, int dra
 
 /* ---- programmable path ------------------------------------------------ */
 
+/* D3DBLENDOP_*: 1 ADD, 2 SUBTRACT, 3 REVSUBTRACT, 4 MIN, 5 MAX. Zero means the default, ADD. */
+static GLenum map_blendop(int d3d)
+{
+    switch (d3d) {
+    case 2: return GL_FUNC_SUBTRACT;
+    case 3: return GL_FUNC_REVERSE_SUBTRACT;
+    case 4: return GL_MIN;
+    case 5: return GL_MAX;
+    default: return GL_FUNC_ADD;
+    }
+}
+
 static GLenum map_blend(int d3d)
 {
     switch (d3d) {
@@ -463,6 +476,7 @@ static GLenum map_cmp(int d3d)
 
 static void apply_state(const vt3_rstate *s)
 {
+    p_glBlendEquation(map_blendop(s->blend_op));
     if (s->alpha_blend) {
         p_glEnable(GL_BLEND);
         p_glBlendFunc(map_blend(s->src_blend), map_blend(s->dst_blend));

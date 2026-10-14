@@ -88,6 +88,7 @@ typedef struct vt3_rstate {
     int depth_write;            /* D3DRS_ZWRITEENABLE */
     int depth_func;             /* D3DCMP_* */
     int cull;                   /* D3DCULL_NONE / CW / CCW */
+    int blend_op;               /* D3DRS_BLENDOP: D3DBLENDOP_* (0 or 1 = ADD) */
 } vt3_rstate;
 
 typedef struct vt3_draw {

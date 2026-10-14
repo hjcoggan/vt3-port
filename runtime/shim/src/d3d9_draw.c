@@ -185,6 +185,7 @@ static void fill_rstate(const d3d9_device *d, vt3_rstate *s)
     s->depth_write = d->rs[14] != 0;
     s->depth_func = d->rs[23] ? (int)d->rs[23] : 4;
     s->cull = d->rs[22] ? (int)d->rs[22] : 3;
+    s->blend_op = d->rs[171] ? (int)d->rs[171] : 1;   /* D3DRS_BLENDOP, default ADD */
     if (d->rs[15] && !warned_once(&g_warn_alpha)) {
         VT3_WARN("alpha test is set but not applied by the renderer yet");
     }
