@@ -74,8 +74,9 @@ static void decode_color(const uint8_t *p, int force4, uint8_t col[4][4], uint8_
 {
     uint16_t c0 = (uint16_t)(p[0] | (p[1] << 8));
     uint16_t c1 = (uint16_t)(p[2] | (p[3] << 8));
-    rgb565(c0, &col[0][0], &col[0][1], &col[0][2]);
-    rgb565(c1, &col[1][0], &col[1][1], &col[1][2]);
+    /* rgb565 writes its outputs in B, G, R order (the BGRA layout). col is R, G, B. */
+    rgb565(c0, &col[0][2], &col[0][1], &col[0][0]);
+    rgb565(c1, &col[1][2], &col[1][1], &col[1][0]);
     col[0][3] = col[1][3] = 255;
     if (force4 || c0 > c1) {
         for (int k = 0; k < 3; k++) {

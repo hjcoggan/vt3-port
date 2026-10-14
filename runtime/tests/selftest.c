@@ -368,6 +368,27 @@ static int test_adx(const char *path)
 
 /* ---- coefficients ------------------------------------------------------- */
 
+/* The shim's DXT decoder (shim/src/d3d9_format.c). BC1 colour 0 holds red in its top five bits. */
+int d3d9_to_bgra(uint32_t fmt, const uint8_t *src, uint32_t pitch, uint32_t w, uint32_t h, uint8_t *dst);
+
+static void test_dxt_colour(void)
+{
+    /* DXT1 4x4 blocks: colour 0 = pure red (0xF800), colour 1 = pure blue (0x001F), 0 > 1 so four colours.
+     * Index word 0 selects colour 0 everywhere; 0x55555555 selects colour 1 everywhere. */
+    static const uint8_t red_blk[8] = { 0x00, 0xF8, 0x1F, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    static const uint8_t blue_blk[8] = { 0x00, 0xF8, 0x1F, 0x00, 0x55, 0x55, 0x55, 0x55 };
+    uint8_t bgra[4 * 4 * 4];
+    CHECK(d3d9_to_bgra(0x31545844u, red_blk, 8, 4, 4, bgra) == 0, "DXT1 red block: decode failed");
+    for (int p = 0; p < 16; p++) {
+        const uint8_t *px = bgra + 4 * p;
+        CHECK(px[0] == 0 && px[1] == 0 && px[2] == 255 && px[3] == 255,
+              "DXT1 red pixel %d decoded as B,G,R,A %u,%u,%u,%u", p, px[0], px[1], px[2], px[3]);
+    }
+    CHECK(d3d9_to_bgra(0x31545844u, blue_blk, 8, 4, 4, bgra) == 0, "DXT1 blue block: decode failed");
+    CHECK(bgra[0] == 255 && bgra[1] == 0 && bgra[2] == 0 && bgra[3] == 255,
+          "DXT1 blue pixel decoded as B,G,R,A %u,%u,%u,%u", bgra[0], bgra[1], bgra[2], bgra[3]);
+}
+
 static void test_coefs(void)
 {
     int32_t c[2];
@@ -390,6 +411,7 @@ int vt3_selftest_run(const char *adx_path)
     test_letterbox();
     test_ringbuf();
     test_coefs();
+    test_dxt_colour();
     test_heap();
     test_file_mapping();
 
