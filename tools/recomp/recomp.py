@@ -382,6 +382,9 @@ class Analysis:
         self.unbounded = {}   # jump addr -> (table, index register), for function-level bounds
         self.table_sizes = dict(table_sizes or {})   # explicit sizes, each with a source note
         self._jcc_index = None
+        self._jmp_index = None
+        self._entry_ctx = None   # the function _scan is walking; set only inside _scan
+        self._reach_cache = {}   # entry -> live instructions (see _local_reach)
         self.failed = {}      # entry -> reason, for entries whose body would not decode
 
     # -- instruction flow ---------------------------------------------------
@@ -632,10 +635,132 @@ class Analysis:
             return max(vals) + 1 if vals else None
         return None
 
+    def _jump_sites(self, target):
+        """Addresses of direct jmp instructions (E9 rel32, EB rel8) whose target is target.
+
+        Candidates come from the executable bytes, as in _jcc_sites, and each is checked by
+        decoding it as a jmp to target."""
+        if self._jmp_index is None:
+            index = {}
+            for lo, hi in self.img.exec_ranges:
+                off, end = lo - self.img.base, hi - self.img.base
+                buf = self.img.mem
+                for p in range(off, end - 1):
+                    op = buf[p]
+                    if op == 0xEB:
+                        t = self.img.base + p + 2 + struct.unpack_from('<b', buf, p + 1)[0]
+                        index.setdefault(t, []).append(self.img.base + p)
+                    elif op == 0xE9 and p + 5 <= end:
+                        t = self.img.base + p + 5 + struct.unpack_from('<i', buf, p + 1)[0]
+                        index.setdefault(t, []).append(self.img.base + p)
+            self._jmp_index = index
+        out = []
+        for j in self._jmp_index.get(target, []):
+            ins = self.dec.at(j)
+            if ins is not None and ins.mn == 'jmp' and ins.ops and ins.ops[0].kind == 'imm' \
+                    and (ins.ops[0].imm & M32) == target:
+                out.append(j)
+        return out
+
+    def _decodes_ending_at(self, addr):
+        """Every instruction that decodes and ends exactly at addr (several alignments are possible)."""
+        out = []
+        for back in range(1, 16):
+            c = self.dec.at(addr - back)
+            if c is not None and c.addr + c.size == addr:
+                out.append(c)
+        return out
+
+    def _local_reach(self, entry):
+        """Instructions reachable from entry by direct flow. Table jumps are not followed.
+
+        A decode that starts inside another instruction is on no path, so it is not in this set.
+        The constant-index search uses it to choose the real predecessors."""
+        if entry in self._reach_cache:
+            return self._reach_cache[entry]
+        seen = {}
+        todo = [entry]
+        while todo and len(seen) < 20000:
+            a = todo.pop()
+            if a in seen:
+                continue
+            ins = self.dec.at(a)
+            if ins is None:
+                continue
+            seen[a] = ins
+            mn = ins.mn
+            if mn in RET_MN or mn in TERMINAL:
+                continue
+            if mn == 'jmp':
+                if ins.ops and ins.ops[0].kind == 'imm':
+                    todo.append(ins.ops[0].imm & M32)
+                continue
+            if is_jcc(mn) or mn in LOOPS or mn in ('jecxz', 'jcxz'):
+                todo.append(ins.ops[0].imm & M32)
+            todo.append(a + ins.size)
+        self._reach_cache[entry] = seen
+        return seen
+
+    def _state_before(self, addr, idx, live, start=True):
+        """The constant idx holds just before addr, along the one live path back.
+
+        Each step needs exactly one live predecessor that falls into addr. Stepping back past an
+        address that a live jump also reaches is refused: that other path could set idx
+        differently. `start` is the address the caller asked about; its own jumps are the paths."""
+        for step in range(64):
+            if not start or step > 0:
+                for j in self._jump_sites(addr) + self._jcc_sites(addr):
+                    if j in live:
+                        return None
+            prev = [c for c in self._decodes_ending_at(addr)
+                    if c.addr in live and live[c.addr].size == c.size and self.flow(c)[1]]
+            if len(prev) != 1:
+                return None
+            c = prev[0]
+            if c.ops and c.ops[0].kind == 'reg' and c.ops[0].reg == idx and c.mn not in ('cmp', 'test'):
+                if c.mn == 'mov' and len(c.ops) == 2 and c.ops[1].kind == 'imm':
+                    return c.ops[1].imm & M32
+                if c.mn == 'xor' and len(c.ops) == 2 and c.ops[1].kind == 'reg' and c.ops[1].reg == idx:
+                    return 0     # xor idx, idx leaves 0
+                return None
+            addr = c.addr
+            start = False
+        return None
+
+    def _const_count(self, jaddr, idx):
+        """Constant index: every live path into the dispatch at jaddr sets idx to a constant.
+
+        The paths are the fallthrough into jaddr and each live direct jump or branch to jaddr.
+        Each path's value is the mov idx, N on that path. The bound is the largest N plus one.
+        Only the function being scanned counts (_scan sets _entry_ctx), so a stray decode
+        cannot supply a predecessor."""
+        entry = self._entry_ctx
+        if entry is None:
+            return None
+        live = self._local_reach(entry)
+        if jaddr not in live:
+            return None
+        states = []
+        fall = [c for c in self._decodes_ending_at(jaddr)
+                if c.addr in live and live[c.addr].size == c.size and self.flow(c)[1]]
+        if len(fall) > 1:
+            return None
+        if fall:
+            states.append(self._state_before(jaddr, idx, live))
+        for j in self._jump_sites(jaddr) + self._jcc_sites(jaddr):
+            if j in live:
+                states.append(self._state_before(j, idx, live))
+        if not states or any(s is None for s in states):
+            return None
+        n = max(states) + 1
+        return n if 2 <= n <= 256 else None
+
     def _make_table(self, jaddr, table, idx_reg, bound_end):
         if jaddr in self.table_sizes:
             return self._table_from_count(jaddr, table, self.table_sizes[jaddr])
         count = self._bound_before(bound_end, idx_reg)
+        if count is None:
+            count = self._const_count(bound_end, idx_reg)
         if count is None:
             # Not bounded locally. Function-level resolution may still bound it.
             self.unbounded[jaddr] = (table, idx_reg)
@@ -707,6 +832,7 @@ class Analysis:
 
     def _scan(self, f, hard, work):
         seen, todo = set(), [f]
+        self._entry_ctx = f
         try:
             while True:
                 while todo:
@@ -736,6 +862,8 @@ class Analysis:
             if hard:
                 self.failed[f] = str(e)
             self.soft_bad.add(f)
+        finally:
+            self._entry_ctx = None
 
     def closure(self, roots):
         work = []
