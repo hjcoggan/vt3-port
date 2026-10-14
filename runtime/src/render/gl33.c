@@ -108,6 +108,7 @@ VT3_GL_FUNCS(VT3_DECL_VAR)
 typedef struct gl_prog {
     GLuint id;
     GLint loc_vsc, loc_psc;
+    GLint loc_vsb[16], loc_psb[16];
     GLint loc_samp[VT3_MAX_SAMPLERS];
     GLint loc_at_func, loc_at_ref;   /* alpha test uniforms (sm2_glsl.c) */
     int used;
@@ -661,6 +662,13 @@ static int gl_prog_create(vt3_prog *out, const char *vs_src, const char *ps_src,
     p->used = 1;
     p->loc_vsc = p_glGetUniformLocation(id, "vsc");
     p->loc_psc = p_glGetUniformLocation(id, "psc");
+    for (int i = 0; i < 16; i++) {
+        char name[16];
+        snprintf(name, sizeof name, "vsb[%d]", i);
+        p->loc_vsb[i] = p_glGetUniformLocation(id, name);
+        snprintf(name, sizeof name, "psb[%d]", i);
+        p->loc_psb[i] = p_glGetUniformLocation(id, name);
+    }
     p->loc_at_func = p_glGetUniformLocation(id, "vt3_at_func");
     p->loc_at_ref = p_glGetUniformLocation(id, "vt3_at_ref");
     for (int n = 0; n < VT3_MAX_SAMPLERS; n++) {
@@ -720,6 +728,10 @@ static void gl_draw_program(const vt3_draw *d)
     if (p->loc_at_ref >= 0) p_glUniform1f(p->loc_at_ref, (GLfloat)d->state.alpha_ref);
     if (p->loc_vsc >= 0) p_glUniform4fv(p->loc_vsc, VT3_CONST_REGS, d->vsc ? d->vsc : g.zero_consts);
     if (p->loc_psc >= 0) p_glUniform4fv(p->loc_psc, VT3_CONST_REGS, d->psc ? d->psc : g.zero_consts);
+    for (int i = 0; i < 16; i++) {
+        if (p->loc_vsb[i] >= 0) p_glUniform1i(p->loc_vsb[i], d->vsb[i]);
+        if (p->loc_psb[i] >= 0) p_glUniform1i(p->loc_psb[i], d->psb[i]);
+    }
     for (int n = 0; n < VT3_MAX_SAMPLERS; n++) {
         if (p->loc_samp[n] < 0) continue;
         vt3_tex t = d->samplers[n];

@@ -461,6 +461,8 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     dd.prim = prim_list == PRIM_TRIANGLESTRIP ? VT3_PRIM_TRIANGLESTRIP : VT3_PRIM_TRIANGLELIST;
     dd.vsc = vsc_copy;
     dd.psc = psc_copy;
+    memcpy(dd.vsb, d->vsb, sizeof dd.vsb);
+    memcpy(dd.psb, d->psb, sizeof dd.psb);
     fill_textures(d, dd.samplers);
     fill_rstate(d, &dd.state);
     trace_draw(d, a, nverts);

@@ -620,6 +620,32 @@ HRESULT WINAPI IDirect3DDevice9_GetVertexShaderConstantF(GPTR This, UINT StartRe
     return S_OK;
 }
 
+/* Bool constants: count BOOLs (4 bytes each) from the guest. Non-zero is true. */
+static void copy_guest_bools(int *dst, GPTR src, UINT count, UINT limit, UINT first)
+{
+    if (first >= limit) return;
+    if (count > limit - first) count = limit - first;
+    const uint32_t *p = d3d9_gmem(src, count * 4u);
+    if (!p) return;
+    for (UINT i = 0; i < count; i++) dst[first + i] = p[i] != 0;
+}
+
+HRESULT WINAPI IDirect3DDevice9_SetVertexShaderConstantB(GPTR This, UINT reg_idx, GPTR data, UINT count)
+{
+    d3d9_device *d = DEV(This);
+    if (!d || reg_idx + count > 16) return D3DERR_CHK_INVALIDCALL;
+    copy_guest_bools(d->vsb, data, count, 16, reg_idx);
+    return S_OK;
+}
+
+HRESULT WINAPI IDirect3DDevice9_SetPixelShaderConstantB(GPTR This, UINT reg_idx, GPTR data, UINT count)
+{
+    d3d9_device *d = DEV(This);
+    if (!d || reg_idx + count > 16) return D3DERR_CHK_INVALIDCALL;
+    copy_guest_bools(d->psb, data, count, 16, reg_idx);
+    return S_OK;
+}
+
 HRESULT WINAPI IDirect3DDevice9_SetPixelShaderConstantF(GPTR This, UINT reg_idx, GPTR data, UINT count)
 {
     d3d9_device *d = DEV(This);

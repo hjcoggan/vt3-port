@@ -156,6 +156,7 @@ typedef struct d3d9_device {
     uint32_t indices, indices_format;
     float vsc[256][4];
     float psc[224][4];
+    int vsb[16], psb[16];               /* bool constants, set by SetVertexShaderConstantB */
     uint32_t scene_depth;
     int gpu;                            /* a renderer context exists for this device */
     int32_t scissor_rc[4];              /* RECT from SetScissorRect: left, top, right, bottom */

@@ -109,6 +109,8 @@ typedef struct vt3_draw {
     vt3_prim prim;
     const float *vsc;           /* 256 x vec4, NULL = zeros */
     const float *psc;           /* 256 x vec4, NULL = zeros */
+    int vsb[16];                /* vertex bool constants b0..b15 (D3D bool: non-zero = true) */
+    int psb[16];                /* pixel bool constants */
     vt3_tex samplers[VT3_MAX_SAMPLERS];
     vt3_rstate state;
 } vt3_draw;

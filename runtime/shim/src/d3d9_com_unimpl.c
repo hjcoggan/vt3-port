@@ -322,16 +322,6 @@ HRESULT WINAPI IDirect3DDevice9_GetVertexShaderConstantI(GPTR This, UINT StartRe
     return E_NOTIMPL;
 }
 
-HRESULT WINAPI IDirect3DDevice9_SetVertexShaderConstantB(GPTR This, UINT reg_idx, GPTR data, UINT count)
-{
-    (void)This;
-    (void)(reg_idx);
-    (void)(data);
-    (void)(count);
-    vt3s_unimpl("IDirect3DDevice9::SetVertexShaderConstantB");
-    return E_NOTIMPL;
-}
-
 HRESULT WINAPI IDirect3DDevice9_GetVertexShaderConstantB(GPTR This, UINT StartRegister, GPTR pConstantData, UINT BoolCount)
 {
     (void)This;
@@ -377,16 +367,6 @@ HRESULT WINAPI IDirect3DDevice9_GetPixelShaderConstantI(GPTR This, UINT StartReg
     (void)(pConstantData);
     (void)(Vector4iCount);
     vt3s_unimpl("IDirect3DDevice9::GetPixelShaderConstantI");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_SetPixelShaderConstantB(GPTR This, UINT reg_idx, GPTR data, UINT count)
-{
-    (void)This;
-    (void)(reg_idx);
-    (void)(data);
-    (void)(count);
-    vt3s_unimpl("IDirect3DDevice9::SetPixelShaderConstantB");
     return E_NOTIMPL;
 }
 
