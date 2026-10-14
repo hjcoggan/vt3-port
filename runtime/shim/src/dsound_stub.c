@@ -1,10 +1,16 @@
 /*
- * DirectSound with silent output. IDirectSound and IDirectSoundBuffer are guest COM
- * objects (D3D9_KIND_DSOUND, D3D9_KIND_DSBUFFER; vtables from the generated d3d9_com.h).
- * No samples reach a sound device yet. A buffer keeps its PCM in guest heap memory,
- * Lock hands the game real storage, and the play cursor follows the wall clock, so a
- * game that streams audio paces itself as it would with a sound card. The audio layer
- * (vt3_audio.h) is the intended sink; until it is connected, playback is silent.
+ * DirectSound. IDirectSound and IDirectSoundBuffer are guest COM objects (D3D9_KIND_DSOUND,
+ * D3D9_KIND_DSBUFFER; vtables from the generated d3d9_com.h). A buffer keeps its PCM in guest
+ * heap memory, Lock hands the game real storage, and the play cursor follows the wall clock,
+ * so a game that streams audio paces itself as it would with a sound card.
+ *
+ * The mixer thread renders every playing buffer to the output device through the audio layer
+ * (vt3_audio.h). For each output frame it reads the buffer at the position the wall clock
+ * gives, so it reads only what the game has already written: the game writes about 50 ms
+ * ahead of that position. The output ring adds about 40 ms of delay before the sound is heard,
+ * which does not change what is read. Buffers are converted to 48 kHz stereo 16-bit with
+ * nearest-sample resampling and a surround downmix. If no device opens, playback stays silent
+ * and the game still runs.
  *
  * A failed creation still writes a stub object (no host data, methods report
  * DSERR_UNSUPPORTED), so a guest creation call does not leave its output empty.
@@ -17,9 +23,12 @@
  *   DSBCAPS       20 bytes: dwSize@0 dwFlags@4 dwBufferBytes@8.
  */
 #include "d3d9_internal.h"
+#include "vt3/vt3_audio.h"
 #include "vt3/vt3_log.h"
 #include "win32/dsound.h"
 
+#include <math.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -45,6 +54,22 @@ typedef struct ds_buffer {
     int32_t volume, pan;
     uint32_t freq;
 } ds_buffer;
+
+/* ---- output mixer ----------------------------------------------------------
+ * g_mu guards the list of playing buffers and every buffer's play state while it is
+ * in the list. Lock/Unlock do not take it: the game writes storage the mixer reads, which
+ * is the same race a real sound card has with the game's write cursor. */
+#define MIX_RATE 48000u
+#define MIX_CH 2u
+#define MIX_RING_MS 40u
+#define MIX_MAX_FRAMES 960u
+#define MIX_MAX_ACTIVE 64
+
+static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+static ds_buffer *g_active[MIX_MAX_ACTIVE];
+static int g_nactive;
+static vt3_audio *g_out;
+static uint64_t g_mix_next_ns;
 
 /* ---- guest memory and time ------------------------------------------------ */
 
@@ -105,6 +130,167 @@ static uint32_t write_cursor(const ds_buffer *b)
     return b->bytes ? (play_cursor(b) + write_lead(b)) % b->bytes : 0;
 }
 
+/* ---- the mixer ------------------------------------------------------------- */
+
+static void active_add_locked(ds_buffer *b)
+{
+    for (int i = 0; i < g_nactive; i++) {
+        if (g_active[i] == b) return;
+    }
+    if (g_nactive < MIX_MAX_ACTIVE) g_active[g_nactive++] = b;
+}
+
+static void active_remove_locked(ds_buffer *b)
+{
+    for (int i = 0; i < g_nactive; i++) {
+        if (g_active[i] == b) {
+            g_active[i] = g_active[--g_nactive];
+            return;
+        }
+    }
+}
+
+static uint16_t fmt16(const uint8_t *f, uint32_t off)
+{
+    return (uint16_t)(f[off] | (f[off + 1] << 8));
+}
+
+/* VT3_TRACE_AUDIO=1 logs buffer creation, Play and Stop. */
+static int dsound_trace(void)
+{
+    static int on = -1;
+    if (on < 0) on = getenv("VT3_TRACE_AUDIO") != NULL;
+    return on;
+}
+
+/* A signed 16-bit value from one 8- or 16-bit PCM sample. */
+static int32_t pcm_sample(const uint8_t *p, uint32_t bits)
+{
+    return bits == 16 ? (int32_t)(int16_t)(p[0] | (p[1] << 8)) : ((int32_t)p[0] - 128) * 256;
+}
+
+/* Adds the sound of one playing buffer to acc for frames output frames. Output frame j is at
+ * time t0 + j, so the source position comes from the same wall-clock model as GetCurrentPosition. */
+static void mix_buffer_locked(ds_buffer *b, int32_t *acc, uint32_t frames, uint64_t t0)
+{
+    uint32_t nch = fmt16(b->fmt, 2), bits = fmt16(b->fmt, 14), align = fmt16(b->fmt, 12);
+    uint32_t rate = rd32(b->fmt, 4);
+    if (nch < 1 || nch > 8 || (bits != 8 && bits != 16) || align == 0 || rate == 0 || b->bytes < align) return;
+    const uint8_t *data = d3d9_gmem(b->storage, b->bytes);
+    if (!data) return;
+    uint32_t src_frames = b->bytes / align;
+    uint32_t bps = avg_bytes_per_sec(b);
+    double gain = b->volume <= -10000 ? 0.0 : pow(10.0, b->volume / 2000.0);   /* hundredths of dB */
+    uint32_t bytes_per_sample = bits / 8;
+    for (uint32_t j = 0; j < frames; j++) {
+        uint64_t t = t0 + (uint64_t)j * 1000000000u / MIX_RATE;
+        double moved = t > b->play_ns ? (double)(t - b->play_ns) * bps / 1e9 : 0.0;
+        double pos = (double)b->play_base + moved;
+        if (!b->looping && pos >= (double)b->bytes) {
+            /* A non-looping buffer stops at its end. */
+            b->playing = 0;
+            b->pos = 0;
+            active_remove_locked(b);
+            return;
+        }
+        uint64_t f = ((uint64_t)pos / align) % src_frames;
+        const uint8_t *fr = data + f * align;
+        int32_t l, r;
+        if (nch == 1) {
+            l = r = pcm_sample(fr, bits);
+        } else if (nch == 2) {
+            l = pcm_sample(fr, bits);
+            r = pcm_sample(fr + bytes_per_sample, bits);
+        } else {
+            /* Surround in SPEAKER order: FL, FR, FC, LFE, BL, BR (quad: FL, FR, BL, BR). The centre and
+             * the rears fold into the stereo pair at -3 dB; the LFE channel is left out. */
+            int32_t fl = pcm_sample(fr, bits), fr_ = pcm_sample(fr + bytes_per_sample, bits);
+            int32_t c = nch == 4 ? 0 : pcm_sample(fr + 2 * bytes_per_sample, bits);
+            int32_t bl = nch == 4 ? pcm_sample(fr + 2 * bytes_per_sample, bits)
+                       : nch >= 6 ? pcm_sample(fr + 4 * bytes_per_sample, bits) : 0;
+            int32_t br = nch == 4 ? pcm_sample(fr + 3 * bytes_per_sample, bits)
+                       : nch >= 6 ? pcm_sample(fr + 5 * bytes_per_sample, bits) : 0;
+            l = fl + (int32_t)(0.7071 * (c + bl));
+            r = fr_ + (int32_t)(0.7071 * (c + br));
+        }
+        acc[2 * j] += (int32_t)(l * gain);
+        acc[2 * j + 1] += (int32_t)(r * gain);
+    }
+}
+
+static void *mix_thread(void *arg)
+{
+    (void)arg;
+    static int32_t acc[MIX_MAX_FRAMES * MIX_CH];
+    static int16_t out[MIX_MAX_FRAMES * MIX_CH];
+    /* VT3_TRACE_AUDIO=1 logs once a second: buffers playing, peak level, device underruns. */
+    const int trace = getenv("VT3_TRACE_AUDIO") != NULL;
+    uint64_t window_ns = now_ns();
+    int32_t window_peak = 0;
+    for (;;) {
+        struct timespec ts = { 0, 4000000 };          /* 4 ms */
+        nanosleep(&ts, NULL);
+        pthread_mutex_lock(&g_mu);
+        uint64_t now = now_ns();
+        if (now > g_mix_next_ns + 50000000u) g_mix_next_ns = now - 10000000u;   /* 50 ms behind: resync */
+        uint64_t due = now > g_mix_next_ns ? (now - g_mix_next_ns) * MIX_RATE / 1000000000u : 0;
+        uint64_t space = vt3_audio_space(g_out) / (MIX_CH * sizeof(int16_t));
+        uint64_t frames = due < space ? due : space;
+        if (frames > MIX_MAX_FRAMES) frames = MIX_MAX_FRAMES;
+        if (frames > 0) {
+            memset(acc, 0, (size_t)frames * MIX_CH * sizeof acc[0]);
+            /* Downward, so a buffer that stops and is removed does not skip the one moved into its slot. */
+            for (int i = g_nactive - 1; i >= 0; i--) {
+                if (i < g_nactive) mix_buffer_locked(g_active[i], acc, (uint32_t)frames, g_mix_next_ns);
+            }
+            int32_t peak = 0;
+            for (size_t k = 0; k < (size_t)frames * MIX_CH; k++) {
+                int32_t v = acc[k];
+                out[k] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+                if (v > peak) peak = v;
+                if (-v > peak) peak = -v;
+            }
+            vt3_audio_write(g_out, out, (size_t)frames * MIX_CH * sizeof(int16_t));
+            g_mix_next_ns += frames * 1000000000u / MIX_RATE;
+            if (trace) {
+                window_peak = peak > window_peak ? peak : window_peak;
+                if (now - window_ns >= 1000000000u) {
+                    VT3_INFO("audio: %d playing, peak %d in the last second, underruns %u", g_nactive,
+                             (int)window_peak, (unsigned)vt3_audio_underruns(g_out));
+                    window_ns = now;
+                    window_peak = 0;
+                }
+            }
+        }
+        pthread_mutex_unlock(&g_mu);
+    }
+    return NULL;
+}
+
+/* Opens the output and starts the mixer, once. Without a device the buffers stay silent. */
+static void mixer_start_once(void)
+{
+    static int started;
+    if (started) return;
+    started = 1;
+    vt3_audio_format fmt = { MIX_RATE, (int)MIX_CH };
+    size_t ring = (size_t)MIX_RATE * MIX_CH * sizeof(int16_t) * MIX_RING_MS / 1000u;
+    if (vt3_audio_open(&g_out, fmt, ring) != 0) {
+        g_out = NULL;
+        VT3_WARN("DirectSound: no audio device; playback stays silent");
+        return;
+    }
+    g_mix_next_ns = now_ns();
+    pthread_t th;
+    if (pthread_create(&th, NULL, mix_thread, NULL) != 0) {
+        VT3_WARN("DirectSound: could not start the mixer; playback stays silent");
+        return;
+    }
+    pthread_detach(th);
+    vt3_audio_set_playing(g_out, 1);
+    VT3_INFO("DirectSound: mixing to a %u Hz stereo output", (unsigned)MIX_RATE);
+}
+
 /* ---- objects --------------------------------------------------------------- */
 
 static ds_buffer *buf_of(GPTR obj)
@@ -145,6 +331,9 @@ void dsound_free(uint32_t kind, void *data)
 {
     if (kind == D3D9_KIND_DSBUFFER) {
         ds_buffer *b = data;
+        pthread_mutex_lock(&g_mu);
+        active_remove_locked(b);
+        pthread_mutex_unlock(&g_mu);
         if (b->storage) HeapFree(GetProcessHeap(), 0, b->storage);
     }
     free(data);
@@ -184,7 +373,8 @@ HRESULT WINAPI DirectSoundCreate(LPCGUID device, GPTR out_ds, LPUNKNOWN outer)
         VT3_ERROR("DirectSoundCreate: no free object slot or guest heap");
         return E_OUTOFMEMORY_D3D9;
     }
-    VT3_INFO("DirectSoundCreate: IDirectSound at 0x%08x (silent output)", obj);
+    mixer_start_once();
+    VT3_INFO("DirectSoundCreate: IDirectSound at 0x%08x", obj);
     put32(out_ds, obj);
     return DS_OK;
 }
@@ -216,6 +406,10 @@ HRESULT WINAPI IDirectSound_CreateSoundBuffer(GPTR This, GPTR pcDSBufferDesc, GP
         return DSERR_INVALIDPARAM;
     }
     GPTR obj = buffer_new(This, bytes, fmt);
+    if (dsound_trace())
+        VT3_INFO("DirectSound: CreateSoundBuffer flags 0x%x, %u bytes, %u Hz, %u ch, %u bit -> 0x%08x",
+                 (unsigned)flags, (unsigned)bytes, (unsigned)rd32(fmt, 4), (unsigned)fmt16(fmt, 2),
+                 (unsigned)fmt16(fmt, 14), (unsigned)obj);
     if (!obj) {
         VT3_WARN("IDirectSound::CreateSoundBuffer: no memory for %u bytes, returning a stub", bytes);
         put32(ppDSBuffer, d3d9_new_stub(D3D9_KIND_DSBUFFER, This));
@@ -422,12 +616,18 @@ HRESULT WINAPI IDirectSoundBuffer_Play(GPTR This, DWORD dwReserved1, DWORD dwPri
     if (!b) return DSERR_UNSUPPORTED;
     (void)dwReserved1;
     (void)dwPriority;
+    if (dsound_trace())
+        VT3_INFO("DirectSound: Play 0x%08x (%u bytes, flags 0x%x, pos %u)", (unsigned)This, (unsigned)b->bytes,
+                 (unsigned)dwFlags, (unsigned)b->pos);
+    pthread_mutex_lock(&g_mu);
     b->looping = (dwFlags & DSBPLAY_LOOPING) != 0;
     if (!b->playing) {
         b->playing = 1;
         b->play_base = b->pos;
         b->play_ns = now_ns();
+        active_add_locked(b);
     }
+    pthread_mutex_unlock(&g_mu);
     return DS_OK;
 }
 
@@ -487,11 +687,16 @@ HRESULT WINAPI IDirectSoundBuffer_Stop(GPTR This)
 {
     ds_buffer *b = buf_of(This);
     if (!b) return DSERR_UNSUPPORTED;
+    if (dsound_trace())
+        VT3_INFO("DirectSound: Stop 0x%08x (playing %d)", (unsigned)This, b->playing);
+    pthread_mutex_lock(&g_mu);
     if (b->playing) {
         b->pos = play_cursor(b);
         b->playing = 0;
         b->looping = 0;                  /* the looping status belongs to the playback that Stop ends */
+        active_remove_locked(b);
     }
+    pthread_mutex_unlock(&g_mu);
     return DS_OK;
 }
 
