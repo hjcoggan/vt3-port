@@ -124,6 +124,7 @@ static struct {
     float zero_consts[VT3_CONST_REGS * 4];
     gl_prog progs[VT3_MAX_PROGS];
     GLuint program, vao, vbo;
+    GLuint vao_tl, vbo_tl;        /* the fixed-function (XYZRHW) path: its own VAO and buffer */
     GLint u_logical_size, u_tex, u_use_tex;
     gl_tex tex[VT3_MAX_TEX];
 } g;
@@ -229,6 +230,21 @@ static int gl_init(int logical_w, int logical_h)
     p_glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, VT3_VERTEX_BYTES, (const void *)16);
     p_glEnableVertexAttribArray(2);
     p_glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, VT3_VERTEX_BYTES, (const void *)20);
+    g.attr_mask = 0x7u;           /* attributes 0-2 are enabled on g.vao above */
+
+    /* The fixed-function path has its own VAO with the XYZRHW layout. The program path sets
+     * g.vao's attributes for each draw, so this layout must not share that VAO. */
+    p_glGenVertexArrays(1, &g.vao_tl);
+    p_glBindVertexArray(g.vao_tl);
+    p_glGenBuffers(1, &g.vbo_tl);
+    p_glBindBuffer(GL_ARRAY_BUFFER, g.vbo_tl);
+    p_glEnableVertexAttribArray(0);
+    p_glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, VT3_VERTEX_BYTES, (const void *)0);
+    p_glEnableVertexAttribArray(1);
+    p_glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, VT3_VERTEX_BYTES, (const void *)16);
+    p_glEnableVertexAttribArray(2);
+    p_glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, VT3_VERTEX_BYTES, (const void *)20);
+    p_glBindVertexArray(g.vao);
 
     /* Offscreen target at logical resolution. */
     p_glGenTextures(1, &g.fbo_color);
@@ -286,6 +302,8 @@ static void gl_shutdown(void)
     }
     if (g.vbo) p_glDeleteBuffers(1, &g.vbo);
     if (g.vao) p_glDeleteVertexArrays(1, &g.vao);
+    if (g.vbo_tl) p_glDeleteBuffers(1, &g.vbo_tl);
+    if (g.vao_tl) p_glDeleteVertexArrays(1, &g.vao_tl);
     if (g.program) p_glDeleteProgram(g.program);
     memset(&g, 0, sizeof g);
 }
@@ -376,8 +394,8 @@ static void gl_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_te
     gl_bind_logical_fbo();
     static const vt3_rstate tl_state = { 1, 5, 6, 0, 0, 8, 1 };   /* alpha blend, no depth, no cull */
     apply_state(&tl_state);
-    p_glBindVertexArray(g.vao);
-    p_glBindBuffer(GL_ARRAY_BUFFER, g.vbo);
+    p_glBindVertexArray(g.vao_tl);
+    p_glBindBuffer(GL_ARRAY_BUFFER, g.vbo_tl);
     p_glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)count * VT3_VERTEX_BYTES, v, GL_STREAM_DRAW);
 
     p_glUseProgram(g.program);

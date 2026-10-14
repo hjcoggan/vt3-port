@@ -10,6 +10,7 @@
 #include "d3d9_internal.h"
 #include "vt3/vt3_log.h"
 
+#include <float.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -291,6 +292,17 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         } else {
             memcpy(tmp, src, (size_t)n * 28);
         }
+        /* The movie quad never writes rhw. A vertex whose rhw is not a normal, positive, finite
+         * float would divide by zero in the vertex shader, so it gets 1.0. Position comes from x
+         * and y, so valid vertices are unchanged. */
+        uint32_t fixed = 0;
+        for (uint32_t i = 0; i < n; i++) {
+            if (!(tmp[i].rhw >= FLT_MIN && tmp[i].rhw <= FLT_MAX)) {
+                tmp[i].rhw = 1.0f;
+                fixed++;
+            }
+        }
+        if (fixed) VT3_DEBUG("TL draw: %u of %u vertices had an invalid rhw, set to 1.0", fixed, n);
         vt3_tex t0 = 0;
         d3d9_texture *tx = d3d9_texture_of(d->textures[0]);
         if (tx) t0 = tx->gl;
