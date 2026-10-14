@@ -12,6 +12,11 @@
 
 #include <SDL3/SDL.h>
 
+#include <ctype.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <string.h>
+
 #define VT3_MAX_PADS 4
 
 typedef struct pad_button_map {
@@ -145,6 +150,159 @@ void vt3_input_sdl_poll(void)
     vt3_input_set_axis(VT3_AXIS_RY, SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTY) * s);
     vt3_input_set_axis(VT3_AXIS_LT, SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) * s);
     vt3_input_set_axis(VT3_AXIS_RT, SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) * s);
+}
+
+/* ---- scripted input (VT3_INPUT_SCRIPT) ------------------------------------------
+ * VT3_INPUT_SCRIPT="2.0:DOWN,2.5:RETURN": each entry presses a key or gamepad button at
+ * that time (seconds after the platform starts) and releases it 0.12 s later. A timer
+ * thread pushes the presses as SDL events with SDL_PushEvent, so they take the same path
+ * as a real press: the SDL queue, vt3_input_sdl_event, then the raw keyboard state that
+ * DirectInput reads. Off unless the variable is set.
+ * Keys: UP DOWN LEFT RIGHT RETURN ESCAPE (keyboard), START (gamepad button).
+ */
+#define SCRIPT_MAX_ENTRIES 64
+#define SCRIPT_HOLD_NS 120000000ull
+
+typedef struct script_event {
+    uint64_t at_ns;              /* offset from the script start */
+    int is_pad;                  /* 0: keyboard scancode, 1: gamepad button */
+    int code;                    /* SDL_Scancode or SDL_GamepadButton */
+    int down;
+    char name[16];
+} script_event;
+
+static script_event g_script[2 * SCRIPT_MAX_ENTRIES];
+static int g_script_n;
+
+static int script_lookup(const char *name, int *is_pad, int *code)
+{
+    static const struct { const char *name; int is_pad; int code; } k[] = {
+        { "UP", 0, SDL_SCANCODE_UP },
+        { "DOWN", 0, SDL_SCANCODE_DOWN },
+        { "LEFT", 0, SDL_SCANCODE_LEFT },
+        { "RIGHT", 0, SDL_SCANCODE_RIGHT },
+        { "RETURN", 0, SDL_SCANCODE_RETURN },
+        { "ESCAPE", 0, SDL_SCANCODE_ESCAPE },
+        { "START", 1, SDL_GAMEPAD_BUTTON_START },
+    };
+    for (size_t i = 0; i < sizeof k / sizeof k[0]; i++) {
+        if (strcmp(name, k[i].name) == 0) {
+            *is_pad = k[i].is_pad;
+            *code = k[i].code;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Parses "t:KEY,t:KEY,..." into press and release events. Returns the number of entries. */
+static int script_parse(const char *spec)
+{
+    char *copy = strdup(spec);
+    if (!copy) return 0;
+    int entries = 0;
+    char *save = NULL;
+    for (char *tok = strtok_r(copy, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
+        while (*tok == ' ') tok++;
+        char *end = NULL;
+        double at = strtod(tok, &end);
+        if (end == tok || *end != ':' || at < 0.0) {
+            VT3_WARN("VT3_INPUT_SCRIPT: bad entry '%s' (want time:KEY)", tok);
+            continue;
+        }
+        char name[16] = { 0 };
+        size_t n = 0;
+        for (const char *p = end + 1; *p && n < sizeof name - 1; p++) {
+            if (*p != ' ') name[n++] = (char)toupper((unsigned char)*p);
+        }
+        int is_pad = 0, code = 0;
+        if (!script_lookup(name, &is_pad, &code)) {
+            VT3_WARN("VT3_INPUT_SCRIPT: unknown key '%s'", name);
+            continue;
+        }
+        if (entries >= SCRIPT_MAX_ENTRIES) break;
+        uint64_t t = (uint64_t)(at * 1000000000.0 + 0.5);
+        for (int down = 1; down >= 0; down--) {
+            script_event *e = &g_script[g_script_n++];
+            e->at_ns = down ? t : t + SCRIPT_HOLD_NS;
+            e->is_pad = is_pad;
+            e->code = code;
+            e->down = down;
+            memcpy(e->name, name, sizeof e->name);
+        }
+        entries++;
+    }
+    free(copy);
+    for (int i = 1; i < g_script_n; i++) {          /* sort by time; releases follow presses */
+        script_event x = g_script[i];
+        int j = i - 1;
+        while (j >= 0 && g_script[j].at_ns > x.at_ns) {
+            g_script[j + 1] = g_script[j];
+            j--;
+        }
+        g_script[j + 1] = x;
+    }
+    return entries;
+}
+
+static void script_wait_until(uint64_t t)
+{
+    for (;;) {
+        uint64_t now = SDL_GetTicksNS();
+        if (now >= t) return;
+        uint64_t left = t - now;
+        SDL_DelayNS(left < 5000000ull ? left : 5000000ull);
+    }
+}
+
+static void script_push(const script_event *e)
+{
+    SDL_Event ev;
+    SDL_zero(ev);
+    uint64_t now = SDL_GetTicksNS();
+    if (e->is_pad) {
+        ev.type = e->down ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP;
+        ev.gbutton.timestamp = now;
+        ev.gbutton.button = (Uint8)e->code;
+        ev.gbutton.down = e->down != 0;
+    } else {
+        ev.type = e->down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+        ev.key.timestamp = now;
+        ev.key.scancode = (SDL_Scancode)e->code;
+        ev.key.down = e->down != 0;
+    }
+    if (!SDL_PushEvent(&ev)) VT3_WARN("input script: SDL_PushEvent failed: %s", SDL_GetError());
+}
+
+static void *script_thread(void *arg)
+{
+    (void)arg;
+    uint64_t t0 = SDL_GetTicksNS();
+    for (int i = 0; i < g_script_n; i++) {
+        script_wait_until(t0 + g_script[i].at_ns);
+        script_push(&g_script[i]);
+        VT3_INFO("input script: %s %s at %.2f s", g_script[i].name, g_script[i].down ? "down" : "up",
+                 (double)g_script[i].at_ns / 1e9);
+    }
+    return NULL;
+}
+
+void vt3_input_sdl_script_start(void)
+{
+    const char *spec = getenv("VT3_INPUT_SCRIPT");
+    if (!spec || !*spec) return;
+    int entries = script_parse(spec);
+    if (entries == 0) {
+        VT3_WARN("VT3_INPUT_SCRIPT: no usable entries; no scripted input");
+        return;
+    }
+    pthread_t th;
+    if (pthread_create(&th, NULL, script_thread, NULL) != 0) {
+        VT3_WARN("VT3_INPUT_SCRIPT: could not start the timer thread");
+        return;
+    }
+    pthread_detach(th);
+    VT3_INFO("input script: %d entries scheduled from VT3_INPUT_SCRIPT", entries);
 }
 
 void vt3_input_sdl_shutdown(void)
