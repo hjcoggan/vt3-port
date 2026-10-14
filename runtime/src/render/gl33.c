@@ -99,7 +99,9 @@ VT3_GL_FUNCS(VT3_DECL_VAR)
     p_##name = (vt3_pfn_##name)vt3_platform_gl_proc(#name);                           \
     if (!p_##name) { VT3_ERROR("GL 3.3 entry point missing: %s", #name); missing++; }
 
-#define VT3_MAX_TEX 256
+/* GL texture slots. A slot is freed when its D3D texture is released; a game that keeps
+ * several hundred textures alive (a match loads its HUD and players that way) needs more than 256. */
+#define VT3_MAX_TEX 4096
 #define VT3_MAX_PROGS 256
 #define VT3_CONST_REGS 256
 
