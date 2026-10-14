@@ -183,6 +183,11 @@ static int script_lookup(const char *name, int *is_pad, int *code)
         { "RIGHT", 0, SDL_SCANCODE_RIGHT },
         { "RETURN", 0, SDL_SCANCODE_RETURN },
         { "ESCAPE", 0, SDL_SCANCODE_ESCAPE },
+        { "Z", 0, SDL_SCANCODE_Z },              /* A button, as in k_key_map */
+        { "X", 0, SDL_SCANCODE_X },              /* B */
+        { "A", 0, SDL_SCANCODE_A },              /* X */
+        { "S", 0, SDL_SCANCODE_S },              /* Y */
+        { "BACKSPACE", 0, SDL_SCANCODE_BACKSPACE }, /* BACK */
         { "START", 1, SDL_GAMEPAD_BUTTON_START },
     };
     for (size_t i = 0; i < sizeof k / sizeof k[0]; i++) {
