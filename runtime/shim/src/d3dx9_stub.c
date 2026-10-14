@@ -66,7 +66,8 @@ static void dump_source(GPTR src, UINT len)
  * map a source (its address in the game's image, its length and its entry point) to the blob
  * the shipped build uses, so the call returns that blob instead of compiling. Only the
  * addresses are kept here; the bytes are read from the game's own image at run time.
- * Matched by shape, not by hash: see the report in docs/d3d9-shaders.md. */
+ * Matched by constant names and instruction shape, not by hash. Sources with no entry here
+ * have no shipped blob: their constant names appear in no blob of any of the three executables. */
 typedef struct vt3_shipped {
     uint32_t src, src_len;   /* the HLSL text in the image */
     const char *entry;
