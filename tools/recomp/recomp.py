@@ -757,7 +757,8 @@ class Analysis:
 
     def _make_table(self, jaddr, table, idx_reg, bound_end):
         if jaddr in self.table_sizes:
-            return self._table_from_count(jaddr, table, self.table_sizes[jaddr])
+            count, lo = self.table_sizes[jaddr]
+            return self._table_from_count(jaddr, table, count, lo, explicit=True)
         count = self._bound_before(bound_end, idx_reg)
         if count is None:
             count = self._const_count(bound_end, idx_reg)
@@ -767,22 +768,32 @@ class Analysis:
             return JTable(jaddr, table, 0, [], bad="no cmp/ja bound")
         return self._table_from_count(jaddr, table, count)
 
-    def _table_from_count(self, jaddr, table, count):
+    def _table_from_count(self, jaddr, table, count, lo=0, explicit=False):
+        """Targets of a table whose index runs lo .. lo + count - 1, read at table + 4 * index.
+
+        An explicit size comes from a hand-checked note. Its entries may include values that are
+        not code: those are unreachable (the note says why), so they are left out of the targets,
+        and a jump that reaches one falls to the switch default, which traps. A derived size must
+        have code in every entry, as before."""
         if count < 2:
             self.log(f"error: jump at {jaddr:#x}: bound gives {count} entries")
             return JTable(jaddr, table, count, [], bad=f"bound gives {count} entries")
         targets = []
         for i in range(count):
+            addr = (table + 4 * (lo + i)) & M32
             try:
-                v = self.img.read32(table + 4 * i)
+                v = self.img.read32(addr)
             except DecodeError:
                 return JTable(jaddr, table, count, [], bad=f"entry {i} outside image")
             if not self.img.is_exec(v):
-                return JTable(jaddr, table, count, [], bad=f"entry {i} = {v:#x} is not code")
+                if not explicit:
+                    return JTable(jaddr, table, count, [], bad=f"entry {i} = {v:#x} is not code")
+                self.log(f"note: jump at {jaddr:#x}: entry {lo + i} = {v:#x} is not code, unreachable")
+                continue
             if v not in targets:
                 targets.append(v)
         for i in range(count):
-            self.table_slots.add(table + 4 * i)
+            self.table_slots.add((table + 4 * (lo + i)) & M32)
         return JTable(jaddr, table, count, sorted(targets))
 
     def flow(self, ins):
@@ -2170,8 +2181,9 @@ def main(argv=None):
         with open(args.table_sizes) as f:
             for line in f:
                 body = line.split('#')[0].split()
-                if len(body) == 2:
-                    sizes[int(body[0], 16)] = int(body[1])
+                # JUMP_ADDR COUNT [LO]: the index runs LO .. LO+COUNT-1 (LO may be negative, default 0).
+                if len(body) in (2, 3):
+                    sizes[int(body[0], 16)] = (int(body[1]), int(body[2]) if len(body) == 3 else 0)
     an = Analysis(img, dec, log, table_sizes=sizes)
     seeds = []
     if args.seeds:

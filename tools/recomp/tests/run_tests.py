@@ -14,6 +14,7 @@ Usage: run_tests.py [-k SUBSTR] [--keep]
 """
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -61,6 +62,7 @@ VARIANTS = {
     't16_entry': [('O0', ['-O0']), ('O2', ['-O2'])],
     't20_modulo': [('O0', ['-O0']), ('O2', ['-O2'])],
     't21_constidx': [('O0', ['-O0']), ('O2', ['-O2'])],
+    't22_tails': [('O0', ['-O0']), ('O2', ['-O2'])],
     't17_seek': [('O0', ['-O0']), ('O2', ['-O2'])],
     't18_save': [('O0', ['-O0']), ('O2', ['-O2'])],
     't19_overlapped': [('O0', ['-O0']), ('O2', ['-O2'])],
@@ -142,22 +144,54 @@ def build_runtime(objdir):
     return objs
 
 
+# A test can give the size of a jump table it contains: /* TABLE <label> <count> [lo] */, where
+# <label> is a global label placed on the jump. The harness resolves the label in the link map and
+# writes the translator's table-size file (JUMP_ADDR COUNT [LO]).
+TABLE_NOTE = re.compile(r'/\*\s*TABLE\s+(\S+)\s+(\d+)(?:\s+(-?\d+))?\s*\*/')
+MAP_SYM = re.compile(r'^\s*0x([0-9a-fA-F]+)\s+(\S+)\s*$')
+
+
+def write_table_sizes(src, mapfile, out):
+    """Write the table-size file from the TABLE notes in src. Returns False, and writes nothing, if there are none."""
+    notes = TABLE_NOTE.findall(open(src).read())
+    if not notes:
+        return False
+    # The link map writes C-style names: the leading underscore of an assembler label is dropped.
+    syms = {}
+    for line in open(mapfile, errors='replace'):
+        m = MAP_SYM.match(line)
+        if m:
+            syms[m.group(2).lstrip('_')] = int(m.group(1), 16)
+    with open(out, 'w') as f:
+        for label, count, lo in notes:
+            key = label.lstrip('_')
+            if key not in syms:
+                sys.exit(f"{src}: TABLE label {label} is not in the link map")
+            f.write(f"{syms[key]:x} {count} {lo or '0'}\n")
+    return True
+
+
 def build_one(test, vname, vflags, objs):
     tdir = os.path.join(ROOT, 'tests', test, vname)
     shutil.rmtree(tdir, ignore_errors=True)
     os.makedirs(tdir)
     src = os.path.join(HERE, test + '.c')
     exe = os.path.join(tdir, 'prog.exe')
-    r = run([GCC] + vflags + BASE_CFLAGS + ['-I', HERE, src, '-o', exe] + BASE_LDFLAGS)
+    mapfile = os.path.join(tdir, 'prog.map')
+    r = run([GCC] + vflags + BASE_CFLAGS + ['-I', HERE, src, '-o', exe] + BASE_LDFLAGS
+            + ['-Wl,-Map=' + mapfile])
     if r.returncode:
         return None, f"compile failed: {r.stderr.decode()[-800:]}"
+    tables = os.path.join(tdir, 'tables.txt')
+    has_tables = write_table_sizes(src, mapfile, tables)
 
     # Expected output: the original exe under Wine.
     w = run(['arch', '-x86_64', WINE, 'prog.exe'], cwd=tdir, env=wine_env())
     expected = (w.stdout, w.returncode)
 
     # Translate.
-    tr = run([PY, '-I', RECOMP, exe, '--out', tdir, '--name', 'mod'])
+    extra = ['--table-sizes', tables] if has_tables else []
+    tr = run([PY, '-I', RECOMP, exe, '--out', tdir, '--name', 'mod'] + extra)
     tlog = tr.stdout.decode() + tr.stderr.decode()
     open(os.path.join(tdir, 'translate.log'), 'w').write(tlog)
     if tr.returncode:
