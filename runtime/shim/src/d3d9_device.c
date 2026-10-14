@@ -236,6 +236,48 @@ HRESULT WINAPI IDirect3DDevice9_GetViewport(GPTR This, GPTR pViewport)
     return S_OK;
 }
 
+/* ---- scissor ---------------------------------------------------------------- */
+
+/* Sends the scissor state to the renderer. The test is on while D3DRS_SCISSORTESTENABLE is set.
+ * Until SetScissorRect is called, the rect is the whole target (the renderer clamps it). */
+static void push_scissor(const d3d9_device *d)
+{
+    int32_t l = 0, t = 0, r = 65535, b = 65535;
+    if (d->scissor_set) {
+        l = d->scissor_rc[0];
+        t = d->scissor_rc[1];
+        r = d->scissor_rc[2];
+        b = d->scissor_rc[3];
+    }
+    d3d9_gpu_set_scissor(d->rs[D3DRS_CHK_SCISSORTESTENABLE] != 0, l, t, r - l, b - t);
+}
+
+HRESULT WINAPI IDirect3DDevice9_SetScissorRect(GPTR This, GPTR pRect)
+{
+    d3d9_device *d = DEV(This);
+    const void *rc = d3d9_gmem(pRect, 16);
+    if (!d || !rc) return D3DERR_CHK_INVALIDCALL;
+    memcpy(d->scissor_rc, rc, sizeof d->scissor_rc);
+    d->scissor_set = 1;
+    push_scissor(d);
+    return S_OK;
+}
+
+HRESULT WINAPI IDirect3DDevice9_GetScissorRect(GPTR This, GPTR pRect)
+{
+    d3d9_device *d = DEV(This);
+    void *out = d3d9_gmem(pRect, 16);
+    if (!d || !out) return D3DERR_CHK_INVALIDCALL;
+    if (d->scissor_set) {
+        memcpy(out, d->scissor_rc, sizeof d->scissor_rc);
+    } else {
+        d3d9_surface *bb = d->backbuffer ? d3d9_surface_of(d->backbuffer) : NULL;
+        int32_t full[4] = { 0, 0, bb ? (int32_t)bb->w : 0, bb ? (int32_t)bb->h : 0 };
+        memcpy(out, full, sizeof full);
+    }
+    return S_OK;
+}
+
 /* ---- states ----------------------------------------------------------------- */
 
 HRESULT WINAPI IDirect3DDevice9_SetRenderState(GPTR This, UINT State, DWORD Value)
@@ -243,6 +285,7 @@ HRESULT WINAPI IDirect3DDevice9_SetRenderState(GPTR This, UINT State, DWORD Valu
     d3d9_device *d = DEV(This);
     if (!d || State >= 256) return D3DERR_CHK_INVALIDCALL;
     d->rs[State] = Value;
+    if (State == D3DRS_CHK_SCISSORTESTENABLE) push_scissor(d);
     return S_OK;
 }
 

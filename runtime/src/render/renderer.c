@@ -96,3 +96,8 @@ void vt3_gfx_clear_depth(float depth)
     if (g_ops && g_ops->clear_depth) g_ops->clear_depth(depth);
 }
 
+void vt3_gfx_set_scissor(int enable, vt3_rect r)
+{
+    if (g_ops && g_ops->set_scissor) g_ops->set_scissor(enable, r);
+}
+

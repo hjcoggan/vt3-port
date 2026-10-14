@@ -153,6 +153,8 @@ typedef struct d3d9_device {
     float psc[224][4];
     uint32_t scene_depth;
     int gpu;                            /* a renderer context exists for this device */
+    int32_t scissor_rc[4];              /* RECT from SetScissorRect: left, top, right, bottom */
+    int scissor_set;                    /* 0: the rect is the whole target */
 } d3d9_device;
 
 void d3d9_device_free(d3d9_device *d);
@@ -163,6 +165,7 @@ int d3d9_gpu_init(uint32_t width, uint32_t height);   /* 0 on success, -1 when n
 int d3d9_gpu_ok(void);
 void d3d9_gpu_begin(void);
 void d3d9_gpu_clear(uint32_t argb, int do_color, int do_depth, float depth);
+void d3d9_gpu_set_scissor(int enable, int x, int y, int w, int h);
 void d3d9_gpu_present(void);
 vt3_tex d3d9_gpu_tex_create(uint32_t w, uint32_t h, uint32_t fmt);
 void d3d9_gpu_tex_destroy(vt3_tex t);
@@ -230,5 +233,6 @@ d3d9_buffer *d3d9_buffer_of(GPTR obj);
 #define D3DRTYPE_CHK_CUBETEXTURE 5u
 #define D3DRTYPE_CHK_VERTEXBUFFER 6u
 #define D3DRTYPE_CHK_INDEXBUFFER 7u
+#define D3DRS_CHK_SCISSORTESTENABLE 174u
 
 #endif /* VT3_SHIM_D3D9_INTERNAL_H */

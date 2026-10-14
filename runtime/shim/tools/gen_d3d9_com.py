@@ -68,6 +68,7 @@ IMPLEMENTED = {
         "CreateQuery", "GetBackBuffer", "GetSwapChain", "GetNumberOfSwapChains",
         "CreateAdditionalSwapChain", "DrawPrimitive", "DrawIndexedPrimitive", "DrawPrimitiveUP",
         "DrawIndexedPrimitiveUP", "StretchRect", "ValidateDevice",
+        "SetScissorRect", "GetScissorRect",
     },
     "IDirect3DSwapChain9": IUNKNOWN | {"GetBackBuffer", "GetDisplayMode", "GetDevice",
                                        "GetPresentParameters", "Present"},

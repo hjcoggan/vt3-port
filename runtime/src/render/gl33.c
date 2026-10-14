@@ -25,6 +25,7 @@
     X(void, glClearColor, (GLfloat, GLfloat, GLfloat, GLfloat))                           \
     X(void, glClear, (GLbitfield))                                                        \
     X(void, glViewport, (GLint, GLint, GLsizei, GLsizei))                                 \
+    X(void, glScissor, (GLint, GLint, GLsizei, GLsizei))                                  \
     X(void, glEnable, (GLenum))                                                           \
     X(void, glDisable, (GLenum))                                                          \
     X(void, glBlendFunc, (GLenum, GLenum))                                                \
@@ -128,6 +129,8 @@ static struct {
     GLuint vao_tl, vbo_tl;        /* the fixed-function (XYZRHW) path: its own VAO and buffer */
     GLint u_logical_size, u_tex, u_use_tex;
     gl_tex tex[VT3_MAX_TEX];
+    int scissor_on;               /* set_scissor state, applied to every logical-FBO operation */
+    vt3_rect scissor;             /* logical pixels, top-left origin */
 } g;
 
 static const char *k_vs =
@@ -195,6 +198,7 @@ static int gl_init(int logical_w, int logical_h)
 
     g.logical_w = logical_w;
     g.logical_h = logical_h;
+    g.scissor_on = 0;
 
     GLuint vs = compile(GL_VERTEX_SHADER, k_vs);
     GLuint fs = compile(GL_FRAGMENT_SHADER, k_fs);
@@ -369,10 +373,37 @@ static void gl_tex_destroy(vt3_tex t)
     g.tex[t - 1].used = 0;
 }
 
+/* D3D scissor (top-left origin, logical pixels) becomes a GL scissor (bottom-left origin).
+ * Applied to every operation on the logical buffer; present turns it off for its own blit. */
+static void gl_set_scissor(int enable, vt3_rect r)
+{
+    g.scissor_on = enable != 0;
+    g.scissor = r;
+}
+
+static void apply_scissor(void)
+{
+    if (!g.scissor_on) {
+        p_glDisable(GL_SCISSOR_TEST);
+        return;
+    }
+    int x0 = g.scissor.x, y0 = g.scissor.y;
+    int x1 = g.scissor.x + g.scissor.w, y1 = g.scissor.y + g.scissor.h;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > g.logical_w) x1 = g.logical_w;
+    if (y1 > g.logical_h) y1 = g.logical_h;
+    if (x1 < x0) x1 = x0;
+    if (y1 < y0) y1 = y0;
+    p_glEnable(GL_SCISSOR_TEST);
+    p_glScissor(x0, g.logical_h - y1, x1 - x0, y1 - y0);
+}
+
 static void gl_bind_logical_fbo(void)
 {
     p_glBindFramebuffer(GL_FRAMEBUFFER, g.fbo);
     p_glViewport(0, 0, g.logical_w, g.logical_h);
+    apply_scissor();
 }
 
 static void gl_begin_frame(void)
@@ -412,6 +443,8 @@ static void gl_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_te
 
 static void gl_present(const vt3_rect *dst, int nearest, int drawable_w, int drawable_h)
 {
+    /* The scissor belongs to the logical buffer; it must not clip the bars or the blit. */
+    p_glDisable(GL_SCISSOR_TEST);
     /* Clear the whole drawable to black first, so the bars are black. */
     p_glBindFramebuffer(GL_FRAMEBUFFER, 0);
     p_glViewport(0, 0, drawable_w, drawable_h);
@@ -666,4 +699,5 @@ const vt3_gfx_ops vt3_gfx_gl33 = {
     .draw_program = gl_draw_program,
     .readback = gl_readback,
     .clear_depth = gl_clear_depth,
+    .set_scissor = gl_set_scissor,
 };

@@ -64,6 +64,13 @@ void d3d9_gpu_clear(uint32_t argb, int do_color, int do_depth, float depth)
     if (do_depth) vt3_gfx_clear_depth(depth);
 }
 
+void d3d9_gpu_set_scissor(int enable, int x, int y, int w, int h)
+{
+    if (!g_gpu_ok) return;
+    vt3_rect r = { x, y, w, h };
+    vt3_gfx_set_scissor(enable, r);
+}
+
 void d3d9_gpu_present(void)
 {
     if (!g_gpu_ok) return;

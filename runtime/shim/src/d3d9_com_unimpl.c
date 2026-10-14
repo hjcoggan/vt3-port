@@ -259,22 +259,6 @@ HRESULT WINAPI IDirect3DDevice9_GetCurrentTexturePalette(GPTR This, GPTR Palette
     return E_NOTIMPL;
 }
 
-HRESULT WINAPI IDirect3DDevice9_SetScissorRect(GPTR This, GPTR rect)
-{
-    (void)This;
-    (void)(rect);
-    vt3s_unimpl("IDirect3DDevice9::SetScissorRect");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI IDirect3DDevice9_GetScissorRect(GPTR This, GPTR pRect)
-{
-    (void)This;
-    (void)(pRect);
-    vt3s_unimpl("IDirect3DDevice9::GetScissorRect");
-    return E_NOTIMPL;
-}
-
 HRESULT WINAPI IDirect3DDevice9_SetSoftwareVertexProcessing(GPTR This, BOOL bSoftware)
 {
     (void)This;
