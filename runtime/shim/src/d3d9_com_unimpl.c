@@ -881,29 +881,12 @@ HRESULT WINAPI ID3DXConstantTable_GetConstantDesc(GPTR This, UINT hConstant, GPT
     return E_NOTIMPL;
 }
 
-UINT WINAPI ID3DXConstantTable_GetSamplerIndex(GPTR This, UINT hConstant)
-{
-    (void)This;
-    (void)(hConstant);
-    vt3s_unimpl("ID3DXConstantTable::GetSamplerIndex");
-    return 0;
-}
-
 UINT WINAPI ID3DXConstantTable_GetConstant(GPTR This, UINT hConstant, UINT Index)
 {
     (void)This;
     (void)(hConstant);
     (void)(Index);
     vt3s_unimpl("ID3DXConstantTable::GetConstant");
-    return 0;
-}
-
-UINT WINAPI ID3DXConstantTable_GetConstantByName(GPTR This, UINT constant, GPTR name)
-{
-    (void)This;
-    (void)(constant);
-    (void)(name);
-    vt3s_unimpl("ID3DXConstantTable::GetConstantByName");
     return 0;
 }
 
@@ -984,17 +967,6 @@ HRESULT WINAPI ID3DXConstantTable_SetFloat(GPTR This, GPTR device, UINT constant
     (void)(constant);
     (void)(value);
     vt3s_unimpl("ID3DXConstantTable::SetFloat");
-    return E_NOTIMPL;
-}
-
-HRESULT WINAPI ID3DXConstantTable_SetFloatArray(GPTR This, GPTR device, UINT constant, GPTR values, UINT value_count)
-{
-    (void)This;
-    (void)(device);
-    (void)(constant);
-    (void)(values);
-    (void)(value_count);
-    vt3s_unimpl("ID3DXConstantTable::SetFloatArray");
     return E_NOTIMPL;
 }
 

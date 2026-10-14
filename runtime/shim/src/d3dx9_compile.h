@@ -14,4 +14,7 @@ int d3dx_compile_hlsl(const char *src, size_t len, const char *entry, const char
 /* A guest ID3DXBuffer holding a copy of nbytes at bytes. Returns 0 when out of memory. */
 uint32_t d3dx_buffer_new(const void *bytes, uint32_t nbytes);
 
+/* Frees the data of an ID3DXConstantTable object (d3dx9_ctable.c). */
+void d3dx_ctab_free(void *data);
+
 #endif /* VT3_SHIM_D3DX9_COMPILE_H */

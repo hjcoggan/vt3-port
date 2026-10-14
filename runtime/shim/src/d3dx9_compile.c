@@ -748,6 +748,10 @@ DWORD WINAPI ID3DXBuffer_GetBufferSize(GPTR This)
 
 void d3dx_obj_free(uint32_t kind, void *data)
 {
+    if (kind == D3D9_KIND_D3DXCONSTTABLE) {
+        d3dx_ctab_free(data);
+        return;
+    }
     if (kind == D3D9_KIND_D3DXBUFFER && data) {
         d3dx_buf *b = data;
         if (b->storage) HeapFree(GetProcessHeap(), 0, b->storage);

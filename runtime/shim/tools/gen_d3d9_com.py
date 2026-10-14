@@ -82,7 +82,7 @@ IMPLEMENTED = {
                                 "SetCooperativeLevel", "Compact", "GetSpeakerConfig",
                                 "SetSpeakerConfig", "Initialize"},
     "ID3DXBuffer": IUNKNOWN | {"GetBufferPointer", "GetBufferSize"},
-    "ID3DXConstantTable": IUNKNOWN,
+    "ID3DXConstantTable": IUNKNOWN | {"GetConstantByName", "GetSamplerIndex", "SetFloatArray"},
     "IDirectSoundBuffer": IUNKNOWN | {"GetCaps", "GetCurrentPosition", "GetFormat", "GetVolume",
                                       "GetPan", "GetFrequency", "GetStatus", "Initialize", "Lock",
                                       "Play", "SetCurrentPosition", "SetFormat", "SetVolume",

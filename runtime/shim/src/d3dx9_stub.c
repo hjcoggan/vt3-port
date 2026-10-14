@@ -150,14 +150,6 @@ HRESULT WINAPI D3DXCompileShaderFromFileA(GPTR filename, GPTR defines, GPTR incl
     return E_FAIL_D3DX;
 }
 
-HRESULT WINAPI D3DXGetShaderConstantTable(GPTR byte_code, GPTR constant_table)
-{
-    (void)byte_code;
-    note_unavailable("D3DXGetShaderConstantTable");
-    put32(constant_table, d3d9_new_stub(D3D9_KIND_D3DXCONSTTABLE, 0));
-    return E_FAIL_D3DX;
-}
-
 HRESULT WINAPI D3DXCreateTexture(GPTR device, UINT width, UINT height, UINT miplevels, DWORD usage, UINT format,
                                  UINT pool, GPTR texture)
 {
