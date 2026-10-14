@@ -85,6 +85,49 @@ static int resolve_path(const char *win, char *out, size_t cap)
     return 0;
 }
 
+/* Split a Win32 path at its last separator. dir gets the directory part (drive letter removed),
+ * leaf the final name. Returns -1 when the path ends in a separator, or dir is too small. */
+static int split_path(const char *win, char *dir, size_t cap, const char **leaf)
+{
+    if (strlen(win) >= 2 && isalpha((unsigned char)win[0]) && win[1] == ':') win += 2;
+    const char *last = NULL;
+    for (const char *q = win; *q; q++) {
+        if (*q == '\\' || *q == '/') last = q;
+    }
+    *leaf = last ? last + 1 : win;
+    if (**leaf == '\0') return -1;
+    size_t dl = last ? (size_t)(last - win) : 0;
+    if (dl >= cap) return -1;
+    memcpy(dir, win, dl);
+    dir[dl] = '\0';
+    return 0;
+}
+
+/* The Win32 error for a failed open(2). */
+static DWORD open_error(int err)
+{
+    switch (err) {
+    case EACCES:
+    case EPERM:
+    case EROFS:
+    case EISDIR:
+        return ERROR_ACCESS_DENIED;
+    case ENOTDIR:
+        return ERROR_PATH_NOT_FOUND;
+    default:
+        return ERROR_FILE_NOT_FOUND;
+    }
+}
+
+/* CreateFileA for files under the game root. Access is read, write, or both. Sharing is not
+ * enforced (one process). Dispositions follow Win32:
+ *   CREATE_NEW        create; ERROR_FILE_EXISTS if the name is taken
+ *   CREATE_ALWAYS     create, or truncate an existing file; ERROR_ALREADY_EXISTS on truncate
+ *   OPEN_EXISTING     open; ERROR_FILE_NOT_FOUND if missing
+ *   OPEN_ALWAYS       open, or create; ERROR_ALREADY_EXISTS when it was there
+ *   TRUNCATE_EXISTING open and truncate; needs write access; ERROR_FILE_NOT_FOUND if missing
+ * A new file's directory must exist (ERROR_PATH_NOT_FOUND otherwise). An existing name is
+ * matched case-insensitively, as for reads, so a save made by the game reads back the same way. */
 HANDLE WINAPI CreateFileA(LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES sa,
                           DWORD disposition, DWORD flags, HANDLE template_file)
 {
@@ -98,32 +141,63 @@ HANDLE WINAPI CreateFileA(LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATT
         vt3s_set_last_error(ERROR_INVALID_PARAMETER);
         return INVALID_HANDLE_VALUE;
     }
-    if (access & GENERIC_WRITE) {
-        vt3s_unimpl("CreateFileA(GENERIC_WRITE)");
-        vt3s_set_last_error(ERROR_ACCESS_DENIED);
+    if (disposition < CREATE_NEW || disposition > TRUNCATE_EXISTING) {
+        vt3s_set_last_error(ERROR_INVALID_PARAMETER);
         return INVALID_HANDLE_VALUE;
     }
-    if (disposition != OPEN_EXISTING) {
-        vt3s_unimpl("CreateFileA(disposition != OPEN_EXISTING)");
-        vt3s_set_last_error(ERROR_CALL_NOT_IMPLEMENTED);
+    int want_write = (access & GENERIC_WRITE) != 0;
+    int want_read = (access & GENERIC_READ) != 0 || !want_write;
+    if (disposition == TRUNCATE_EXISTING && !want_write) {
+        vt3s_set_last_error(ERROR_INVALID_PARAMETER);
         return INVALID_HANDLE_VALUE;
     }
+    int oflags = want_write ? (want_read ? O_RDWR : O_WRONLY) : O_RDONLY;
 
     char path[PATH_MAX];
-    if (resolve_path(win, path, sizeof path) != 0) {
-        VT3_DEBUG("CreateFileA: not found: %s", win);
-        vt3s_set_last_error(ERROR_FILE_NOT_FOUND);
-        return INVALID_HANDLE_VALUE;
+    DWORD result = ERROR_SUCCESS;   /* what GetLastError reports after a successful open */
+    if (resolve_path(win, path, sizeof path) == 0) {
+        struct stat st;
+        if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+            vt3s_set_last_error(ERROR_ACCESS_DENIED);
+            return INVALID_HANDLE_VALUE;
+        }
+        if (disposition == CREATE_NEW) {
+            vt3s_set_last_error(ERROR_FILE_EXISTS);
+            return INVALID_HANDLE_VALUE;
+        }
+        if (disposition == CREATE_ALWAYS || disposition == OPEN_ALWAYS) result = ERROR_ALREADY_EXISTS;
+        if (want_write && (disposition == CREATE_ALWAYS || disposition == TRUNCATE_EXISTING))
+            oflags |= O_TRUNC;
+    } else {
+        if (disposition == OPEN_EXISTING || disposition == TRUNCATE_EXISTING) {
+            VT3_DEBUG("CreateFileA: not found: %s", win);
+            vt3s_set_last_error(ERROR_FILE_NOT_FOUND);
+            return INVALID_HANDLE_VALUE;
+        }
+        /* A new file. Its directory must exist; the new name keeps the case the game gave. */
+        char dir[PATH_MAX], dpath[PATH_MAX];
+        const char *leaf = NULL;
+        if (split_path(win, dir, sizeof dir, &leaf) != 0 || resolve_path(dir, dpath, sizeof dpath) != 0) {
+            vt3s_set_last_error(ERROR_PATH_NOT_FOUND);
+            return INVALID_HANDLE_VALUE;
+        }
+        struct stat dst;
+        if (stat(dpath, &dst) != 0 || !S_ISDIR(dst.st_mode)) {
+            vt3s_set_last_error(ERROR_PATH_NOT_FOUND);
+            return INVALID_HANDLE_VALUE;
+        }
+        if (snprintf(path, sizeof path, "%s/%s", dpath, leaf) >= (int)sizeof path) {
+            vt3s_set_last_error(ERROR_PATH_NOT_FOUND);
+            return INVALID_HANDLE_VALUE;
+        }
+        oflags |= O_CREAT | (disposition == CREATE_NEW ? O_EXCL : 0);
     }
 
-    struct stat st;
-    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
-        vt3s_set_last_error(ERROR_ACCESS_DENIED);
-        return INVALID_HANDLE_VALUE;
-    }
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, oflags, 0644);
     if (fd < 0) {
-        vt3s_set_last_error(ERROR_FILE_NOT_FOUND);
+        int err = errno;
+        VT3_DEBUG("CreateFileA: open %s failed: %s", win, strerror(err));
+        vt3s_set_last_error(open_error(err));
         return INVALID_HANDLE_VALUE;
     }
     vfile *f = calloc(1, sizeof *f);
@@ -133,6 +207,7 @@ HANDLE WINAPI CreateFileA(LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATT
         return INVALID_HANDLE_VALUE;
     }
     f->fd = fd;
+    struct stat st;
     f->size = (fstat(fd, &st) == 0) ? (int64_t)st.st_size : 0;
 
     HANDLE h = vt3s_handle_new(VT3S_H_FILE, f);
@@ -142,7 +217,7 @@ HANDLE WINAPI CreateFileA(LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATT
         vt3s_set_last_error(ERROR_NOT_ENOUGH_MEMORY);
         return INVALID_HANDLE_VALUE;
     }
-    vt3s_set_last_error(ERROR_SUCCESS);
+    vt3s_set_last_error(result);
     return h;
 }
 
@@ -192,6 +267,8 @@ BOOL WINAPI WriteFile(HANDLE hf, LPCVOID buffer, DWORD bytes, LPDWORD bytes_writ
         if (w <= 0) break;
         done += (DWORD)w;
     }
+    struct stat wst;   /* the file may have grown: GetFileSize reads the size kept here */
+    if (fstat(f->fd, &wst) == 0) f->size = (int64_t)wst.st_size;
     if (bytes_written) vt3s_store_u32(bytes_written, done);
     vt3s_set_last_error(done == bytes ? ERROR_SUCCESS : ERROR_ACCESS_DENIED);
     return done == bytes ? TRUE : FALSE;

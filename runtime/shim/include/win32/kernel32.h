@@ -25,6 +25,12 @@ BOOL   WINAPI WriteFile(HANDLE file, LPCVOID buffer, DWORD bytes, LPDWORD bytes_
 DWORD  WINAPI SetFilePointer(HANDLE file, LONG distance, LPLONG distance_high, DWORD method);
 BOOL   WINAPI SetFilePointerEx(HANDLE file, LONGLONG distance, LPLONGLONG new_pos, DWORD method);
 #define ERROR_NEGATIVE_SEEK      131u
+#define ERROR_FILE_EXISTS        80u
+#define ERROR_ALREADY_EXISTS     183u
+#define CREATE_NEW               1u
+#define CREATE_ALWAYS            2u
+#define OPEN_ALWAYS              4u
+#define TRUNCATE_EXISTING        5u
 DWORD  WINAPI GetFileSize(HANDLE file, LPDWORD size_high);
 BOOL   WINAPI CloseHandle(HANDLE handle);
 

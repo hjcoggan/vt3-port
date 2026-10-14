@@ -38,6 +38,68 @@ static icent *itab = NULL;
 static size_t nitab = 0;
 static int trace = 0;
 
+/* ---- Skip intro (VT3_SKIP_INTRO) ----------------------------------------------------------
+ * Game addresses are for the NoCD 1.0.1 VT3.exe (ImageBase 0x400000). See skipintro/plan.md.
+ *   mode 1: the debug-menu entry "Tennis (Skip Intro)" runs instead of "Tennis". The game is built
+ *           with Game::skipIntro = 1, so the logo scene hands over to the Title scene at once.
+ *   mode 2: also press Start on pad 0 once the Title scene is up, which goes on to the front end. */
+#define VA_GAME_PTR        0x009abe88u  /* Game* (size 0x2b4) */
+#define VA_DBGMENU_FN_SLOT 0x00859684u  /* function pointer of the "Tennis" debug entry, jumped to by 0x44041d */
+#define FN_TENNIS          0x00440910u  /* new Game(skipIntro=0), then the main loop */
+#define FN_TENNIS_SKIP     0x00440930u  /* new Game(skipIntro=1), then the main loop */
+#define VTBL_TITLE_SCENE   0x007649d8u  /* Title (press start) scene class */
+#define FN_PAD_ASSIGN      0x004aec20u  /* thiscall PadMgr::Assign(int pad) */
+#define OFF_GAME_STATEMGR  0xa8u
+#define OFF_GAME_PADMGR    0x7cu
+#define OFF_SM_CURSCENE    0x38u
+#define OFF_SCENE_FRAME    0x10u
+
+static int skip_mode = 0;
+static int skip_pressed = 0;
+static int skip_trace = 0;
+static uint32_t skip_last_scene = 0;
+
+/* Run a guest thiscall(ecx, arg) below the live frames of the calling (main) thread. */
+static void guest_thiscall1(const vt3_cpu *cur, uint32_t fn, uint32_t ecx, uint32_t arg)
+{
+    vt3_cpu n;
+    memset(&n, 0, sizeof n);
+    n.esp = cur->esp - 256u;
+    n.esp -= 4;
+    wr32(n.esp, arg);
+    n.esp -= 4;
+    wr32(n.esp, VT_SENTINEL_RET);
+    n.ecx = ecx;
+    n.fs_base = cur->fs_base;
+    n.fcw = 0x37Fu;
+    vt_icall(&n, fn);
+}
+
+/* Called on the main thread from inside PeekMessageA, so once per rendered frame. */
+static void skip_intro_hook(const vt3_cpu *cur)
+{
+    uint32_t game = rd32(VA_GAME_PTR);
+    if (!game) return;
+    uint32_t sm = rd32(game + OFF_GAME_STATEMGR);
+    if (!sm) return;
+    uint32_t scene = rd32(sm + OFF_SM_CURSCENE);
+    if (skip_trace && scene != skip_last_scene) {
+        skip_last_scene = scene;
+        uint32_t pad = rd32(game + OFF_GAME_PADMGR);
+        fprintf(stderr, "vt3: scene -> %08x vtbl %08x (init %08x update %08x) mode %u padAssigned %u\n",
+                scene, scene ? rd32(scene) : 0, scene ? rd32(rd32(scene) + 4) : 0,
+                scene ? rd32(rd32(scene) + 8) : 0, rd32(sm + 0x34), pad ? rd8(pad + 8) : 0);
+    }
+    if (skip_mode != 2 || skip_pressed) return;
+    if (!scene || rd32(scene) != VTBL_TITLE_SCENE) return;
+    if (rd32(scene + OFF_SCENE_FRAME) < 12) return;          /* let the title fade in first */
+    uint32_t pad = rd32(game + OFF_GAME_PADMGR);
+    if (!pad) return;
+    skip_pressed = 1;
+    fprintf(stderr, "vt3: skip intro: pressing Start on pad 0 (title scene %08x)\n", scene);
+    guest_thiscall1(cur, FN_PAD_ASSIGN, pad, 0);
+}
+
 /* One MSG (hwnd, message, wParam, lParam at offsets 0, 4, 8, 12) from guest memory. */
 static void vt_trace_msg(const char *what, uint32_t p)
 {
@@ -87,6 +149,9 @@ void vt_icall(vt3_cpu *c, uint32_t target)
         exit(97);
     }
     icent *e = &itab[lo];
+    if (((skip_mode == 2 && !skip_pressed) || skip_trace) && e->name && !strcmp(e->name, "PeekMessageA") &&
+        vt3s_current_tid() == 1)
+        skip_intro_hook(c);
     if (!e->fn) {
         fflush(stdout);
         fprintf(stderr, "vt3: unimplemented import %s\n", e->name);
@@ -268,6 +333,23 @@ int vt3_run(const vt3_module *m, const char *image_path)
     if (got != m->image_size) {
         fprintf(stderr, "vt3: %s is %zu bytes, expected %u\n", image_path, got, m->image_size);
         return 1;
+    }
+
+    {
+        const char *sk = getenv("VT3_SKIP_INTRO");
+        skip_mode = sk ? atoi(sk) : 2;   /* default: straight to the front end. VT3_SKIP_INTRO=0 turns it off. */
+        skip_trace = getenv("VT3_SKIP_TRACE") != NULL;
+        if (skip_mode >= 1) {
+            if (rd32(VA_DBGMENU_FN_SLOT) == FN_TENNIS) {
+                wr32(VA_DBGMENU_FN_SLOT, FN_TENNIS_SKIP);
+                fprintf(stderr, "vt3: skip intro: debug entry %08x -> %08x (mode %d)\n",
+                        FN_TENNIS, FN_TENNIS_SKIP, skip_mode);
+            } else {
+                fprintf(stderr, "vt3: skip intro: slot %08x holds %08x, not patching\n",
+                        VA_DBGMENU_FN_SLOT, rd32(VA_DBGMENU_FN_SLOT));
+                skip_mode = 0;
+            }
+        }
     }
 
     /* TEB: the few fields the CRT and SEH read through FS. */
