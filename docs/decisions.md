@@ -46,3 +46,5 @@
 - **Timers:** timeSetEvent and the other winmm timers run on a timer thread. Owner: recompiler agent (winmm).
 - **D3DXCompileShader:** the first attempt must succeed, because the game treats failure as fatal. Find the source it passes in, then return a precompiled blob or implement the smallest compile that covers it. Owner: runtime agent (D3DX).
 - **Graphics API:** OpenGL 3.3 core on macOS and OpenGL ES 3.0 on Android, behind the renderer interface in `runtime/include/vt3/vt3_renderer.h`. Vulkan is not used for now. It would need SM2 to SPIR-V instead of GLSL, and MoltenVK on macOS. It can be added later as a second renderer backend, if Android performance needs it.
+- **Intro skipping (owner request):** the logos and intro movie are skipped by default. The translated game starts the debug "Tennis (Skip Intro)" mode, which goes straight to the front end. Set `VT3_SKIP_INTRO=0` to turn this off. The mechanism is in `dump/recomp/skipintro/plan.md`. The mode is applied in the loader, not in the original code.
+- **Priority:** menus and gameplay come before intros, so DirectInput (menu navigation) and the save write are next after this.
