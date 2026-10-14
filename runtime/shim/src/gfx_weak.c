@@ -41,6 +41,12 @@ __attribute__((weak)) int vt3_platform_pump_events(void)
     return 1;
 }
 
+__attribute__((weak)) int vt3_platform_next_event(vt3_event *ev)
+{
+    (void)ev;
+    return 0;
+}
+
 __attribute__((weak)) void vt3_platform_drawable_size(int *w, int *h)
 {
     if (w) *w = 0;

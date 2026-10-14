@@ -18,6 +18,13 @@ void vt3shim_set_guest_call(vt3shim_guest_call_fn fn);
  * before the guest entry point runs. */
 void vt3shim_thread_begin_main(void);
 
+/* Sets the main thread's guest stack top and TEB, so shim code can call guest code on it. */
+void vt3shim_set_main_teb(uint32_t stack_top, uint32_t teb);
+
+/* The translator calls this around each shim or guest function it dispatches, with the guest
+ * stack pointer at that point. Returns the previous value, to restore after the call. */
+uint32_t vt3shim_guest_sp_swap(uint32_t sp);
+
 /* Creates the process heap inside the guest arena. Returns 0 on success. */
 int  vt3shim_init(void);
 void vt3shim_shutdown(void);

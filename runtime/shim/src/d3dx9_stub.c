@@ -62,15 +62,55 @@ static void dump_source(GPTR src, UINT len)
     fclose(f);
 }
 
+/* Each HLSL source the game compiles has a precompiled blob shipped in VT3.exe. These entries
+ * map a source (its address in the game's image, its length and its entry point) to the blob
+ * the shipped build uses, so the call returns that blob instead of compiling. Only the
+ * addresses are kept here; the bytes are read from the game's own image at run time.
+ * Matched by shape, not by hash: see the report in docs/d3d9-shaders.md. */
+typedef struct vt3_shipped {
+    uint32_t src, src_len;   /* the HLSL text in the image */
+    const char *entry;
+    char kind;               /* 'v' or 'p', from the profile */
+    uint32_t blob, blob_len; /* the compiled blob in the image */
+} vt3_shipped;
+
+static const vt3_shipped k_shipped[] = {
+    { 0x0075e948u, 1019u, "debug_ps_main", 'p', 0x006d9130u, 112u },
+    { 0x006d01a8u, 207u, "main", 'v', 0x0072f0f8u, 228u },
+};
+
+static const vt3_shipped *shipped_for(GPTR src, UINT len, const char *entry, const char *profile)
+{
+    for (size_t i = 0; i < sizeof k_shipped / sizeof k_shipped[0]; i++) {
+        const vt3_shipped *s = &k_shipped[i];
+        if (s->src == src && s->src_len == len && !strcmp(s->entry, entry) && profile[0] == s->kind)
+            return s;
+    }
+    return NULL;
+}
+
 HRESULT WINAPI D3DXCompileShader(GPTR src_data, UINT data_len, GPTR defines, GPTR include, GPTR function_name,
                                  GPTR profile, DWORD flags, GPTR ppShader, GPTR ppErrorMsgs, GPTR ppConstantTable)
 {
     char entry[64], target[32], msg[256];
     guest_text(function_name, sizeof entry - 1, entry, sizeof entry);
     guest_text(profile, sizeof target - 1, target, sizeof target);
-    VT3_INFO("D3DXCompileShader: %u bytes, entry \"%s\", profile \"%s\", flags 0x%x, defines %s, include %s",
-             (unsigned)data_len, entry, target, (unsigned)flags, defines ? "yes" : "no", include ? "yes" : "no");
+    VT3_INFO("D3DXCompileShader: source 0x%08x, %u bytes, entry \"%s\", profile \"%s\", flags 0x%x, defines %s, include %s",
+             src_data, (unsigned)data_len, entry, target, (unsigned)flags, defines ? "yes" : "no", include ? "yes" : "no");
     dump_source(src_data, data_len);
+
+    const vt3_shipped *sb = shipped_for(src_data, data_len, entry, target);
+    if (sb) {
+        const void *bytes = d3d9_gmem(sb->blob, sb->blob_len);
+        if (bytes) {
+            uint32_t blob = d3dx_buffer_new(bytes, sb->blob_len);
+            VT3_INFO("D3DXCompileShader: %s returns the shipped blob at 0x%08x (%u bytes)", entry, sb->blob, sb->blob_len);
+            put32(ppShader, blob ? blob : d3d9_new_stub(D3D9_KIND_D3DXBUFFER, 0));
+            put32(ppErrorMsgs, 0);
+            if (ppConstantTable) put32(ppConstantTable, d3d9_new_stub(D3D9_KIND_D3DXCONSTTABLE, 0));
+            return S_OK;
+        }
+    }
 
     uint32_t *tok = NULL, ntok = 0;
     int rc;

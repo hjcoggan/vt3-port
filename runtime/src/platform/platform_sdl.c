@@ -2,6 +2,8 @@
 #include "vt3/vt3_log.h"
 #include "vt3/vt3_platform.h"
 
+#include <string.h>
+
 #include <SDL3/SDL.h>
 
 /* Defined in src/input/input_sdl.c */
@@ -73,18 +75,55 @@ void vt3_platform_shutdown(void)
     SDL_Quit();
 }
 
+/* Window events waiting for the shim. The pump fills it; vt3_platform_next_event drains it. */
+#define VT3_EVQ_CAP 64
+static vt3_event g_evq[VT3_EVQ_CAP];
+static int g_evq_n;
+
+static void evq_push(vt3_event_kind kind, int w, int h)
+{
+    if (g_evq_n == VT3_EVQ_CAP) return;   /* a full queue drops the newest event */
+    g_evq[g_evq_n].kind = kind;
+    g_evq[g_evq_n].w = w;
+    g_evq[g_evq_n].h = h;
+    g_evq_n++;
+}
+
+int vt3_platform_next_event(vt3_event *ev)
+{
+    if (g_evq_n == 0) return 0;
+    *ev = g_evq[0];
+    memmove(g_evq, g_evq + 1, (size_t)(g_evq_n - 1) * sizeof *g_evq);
+    g_evq_n--;
+    return 1;
+}
+
 int vt3_platform_pump_events(void)
 {
     SDL_Event e;
     int running = 1;
+    if (!g_win) return 1;   /* before init there is no window and no events */
     while (SDL_PollEvent(&e)) {
         switch (e.type) {
         case SDL_EVENT_QUIT:
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+            evq_push(VT3_EV_CLOSE, 0, 0);
             running = 0;
             break;
+        case SDL_EVENT_WINDOW_RESIZED:
+            evq_push(VT3_EV_RESIZE, e.window.data1, e.window.data2);
+            break;
+        case SDL_EVENT_WINDOW_FOCUS_GAINED:
+            evq_push(VT3_EV_FOCUS, 0, 0);
+            break;
+        case SDL_EVENT_WINDOW_FOCUS_LOST:
+            evq_push(VT3_EV_BLUR, 0, 0);
+            break;
         case SDL_EVENT_KEY_DOWN:
-            if (e.key.scancode == SDL_SCANCODE_ESCAPE) running = 0;
+            if (e.key.scancode == SDL_SCANCODE_ESCAPE) {
+                evq_push(VT3_EV_CLOSE, 0, 0);
+                running = 0;
+            }
             vt3_input_sdl_event(&e);
             break;
         default:

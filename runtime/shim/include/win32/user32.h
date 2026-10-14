@@ -32,8 +32,10 @@ BOOL   WINAPI GetCursorPos(LPVOID pt);
 int    WINAPI ShowCursor(BOOL show);
 int    WINAPI GetSystemMetrics(int index);
 
-/* Messages. The queue is always empty. */
+/* Messages. The queue holds WM_ messages posted by the window system (the SDL window's close,
+ * resize and focus events) and by PostQuitMessage. Window procedures run synchronously. */
 BOOL   WINAPI PeekMessageA(LPVOID msg, HANDLE h, UINT min, UINT max, UINT remove);
+BOOL   WINAPI GetMessageA(LPVOID msg, HANDLE h, UINT min, UINT max);
 LONG   WINAPI DispatchMessageA(LPVOID msg);
 BOOL   WINAPI TranslateMessage(LPVOID msg);
 LONG   WINAPI DefWindowProcA(HANDLE h, UINT msg, UINT w, LONG l);

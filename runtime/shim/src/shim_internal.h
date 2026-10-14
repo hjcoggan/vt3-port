@@ -58,6 +58,8 @@ uint32_t vt3s_now_ms(void);
 vt3s_thread *vt3s_thread_attach_host(void);
 DWORD vt3s_call_guest(uint32_t stack_top, uint32_t teb, uint32_t fn, const uint32_t *args, uint32_t nargs);
 DWORD vt3s_call_guest_current(uint32_t fn, const uint32_t *args, uint32_t nargs);
+/* Calls guest code from inside a shim function, below the guest frames still in use. */
+DWORD vt3s_call_guest_nested(uint32_t fn, const uint32_t *args, uint32_t nargs);
 
 /* Polling APIs call this. Every 64th call releases the guest lock for a moment, so a
  * thread that spins cannot starve the others (kernel32_thread.c). Caller holds gil. */

@@ -99,6 +99,32 @@ DWORD vt3s_call_guest_current(uint32_t fn, const uint32_t *args, uint32_t nargs)
     return vt3s_call_guest(t->stack_top, t->teb, fn, args, nargs);
 }
 
+/* Guest stack pointer of the shim call in progress on this thread. The translator sets it on
+ * every dispatch, so a nested call starts below the guest frames that are still live. */
+static __thread uint32_t g_guest_sp;
+
+uint32_t vt3shim_guest_sp_swap(uint32_t sp)
+{
+    uint32_t old = g_guest_sp;
+    g_guest_sp = sp;
+    return old;
+}
+
+void vt3shim_set_main_teb(uint32_t stack_top, uint32_t teb)
+{
+    g_main.stack_top = stack_top;
+    g_main.teb = teb;
+}
+
+/* Calls guest code from inside a shim function (a window procedure, for example), below the
+ * guest frames that are still in use on this thread. */
+DWORD vt3s_call_guest_nested(uint32_t fn, const uint32_t *args, uint32_t nargs)
+{
+    vt3s_thread *t = current();
+    uint32_t top = g_guest_sp ? g_guest_sp - 64u : t->stack_top;
+    return vt3s_call_guest(top, t->teb, fn, args, nargs);
+}
+
 /* The main thread takes the guest lock before the guest entry runs, and keeps it until it
  * waits. */
 void vt3shim_thread_begin_main(void)
