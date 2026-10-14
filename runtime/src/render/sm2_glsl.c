@@ -675,6 +675,18 @@ static void emit_header(ctx *c, sb *h)
         sb_add(h, "in vec4 vo_D0;\nin vec4 vo_D1;\n");
         for (int i = 0; i < VT3_SM2_MAX_TEXCOORD; i++) sb_add(h, "in vec4 vo_T%d;\n", i);
         sb_add(h, "uniform vec4 psc[256];\nuniform ivec4 psi[16];\nuniform bool psb[16];\n");
+        /* Alpha test (D3DRS_ALPHAFUNC and D3DRS_ALPHAREF), applied at the end of main. 0 = off. */
+        sb_add(h, "uniform int vt3_at_func;\nuniform float vt3_at_ref;\n"
+                  "bool vt3_alpha_pass(float a) {\n"
+                  "  float v = floor(a * 255.0 + 0.5);\n"
+                  "  if (vt3_at_func == 1) return false;\n"
+                  "  if (vt3_at_func == 2) return v < vt3_at_ref;\n"
+                  "  if (vt3_at_func == 3) return v == vt3_at_ref;\n"
+                  "  if (vt3_at_func == 4) return v <= vt3_at_ref;\n"
+                  "  if (vt3_at_func == 5) return v > vt3_at_ref;\n"
+                  "  if (vt3_at_func == 6) return v != vt3_at_ref;\n"
+                  "  if (vt3_at_func == 7) return v >= vt3_at_ref;\n"
+                  "  return true;\n}\n");
         {
             uint32_t oc = c->oc_used ? c->oc_used : 1u;
             for (int i = 0; i < 4; i++)
@@ -751,6 +763,7 @@ int vt3_sm2_translate(const uint32_t *tokens, size_t ntokens, vt3_sm2_shader *ou
     if (out->kind == VT3_SM_VS) {
         sb_add(&h, "  gl_Position = vec4(vs_pos.xy, 2.0 * vs_pos.z - vs_pos.w, vs_pos.w);\n");
     }
+    if (out->kind != VT3_SM_VS) sb_add(&h, "  if (vt3_at_func != 0 && !vt3_alpha_pass(oC0.a)) discard;\n");
     sb_add(&h, "}\n");
     free(c.body.p);
     if (h.oom) {

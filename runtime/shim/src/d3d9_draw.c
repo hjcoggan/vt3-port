@@ -139,7 +139,7 @@ typedef struct prog_entry {
     vt3_prog prog;                     /* 0 when linking failed (remembered, not retried) */
 } prog_entry;
 static prog_entry g_progs[PROG_CACHE];
-static int g_warn_ff_ps, g_warn_no_prog, g_warn_alpha, g_warn_layout, g_warn_idx;
+static int g_warn_ff_ps, g_warn_no_prog, g_warn_layout, g_warn_idx;
 
 static const char *k_ff_ps =
     "#version 330 core\n"
@@ -187,17 +187,27 @@ static void fill_rstate(const d3d9_device *d, vt3_rstate *s)
     s->depth_func = d->rs[23] ? (int)d->rs[23] : 4;
     s->cull = d->rs[22] ? (int)d->rs[22] : 3;
     s->blend_op = d->rs[171] ? (int)d->rs[171] : 1;   /* D3DRS_BLENDOP, default ADD */
-    if (d->rs[15] && !warned_once(&g_warn_alpha)) {
-        VT3_WARN("alpha test is set but not applied by the renderer yet");
-    }
+    s->alpha_test = d->rs[15] != 0;                  /* D3DRS_ALPHATESTENABLE */
+    s->alpha_func = d->rs[25] ? (int)d->rs[25] : 8; /* D3DRS_ALPHAFUNC, default ALWAYS */
+    s->alpha_ref = (int)(d->rs[24] & 0xFFu);         /* D3DRS_ALPHAREF */
 }
 
+/* The renderer binds 2D textures only. A cube texture on a sampler gets the zero texel, and the
+ * first such case is logged with its sampler number. */
 static void fill_textures(const d3d9_device *d, vt3_tex out[VT3_MAX_SAMPLERS])
 {
     for (int s = 0; s < VT3_MAX_SAMPLERS; s++) {
         out[s] = 0;
         d3d9_texture *t = d3d9_texture_of(d->textures[s]);
-        if (t) out[s] = t->gl;
+        if (!t) continue;
+        if (t->faces == 6) {
+            static int warned_cube;
+            if (!warned_once(&warned_cube))
+                VT3_WARN("sampler %d: cube texture bound; using the zero texel (cube maps are not bound yet)", s);
+            out[s] = VT3_TEX_ZERO;
+            continue;
+        }
+        out[s] = t->gl;
     }
 }
 

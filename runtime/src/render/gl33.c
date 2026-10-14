@@ -63,7 +63,8 @@
     X(void, glDeleteProgram, (GLuint))                                                    \
     X(void, glUseProgram, (GLuint))                                                       \
     X(GLint, glGetUniformLocation, (GLuint, const GLchar *))                              \
-    X(void, glUniform1i, (GLint, GLint))                                                  \
+    X(void, glUniform1i, (GLint, GLint)) \
+    X(void, glUniform1f, (GLint, GLfloat))                                                  \
     X(void, glUniform2f, (GLint, GLfloat, GLfloat))                                       \
     X(void, glGenFramebuffers, (GLsizei, GLuint *))                                       \
     X(void, glDeleteFramebuffers, (GLsizei, const GLuint *))                              \
@@ -106,6 +107,7 @@ typedef struct gl_prog {
     GLuint id;
     GLint loc_vsc, loc_psc;
     GLint loc_samp[VT3_MAX_SAMPLERS];
+    GLint loc_at_func, loc_at_ref;   /* alpha test uniforms (sm2_glsl.c) */
     int used;
 } gl_prog;
 #define VT3_VERTEX_BYTES ((GLsizeiptr)sizeof(vt3_tlvertex))
@@ -121,6 +123,7 @@ static struct {
     int logical_w, logical_h;
     GLuint fbo, fbo_color;
     GLuint white;                 /* 1x1 white, bound for untextured draws */
+    GLuint zero;                  /* 1x1 zero texel, bound where a texture cannot be used (VT3_TEX_ZERO) */
     GLuint ebo, depth_rb;
     uint32_t attr_mask;           /* attribute locations currently enabled */
     float zero_consts[VT3_CONST_REGS * 4];
@@ -264,6 +267,13 @@ static int gl_init(int logical_w, int logical_h)
     p_glGenTextures(1, &g.white);
     p_glBindTexture(GL_TEXTURE_2D, g.white);
     p_glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &white_px);
+    p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    const uint32_t zero_px = 0u;
+    p_glGenTextures(1, &g.zero);
+    p_glBindTexture(GL_TEXTURE_2D, g.zero);
+    p_glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &zero_px);
     p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
@@ -424,7 +434,7 @@ static void apply_state(const vt3_rstate *s);
 static void gl_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex)
 {
     gl_bind_logical_fbo();
-    static const vt3_rstate tl_state = { 1, 5, 6, 0, 0, 8, 1, 1 };   /* alpha blend, no depth, no cull, ADD */
+    static const vt3_rstate tl_state = { 1, 5, 6, 0, 0, 8, 1, 1, 0, 0, 0 };   /* alpha blend, no depth, no cull, ADD */
     apply_state(&tl_state);
     p_glBindVertexArray(g.vao_tl);
     p_glBindBuffer(GL_ARRAY_BUFFER, g.vbo_tl);
@@ -590,6 +600,8 @@ static int gl_prog_create(vt3_prog *out, const char *vs_src, const char *ps_src,
     p->used = 1;
     p->loc_vsc = p_glGetUniformLocation(id, "vsc");
     p->loc_psc = p_glGetUniformLocation(id, "psc");
+    p->loc_at_func = p_glGetUniformLocation(id, "vt3_at_func");
+    p->loc_at_ref = p_glGetUniformLocation(id, "vt3_at_ref");
     for (int n = 0; n < VT3_MAX_SAMPLERS; n++) {
         char name[8];
         snprintf(name, sizeof name, "s%d", n);
@@ -635,13 +647,17 @@ static void gl_draw_program(const vt3_draw *d)
     g.attr_mask = want;
 
     p_glUseProgram(p->id);
+    if (p->loc_at_func >= 0) p_glUniform1i(p->loc_at_func, d->state.alpha_test ? d->state.alpha_func : 0);
+    if (p->loc_at_ref >= 0) p_glUniform1f(p->loc_at_ref, (GLfloat)d->state.alpha_ref);
     if (p->loc_vsc >= 0) p_glUniform4fv(p->loc_vsc, VT3_CONST_REGS, d->vsc ? d->vsc : g.zero_consts);
     if (p->loc_psc >= 0) p_glUniform4fv(p->loc_psc, VT3_CONST_REGS, d->psc ? d->psc : g.zero_consts);
     for (int n = 0; n < VT3_MAX_SAMPLERS; n++) {
         if (p->loc_samp[n] < 0) continue;
         vt3_tex t = d->samplers[n];
         p_glActiveTexture(GL_TEXTURE0 + (GLenum)n);
-        p_glBindTexture(GL_TEXTURE_2D, (t != 0 && t <= VT3_MAX_TEX && g.tex[t - 1].used) ? g.tex[t - 1].id : g.white);
+        GLuint tid = t == VT3_TEX_ZERO ? g.zero
+                   : (t != 0 && t <= VT3_MAX_TEX && g.tex[t - 1].used) ? g.tex[t - 1].id : g.white;
+        p_glBindTexture(GL_TEXTURE_2D, tid);
         p_glUniform1i(p->loc_samp[n], n);
     }
     p_glActiveTexture(GL_TEXTURE0);

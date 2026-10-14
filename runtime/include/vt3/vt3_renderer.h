@@ -48,6 +48,8 @@ typedef enum vt3_texfmt {
 } vt3_texfmt;
 
 typedef uint32_t vt3_tex;    /* handle; 0 = no texture */
+/* A texture the sampler cannot use (for example a cube map on a 2D sampler): the renderer binds its zero texel. */
+#define VT3_TEX_ZERO ((vt3_tex)0xFFFFFFFFu)
 
 typedef struct vt3_gfx_config {
     int logical_w, logical_h;  /* game resolution, default 640x480 */
@@ -89,6 +91,9 @@ typedef struct vt3_rstate {
     int depth_func;             /* D3DCMP_* */
     int cull;                   /* D3DCULL_NONE / CW / CCW */
     int blend_op;               /* D3DRS_BLENDOP: D3DBLENDOP_* (0 or 1 = ADD) */
+    int alpha_test;             /* D3DRS_ALPHATESTENABLE */
+    int alpha_func;             /* D3DRS_ALPHAFUNC: D3DCMP_* */
+    int alpha_ref;              /* D3DRS_ALPHAREF, 0..255 */
 } vt3_rstate;
 
 typedef struct vt3_draw {
