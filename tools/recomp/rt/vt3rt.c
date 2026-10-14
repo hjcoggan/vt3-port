@@ -38,6 +38,14 @@ static icent *itab = NULL;
 static size_t nitab = 0;
 static int trace = 0;
 
+/* One MSG (hwnd, message, wParam, lParam at offsets 0, 4, 8, 12) from guest memory. */
+static void vt_trace_msg(const char *what, uint32_t p)
+{
+    if (!p || p >= (1u << 30)) return;
+    fprintf(stderr, "vt3: msg %s hwnd=%08x message=%08x wparam=%08x lparam=%08x [t%u]\n", what,
+            rd32(p), rd32(p + 4), rd32(p + 8), rd32(p + 12), vt3s_current_tid());
+}
+
 uint64_t vt_rdtsc(void)
 {
     struct timespec ts;
@@ -102,7 +110,18 @@ void vt_icall(vt3_cpu *c, uint32_t target)
         }
         fprintf(stderr, "\n");
     }
+    /* Message traffic, for comparing with a Wine trace. Get/PeekMessage fill the MSG on a
+     * return; DispatchMessage reads the MSG it is given. */
+    uint32_t msg_arg = 0;
+    int msg_kind = 0;   /* 1 = Get/PeekMessage, 2 = DispatchMessage */
+    if (trace) {
+        if (!strcmp(e->name, "GetMessageA") || !strcmp(e->name, "PeekMessageA")) msg_kind = 1;
+        else if (!strcmp(e->name, "DispatchMessageA")) msg_kind = 2;
+        if (msg_kind) msg_arg = rd32(c->esp + 4);
+        if (msg_kind == 2) vt_trace_msg("dispatch", msg_arg);
+    }
     e->fn(c);
+    if (msg_kind == 1 && c->eax) vt_trace_msg("returned", msg_arg);
 }
 
 /* ---- x87 ----------------------------------------------------------------- */
