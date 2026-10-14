@@ -20,7 +20,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RT = os.path.join(os.path.dirname(HERE), 'rt')
-RECOMP = os.path.join(HERE, '..', 'recomp.py')
+# VT3_RECOMP overrides the translator, for example a committed copy, to check that a new test fails without its rule.
+RECOMP = os.environ.get('VT3_RECOMP') or os.path.join(HERE, '..', 'recomp.py')
 # VT3_RUNTIME overrides the runtime tree, for example a committed snapshot under dump/recomp/.
 REPO_RUNTIME = os.environ.get('VT3_RUNTIME') or os.path.join(HERE, '..', '..', '..', 'runtime')
 ROOT = '/Users/heath/Virtua Tennis 3/dump/recomp'
@@ -58,6 +59,7 @@ VARIANTS = {
     't12_bits': [('O0', ['-O0']), ('O2', ['-O2'])],
     't13_calls': [('O0', ['-O0']), ('O2', ['-O2'])],
     't16_entry': [('O0', ['-O0']), ('O2', ['-O2'])],
+    't20_modulo': [('O0', ['-O0']), ('O2', ['-O2'])],
     't17_seek': [('O0', ['-O0']), ('O2', ['-O2'])],
     't18_save': [('O0', ['-O0']), ('O2', ['-O2'])],
     't19_overlapped': [('O0', ['-O0']), ('O2', ['-O2'])],

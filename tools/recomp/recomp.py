@@ -455,6 +455,31 @@ class Analysis:
                 if c is not None and c.addr + c.size == j and c.mn == 'cmp' and len(c.ops) == 2 \
                         and c.ops[0].kind == 'reg' and c.ops[0].reg == idx_reg and c.ops[1].kind == 'imm':
                     return c.ops[1].imm & M32
+        return self._modulo_count(end, idx_reg)
+
+    def _modulo_count(self, end, idx_reg):
+        """Modulo dispatch: the index is a remainder, so it is 0..N-1.
+
+        The last write to edx before end must be `div r` with a register divisor (the
+        remainder lands in edx). The divisor must hold a constant N from a `mov r, N` earlier
+        in the same instruction window. Returns N, or None."""
+        if idx_reg != 'edx':
+            return None
+        for seq in self._windows(end):
+            for k in range(len(seq) - 1, -1, -1):
+                ins = seq[k]
+                if ins.mn != 'div' and ins.ops and ins.ops[0].kind == 'reg' and ins.ops[0].reg == 'edx':
+                    break   # the last write to edx is not a division
+                if ins.mn == 'div' and len(ins.ops) == 1 and ins.ops[0].kind == 'reg' \
+                        and ins.ops[0].reg in GPR32:
+                    divisor = ins.ops[0].reg
+                    for x in reversed(seq[:k]):
+                        if x.ops and x.ops[0].kind == 'reg' and x.ops[0].reg == divisor:
+                            if x.mn == 'mov' and len(x.ops) == 2 and x.ops[1].kind == 'imm':
+                                n = x.ops[1].imm & M32
+                                return n if n >= 2 else None
+                            break
+                    break
         return None
 
     def _function_bound(self, jaddr, seen):
