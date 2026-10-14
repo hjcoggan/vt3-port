@@ -16,6 +16,7 @@
 
 #define PRIM_TRIANGLELIST 4u
 #define PRIM_TRIANGLESTRIP 5u
+#define PRIM_TRIANGLEFAN 6u
 #define FVF_XYZ 0x002u
 #define FVF_XYZRHW 0x004u
 #define FVF_NORMAL 0x010u
@@ -46,7 +47,7 @@ static int warned_once(int *flag)
 static uint32_t prim_vertex_count(uint32_t prim, uint32_t count)
 {
     if (prim == PRIM_TRIANGLELIST) return 3u * count;
-    if (prim == PRIM_TRIANGLESTRIP) return count + 2u;
+    if (prim == PRIM_TRIANGLESTRIP || prim == PRIM_TRIANGLEFAN) return count + 2u;
     return 0;
 }
 
@@ -279,14 +280,35 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         count_v = nverts;
     }
 
+    /* A triangle fan becomes a triangle list over the same vertices: triangle t is (0, t+1, t+2)
+     * in the fan's own order. The list is an index list, so both paths below take it as indexed. */
+    int use_idx = a->indexed;
+    uint32_t prim_list = a->prim;
+    if (a->prim == PRIM_TRIANGLEFAN) {
+        uint32_t fan_n = a->indexed ? nidx : nverts;
+        uint32_t tris = fan_n >= 3 ? fan_n - 2 : 0;
+        uint16_t *fan = malloc((size_t)(tris ? tris : 1) * 3 * sizeof *fan);
+        if (!fan) { free(idx16); return E_OUTOFMEMORY_D3D9; }
+        for (uint32_t t = 0; t < tris; t++) {
+            uint32_t k[3] = { 0, t + 1, t + 2 };
+            for (int j = 0; j < 3; j++)
+                fan[3 * t + (uint32_t)j] = a->indexed ? idx16[k[j]] : (uint16_t)k[j];
+        }
+        free(idx16);
+        idx16 = fan;
+        nidx = tris * 3;
+        use_idx = 1;
+        prim_list = PRIM_TRIANGLELIST;
+    }
+
     /* ---- fixed function: the TL path ---- */
     if (d->vs == 0 && d->fvf == FVF_TL) {
         if (stride != 28) { free(idx16); return S_OK; }
-        uint32_t n = a->indexed ? nidx : nverts;
+        uint32_t n = use_idx ? nidx : nverts;
         const uint8_t *src = vbase + (size_t)first_v * stride;
         vt3_tlvertex *tmp = malloc((size_t)n * sizeof *tmp);
         if (!tmp) { free(idx16); return E_OUTOFMEMORY_D3D9; }
-        if (a->indexed) {
+        if (use_idx) {
             /* idx16 is local to the range that starts at first_v. */
             for (uint32_t i = 0; i < n; i++)
                 memcpy(&tmp[i], vbase + (size_t)(first_v + idx16[i]) * stride, 28);
@@ -307,7 +329,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         vt3_tex t0 = 0;
         d3d9_texture *tx = d3d9_texture_of(d->textures[0]);
         if (tx) t0 = tx->gl;
-        vt3_gfx_draw(a->prim == PRIM_TRIANGLESTRIP ? VT3_PRIM_TRIANGLESTRIP : VT3_PRIM_TRIANGLELIST,
+        vt3_gfx_draw(prim_list == PRIM_TRIANGLESTRIP ? VT3_PRIM_TRIANGLESTRIP : VT3_PRIM_TRIANGLELIST,
                      tmp, n, t0);
         free(tmp);
         free(idx16);
@@ -362,9 +384,9 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     dd.layout = &lay;
     dd.vertices = vcopy;
     dd.vertex_bytes = (uint32_t)bytes;
-    dd.indices = a->indexed ? idx16 : NULL;
-    dd.count = a->indexed ? nidx : nverts;
-    dd.prim = a->prim == PRIM_TRIANGLESTRIP ? VT3_PRIM_TRIANGLESTRIP : VT3_PRIM_TRIANGLELIST;
+    dd.indices = use_idx ? idx16 : NULL;
+    dd.count = use_idx ? nidx : nverts;
+    dd.prim = prim_list == PRIM_TRIANGLESTRIP ? VT3_PRIM_TRIANGLESTRIP : VT3_PRIM_TRIANGLELIST;
     dd.vsc = vsc_copy;
     dd.psc = psc_copy;
     fill_textures(d, dd.samplers);
