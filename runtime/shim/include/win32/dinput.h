@@ -105,6 +105,7 @@ typedef struct IDirectInputDevice8AVtbl {
 #define DIDC_POLLEDDEVICE          0x00000002u
 
 /* Object types in a data format (DIDFT_*). The type's instance is in bits 8..23. */
+#define DIDFT_ALL                  0x00000000u
 #define DIDFT_RELAXIS              0x00000001u
 #define DIDFT_ABSAXIS              0x00000002u
 #define DIDFT_AXIS                 0x00000003u
@@ -116,6 +117,9 @@ typedef struct IDirectInputDevice8AVtbl {
 #define DIDFT_OPTIONAL             0x80000000u
 
 #define DIGDD_PEEK                 0x00000001u
+#define DIDFT_MAKEINSTANCE(n)      ((uint32_t)(n) << 8)
+#define DIDOI_ASPECTPOSITION       0x00000100u
+#define DIOBJECTINSTANCE_SIZE      316     /* DIDEVICEOBJECTINSTANCEA, DX8 form */
 
 /* Properties. The GUID argument of GetProperty/SetProperty is MAKEDIPROP(n) = n. */
 #define DIPROP_BUFFERSIZE          1

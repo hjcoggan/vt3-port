@@ -305,6 +305,18 @@ void vt3_input_sdl_script_start(void)
     VT3_INFO("input script: %d entries scheduled from VT3_INPUT_SCRIPT", entries);
 }
 
+/* Opens the gamepads attached before the event pump runs. SDL reports them only as
+ * SDL_EVENT_GAMEPAD_ADDED once the pump is running, and the game enumerates at start-up. */
+void vt3_input_sdl_open_attached(void)
+{
+    int count = 0;
+    SDL_JoystickID *ids = SDL_GetGamepads(&count);
+    if (!ids) return;
+    for (int i = 0; i < count; i++) open_pad(ids[i]);
+    SDL_free(ids);
+    pads_changed();
+}
+
 void vt3_input_sdl_shutdown(void)
 {
     for (int i = 0; i < VT3_MAX_PADS; i++) {

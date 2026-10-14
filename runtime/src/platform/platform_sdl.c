@@ -11,6 +11,7 @@ void vt3_input_sdl_event(const SDL_Event *e);
 void vt3_input_sdl_poll(void);
 void vt3_input_sdl_shutdown(void);
 void vt3_input_sdl_script_start(void);      /* VT3_INPUT_SCRIPT: scripted key presses, off by default */
+void vt3_input_sdl_open_attached(void);     /* gamepads attached before the pump runs */
 
 static SDL_Window *g_win;
 static SDL_GLContext g_ctx;
@@ -63,6 +64,7 @@ int vt3_platform_init(const vt3_config *c)
     int pw, ph;
     SDL_GetWindowSizeInPixels(g_win, &pw, &ph);
     VT3_INFO("window: %dx%d points, %dx%d pixels", c->window_w, c->window_h, pw, ph);
+    vt3_input_sdl_open_attached();
     vt3_input_sdl_script_start();
     return 0;
 }
