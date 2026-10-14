@@ -103,6 +103,11 @@ void vt_icall(vt3_cpu *c, uint32_t target);
 void vt_die_at(uint32_t addr, uint32_t detail) __attribute__((noreturn));
 void vt_unsupported_at(uint32_t addr, const char *text) __attribute__((noreturn));
 
+/* Serve trace (VT3_TRACE_SERVE). The loader sets vt_trace_serve. The generated code calls
+ * vt_serve_point before each instruction that recomp.py lists in TRACE_POINTS. */
+extern int vt_trace_serve;
+void vt_serve_point(vt3_cpu *c, uint32_t addr);
+
 /* x87 support. Double precision internally. */
 double vt_ldf32(uint32_t a);
 double vt_ldf64(uint32_t a);

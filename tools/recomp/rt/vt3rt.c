@@ -308,9 +308,45 @@ static uint32_t guest_call_hook(uint32_t stack_top, uint32_t teb, uint32_t fn,
     return c.eax;
 }
 
+/* ---- Serve trace (VT3_TRACE_SERVE) -------------------------------------------------------
+ * Three points in the serve-angle function at 0x4825c0 (see recomp.py TRACE_POINTS):
+ *   0x4825c0  entry: the input vector (its pointer is the first argument), the flag, and the
+ *             reference point at this+0xa0 (x) and this+0xa8 (z). dx = x - rx, dz = z - rz.
+ *   0x482624  the atan2 result, stored at [esp+4] before the call to 0x4e5b80.
+ *   0x482629  after the call: eax points at the direction vector, which the game reads from
+ *             xmm0..xmm2.
+ */
+int vt_trace_serve = 0;
+
+static float vt_rdf(uint32_t a)
+{
+    float f;
+    memcpy(&f, vt_mem + a, 4);
+    return f;
+}
+
+void vt_serve_point(vt3_cpu *c, uint32_t addr)
+{
+    if (addr == 0x4825c0u) {
+        uint32_t in = rd32(c->esp + 4);
+        float x = vt_rdf(in), y = vt_rdf(in + 4), z = vt_rdf(in + 8);
+        float rx = vt_rdf(c->ecx + 0xa0u), rz = vt_rdf(c->ecx + 0xa8u);
+        fprintf(stderr, "vt3 serve: in=(%g, %g, %g) flag=%u ref=(%g, %g) dx=%g dz=%g\n",
+                x, y, z, rd8(c->esp + 0xcu), rx, rz, x - rx, z - rz);
+    } else if (addr == 0x482624u) {
+        float ang = vt_rdf(c->esp + 4u);
+        fprintf(stderr, "vt3 serve: atan2 = %g rad (%g deg)\n", ang, ang * 57.2957795f);
+    } else if (addr == 0x482629u) {
+        uint32_t v = c->eax;
+        fprintf(stderr, "vt3 serve: dir = (%g, %g, %g) at %08x\n",
+                vt_rdf(v), vt_rdf(v + 4), vt_rdf(v + 8), v);
+    }
+}
+
 int vt3_run(const vt3_module *m, const char *image_path)
 {
     trace = getenv("VT3_TRACE") != NULL;
+    vt_trace_serve = getenv("VT3_TRACE_SERVE") != NULL;
 
     /* One guest arena from the native runtime. Guest address A is vt_mem + A,
      * so vt_mem is the host address of guest 0. vt3_g2h(0) is NULL by design,

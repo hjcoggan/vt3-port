@@ -62,6 +62,10 @@ TERMINAL = {'hlt', 'ud2', 'int3', 'int'}
 RET_MN = {'ret', 'retf', 'iret', 'iretd'}
 # Imports that never return. Calls to them end the path during analysis.
 NORETURN_IMPORTS = {'ExitProcess', 'ExitThread', 'TerminateProcess', 'abort', '_exit', 'exit'}
+# Serve trace points (VT3_TRACE_SERVE, see vt3rt.c vt_serve_point). Each gets a runtime-gated call
+# before the instruction: the entry of the serve-angle function, the atan2 result before its call,
+# and the direction vector after it.
+TRACE_POINTS = {0x4825c0, 0x482624, 0x482629}
 
 
 class TranslateError(Exception):
@@ -2071,6 +2075,8 @@ def gen_function(an, entry, hard):
         nxt = a + ins.size
         out.append(f"/* {a:08x}: {ins.text} */")
         out.append(f"L_{a:x}: ;")
+        if a in TRACE_POINTS:
+            out.append(f"if (vt_trace_serve) {{ VT_SPILL(); vt_serve_point(c, 0x{a:x}u); }}")
         try:
             out.extend(gen.gen(ins))
         except Unsupported as e:
