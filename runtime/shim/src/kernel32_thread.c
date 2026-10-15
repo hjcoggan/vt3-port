@@ -180,7 +180,25 @@ static void honor_suspend(void)
  * waits forever. Returns 1 if pred holds, 0 on timeout. Caller holds gil. */
 typedef int (*vt3s_pred)(void *arg);
 
+static int wait_until_body(vt3s_pred pred, void *arg, DWORD ms);
+static int never(void *arg);
+
+/* Waits longer than two seconds are logged with what was asked and how it ended, so a stalled
+ * load shows which wait it is. Sleep is not logged: it is a wait on purpose. */
 static int wait_until(vt3s_pred pred, void *arg, DWORD ms)
+{
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    int ok = wait_until_body(pred, arg, ms);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    long long waited = (long long)(t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+    if (pred != never && waited >= 2000)
+        VT3_INFO("slow wait: %lld ms, asked %s, %s", waited, ms == INFINITE ? "INFINITE" : "timed",
+                 ok ? "satisfied" : "timed out");
+    return ok;
+}
+
+static int wait_until_body(vt3s_pred pred, void *arg, DWORD ms)
 {
     honor_suspend();
     struct timespec deadline;
@@ -333,11 +351,20 @@ HANDLE WINAPI GetCurrentThread(void) { return VT3_PSEUDO_CURRENT_THREAD; }
 
 DWORD WINAPI GetCurrentThreadId(void) { return current()->tid; }
 
-BOOL WINAPI SwitchToThread(void)
+/* Gives the guest lock to a waiting thread. A plain unlock and re-lock (even with sched_yield)
+ * usually lets the same thread take it straight back, so a busy guest thread starves the others
+ * for seconds. The short sleep is long enough for a waiter to take the lock. */
+static void gil_handoff(void)
 {
     pthread_mutex_unlock(&gil);
-    sched_yield();
+    struct timespec pause = { 0, 50000 };   /* 50 us */
+    nanosleep(&pause, NULL);
     pthread_mutex_lock(&gil);
+}
+
+BOOL WINAPI SwitchToThread(void)
+{
+    gil_handoff();
     return TRUE;
 }
 
@@ -348,11 +375,7 @@ void vt3s_spin_point(void)
 {
     honor_suspend();
     static unsigned calls;
-    if ((++calls & 63u) == 0) {
-        pthread_mutex_unlock(&gil);
-        sched_yield();
-        pthread_mutex_lock(&gil);
-    }
+    if ((++calls & 63u) == 0) gil_handoff();
 }
 
 void WINAPI Sleep(DWORD ms)
