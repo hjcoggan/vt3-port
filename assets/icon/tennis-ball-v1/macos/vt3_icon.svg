@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- App icon for the macOS bundle and the Android launcher. Canvas 1024: the macOS icon grid puts
+     the 824 px rounded square at a 100 px margin, with a 185 px corner radius. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="court" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2e9a5e"/>
+      <stop offset="1" stop-color="#12503a"/>
+    </linearGradient>
+    <radialGradient id="ball" cx="0.36" cy="0.32" r="0.8">
+      <stop offset="0" stop-color="#f6ff7a"/>
+      <stop offset="0.55" stop-color="#d4ea1c"/>
+      <stop offset="1" stop-color="#8fb008"/>
+    </radialGradient>
+    <clipPath id="ballclip"><circle cx="512" cy="500" r="262"/></clipPath>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#court)"/>
+  <!-- court lines, faint -->
+  <g fill="none" stroke="#ffffff" stroke-opacity="0.2" stroke-width="12">
+    <rect x="212" y="212" width="600" height="600" rx="4"/>
+    <line x1="212" y1="512" x2="812" y2="512"/>
+  </g>
+  <!-- shadow under the ball -->
+  <ellipse cx="516" cy="800" rx="210" ry="36" fill="#000000" fill-opacity="0.28"/>
+  <!-- ball -->
+  <circle cx="512" cy="500" r="262" fill="url(#ball)"/>
+  <!-- seams -->
+  <g clip-path="url(#ballclip)" fill="none" stroke="#fbfff0" stroke-width="30" stroke-linecap="round">
+    <path d="M 300 176 C 404 300, 404 700, 300 824"/>
+    <path d="M 724 176 C 620 300, 620 700, 724 824"/>
+  </g>
+</svg>

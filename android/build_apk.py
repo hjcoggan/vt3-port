@@ -69,8 +69,14 @@ def main(argv):
     bt = tool(SDK, "build-tools", "36.1.0")
     jar = tool(SDK, "platforms", "android-%d" % TARGET_API, "android.jar")
     base = os.path.join(build, "base.apk")
-    run([tool(bt, "aapt2"), "link", "-o", base, "-I", jar,
-         "--manifest", manifest,
+    res_dir = os.path.join(os.path.dirname(manifest), "res")
+    link_inputs = []
+    if os.path.isdir(res_dir):
+        compiled = os.path.join(build, "compiled_res.zip")
+        run([tool(bt, "aapt2"), "compile", "--dir", res_dir, "-o", compiled])
+        link_inputs = [compiled]
+    run([tool(bt, "aapt2"), "link", "-o", base, "-I", jar] + link_inputs +
+        ["--manifest", manifest,
          "--min-sdk-version", str(API), "--target-sdk-version", str(TARGET_API),
          "--version-code", "1", "--version-name", "0.1"])
     run(["zip", "-q", "-r", base, "lib"], cwd=stage)

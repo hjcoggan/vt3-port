@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- VT3 app icon, logo style: V and T stacked on a diagonal over a red oval, with the blue 3 to the right.
+     The letters are drawn here (Arial Black, sheared and rotated), not traced from the game's logo.
+     Canvas 1024 with the macOS icon grid: a 824 px rounded square at a 100 px margin, radius 185. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="red" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e8452d"/>
+      <stop offset="1" stop-color="#9c1209"/>
+    </linearGradient>
+    <radialGradient id="oval" cx="0.5" cy="0.45" r="0.6">
+      <stop offset="0" stop-color="#ff6a4a"/>
+      <stop offset="1" stop-color="#c81f12"/>
+    </radialGradient>
+    <linearGradient id="silver" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.55" stop-color="#dfe9f5"/>
+      <stop offset="1" stop-color="#8fa3bd"/>
+    </linearGradient>
+    <linearGradient id="blue3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8fe0ff"/>
+      <stop offset="0.5" stop-color="#2a7fe0"/>
+      <stop offset="1" stop-color="#0b2f80"/>
+    </linearGradient>
+    <clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="185" ry="185"/></clipPath>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#red)"/>
+  <ellipse cx="512" cy="520" rx="400" ry="260" fill="url(#oval)" transform="rotate(-10 512 520)"/>
+  <g transform="translate(512 512) scale(0.66) translate(-512 -512)">
+  <g font-family="Arial Black, Arial, sans-serif" font-weight="900" stroke-linejoin="round" paint-order="stroke">
+    <!-- V, upper left -->
+    <text x="150" y="560" font-size="420" fill="url(#silver)" stroke="#0d1f4f" stroke-width="30"
+          transform="rotate(-16 330 440)">V</text>
+    <!-- T, lower, stacked under the V -->
+    <text x="330" y="800" font-size="420" fill="url(#silver)" stroke="#0d1f4f" stroke-width="30"
+          transform="rotate(-16 430 640)">T</text>
+    <!-- 3, blue, to the right and slanted -->
+    <text x="520" y="840" font-size="640" fill="url(#blue3)" stroke="#ffffff" stroke-width="34"
+          transform="rotate(12 700 560)">3</text>
+  </g>
+  </g>
+</svg>
