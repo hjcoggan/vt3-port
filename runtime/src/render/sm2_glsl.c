@@ -681,7 +681,8 @@ static void emit_header(ctx *c, sb *h)
         } else {
             sb_add(h, "out vec4 vo_D0;\nout vec4 vo_D1;\n");
             for (int i = 0; i < VT3_SM2_MAX_TEXCOORD; i++) sb_add(h, "out vec4 vo_T%d;\n", i);
-            sb_add(h, "uniform vec4 vsc[256];\nuniform ivec4 vsi[16];\nuniform bool vsb[16];\n");
+            sb_add(h, "uniform vec4 vsc[256];\nuniform ivec4 vsi[16];\nuniform bool vsb[16];\n"
+                      "uniform float vt3_flip;\n");   /* -1 when drawing into a render texture (gl33.c) */
         }
     } else {
         if (vk) {
@@ -791,7 +792,7 @@ int vt3_sm2_translate_ex(const uint32_t *tokens, size_t ntokens, vt3_sm2_shader 
     sb_add(&h, "%s", c.body.p ? c.body.p : "");
     if (out->kind == VT3_SM_VS) {
         if (c.vulkan) sb_add(&h, "  gl_Position = vec4(vs_pos.x, -vs_pos.y, vs_pos.z, vs_pos.w);\n");
-        else sb_add(&h, "  gl_Position = vec4(vs_pos.xy, 2.0 * vs_pos.z - vs_pos.w, vs_pos.w);\n");
+        else sb_add(&h, "  gl_Position = vec4(vs_pos.x, vs_pos.y * vt3_flip, 2.0 * vs_pos.z - vs_pos.w, vs_pos.w);\n");
     }
     if (out->kind != VT3_SM_VS) sb_add(&h, "  if (vt3_at_func != 0 && !vt3_alpha_pass(oC0.a)) discard;\n");
     sb_add(&h, "}\n");

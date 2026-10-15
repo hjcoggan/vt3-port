@@ -81,6 +81,26 @@ void d3d9_gpu_present(void)
     vt3_platform_pump_events();    /* keeps the window responsive; quit requests are ignored here */
 }
 
+vt3_tex d3d9_gpu_rt_create(uint32_t w, uint32_t h, uint32_t fmt)
+{
+    if (!g_gpu_ok || w == 0 || h == 0) return 0;
+    vt3_texfmt tf = fmt == D3DFMT_CHK_G16R16F || fmt == D3DFMT_CHK_A16B16G16R16F ? VT3_TEXFMT_RGBA16F
+                                                                                : VT3_TEXFMT_A8R8G8B8;
+    vt3_tex t = 0;
+    if (vt3_gfx_rt_create(&t, (int)w, (int)h, tf) != 0) return 0;
+    return t;
+}
+
+void d3d9_gpu_rt_bind(vt3_tex t)
+{
+    if (g_gpu_ok) vt3_gfx_rt_bind(t);
+}
+
+void d3d9_gpu_blit(vt3_tex dst, vt3_rect dr, vt3_tex src, vt3_rect sr, int nearest)
+{
+    if (g_gpu_ok) vt3_gfx_blit(dst, dr, src, sr, nearest);
+}
+
 vt3_tex d3d9_gpu_tex_create(uint32_t w, uint32_t h, uint32_t fmt)
 {
     if (!g_gpu_ok || w == 0 || h == 0) return 0;
@@ -116,8 +136,17 @@ void d3d9_gpu_tex_upload(vt3_tex t, const uint8_t *src, uint32_t pitch, uint32_t
     }
     uint8_t *bgra = malloc((size_t)w * h * 4);
     if (!bgra) return;
-    if (d3d9_to_bgra(fmt, src, pitch, w, h, bgra) == 0)
+    if (d3d9_to_bgra(fmt, src, pitch, w, h, bgra) == 0) {
+        if (getenv("VT3_TRACE_TEX")) {   /* average of the level: a black or empty texture shows here */
+            double sum[4] = {0, 0, 0, 0};
+            size_t n = (size_t)w * h;
+            for (size_t k = 0; k < n; k++)
+                for (int c = 0; c < 4; c++) sum[c] += bgra[4 * k + c];
+            VT3_INFO("tex upload gl %u %ux%u fmt 0x%x avg rgba %.0f %.0f %.0f %.0f", (unsigned)t, (unsigned)w,
+                     (unsigned)h, (unsigned)fmt, sum[2] / n, sum[1] / n, sum[0] / n, sum[3] / n);
+        }
         vt3_gfx_tex_upload(t, bgra, (int)(w * 4), (int)w, (int)h);
+    }
     free(bgra);
 }
 

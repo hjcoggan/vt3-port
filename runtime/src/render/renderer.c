@@ -60,6 +60,21 @@ void vt3_gfx_tex_destroy(vt3_tex t)
     if (g_ops) g_ops->tex_destroy(t);
 }
 
+int vt3_gfx_rt_create(vt3_tex *out, int w, int h, vt3_texfmt fmt)
+{
+    return (g_ops && g_ops->rt_create) ? g_ops->rt_create(out, w, h, fmt) : -1;
+}
+
+void vt3_gfx_rt_bind(vt3_tex t)
+{
+    if (g_ops && g_ops->rt_bind) g_ops->rt_bind(t);
+}
+
+void vt3_gfx_blit(vt3_tex dst, vt3_rect dr, vt3_tex src, vt3_rect sr, int nearest)
+{
+    if (g_ops && g_ops->blit) g_ops->blit(dst, dr, src, sr, nearest);
+}
+
 void vt3_gfx_begin_frame(void)
 {
     if (g_ops) g_ops->begin_frame();

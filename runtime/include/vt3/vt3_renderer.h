@@ -44,7 +44,8 @@ typedef struct vt3_tlvertex {
 typedef enum vt3_texfmt {
     VT3_TEXFMT_A8R8G8B8 = 0,
     VT3_TEXFMT_X8R8G8B8,
-    VT3_TEXFMT_A8
+    VT3_TEXFMT_A8,
+    VT3_TEXFMT_RGBA16F          /* render targets only: the game's variance shadow maps */
 } vt3_texfmt;
 
 typedef uint32_t vt3_tex;    /* handle; 0 = no texture */
@@ -136,6 +137,10 @@ typedef struct vt3_gfx_ops {
     void (*clear_depth)(float depth);
     void (*set_scissor)(int enable, vt3_rect r);   /* logical pixels, top-left origin */
     int  glsl_vulkan;           /* 1: the renderer wants translated shaders as GLSL 450 (SPIR-V) */
+    /* Render targets. A target is a texture that draws and clears can go to. NULL: not supported. */
+    int  (*rt_create)(vt3_tex *out, int w, int h, vt3_texfmt fmt);
+    void (*rt_bind)(vt3_tex t);                       /* draws and clears go to t; 0 = the back buffer */
+    void (*blit)(vt3_tex dst, vt3_rect dr, vt3_tex src, vt3_rect sr, int nearest);   /* 0 = back buffer */
 } vt3_gfx_ops;
 
 int  vt3_gfx_init(const vt3_gfx_ops *ops, const vt3_gfx_config *cfg);
@@ -157,6 +162,10 @@ void vt3_gfx_prog_destroy(vt3_prog p);
 void vt3_gfx_draw_program(const vt3_draw *d);
 void vt3_gfx_readback(uint8_t *rgba);
 void vt3_gfx_clear_depth(float depth);
+/* Render targets: -1 when the renderer has none. Handles of targets come from vt3_gfx_rt_create. */
+int  vt3_gfx_rt_create(vt3_tex *out, int w, int h, vt3_texfmt fmt);
+void vt3_gfx_rt_bind(vt3_tex t);
+void vt3_gfx_blit(vt3_tex dst, vt3_rect dr, vt3_tex src, vt3_rect sr, int nearest);
 void vt3_gfx_set_scissor(int enable, vt3_rect r);
 
 extern const vt3_gfx_ops vt3_gfx_gl33;

@@ -12,6 +12,7 @@
 #include "vt3/vt3_log.h"
 
 #include <float.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -203,7 +204,7 @@ static void fill_rstate(const d3d9_device *d, vt3_rstate *s)
     s->alpha_blend = d->rs[27] != 0;
     s->src_blend = d->rs[19] ? (int)d->rs[19] : 2;
     s->dst_blend = d->rs[20] ? (int)d->rs[20] : 1;
-    s->depth_test = d->rs[7] != 0;
+    s->depth_test = d->rs[7] != 0 && !getenv("VT3_NO_ZTEST");   /* debug: VT3_NO_ZTEST=1 ignores the depth test */
     s->depth_write = d->rs[14] != 0;
     s->depth_func = d->rs[23] ? (int)d->rs[23] : 4;
     s->cull = d->rs[22] ? (int)d->rs[22] : 3;
@@ -251,13 +252,38 @@ static void trace_draw(const d3d9_device *d, const d3d9_draw_args *a, uint32_t n
     if (first_s < 0.0) first_s = now_s;
     if (now_s - first_s < after_s) return;
     count++;
-    VT3_INFO("draw %d: prim %u count %u verts %u vs 0x%x ps 0x%x", count, a->prim, a->prim_count, nverts,
-             d->vs, d->ps);
+    d3d9_host *trace_vh = d3d9_host_of(d->vs, D3D9_KIND_VSHADER);
+    int trace_skinned = trace_vh && trace_vh->data && ((d3d9_shader *)trace_vh->data)->skinned;
+    VT3_INFO("draw %d: prim %u count %u verts %u vs 0x%x ps 0x%x rt 0x%x depth 0x%x skinned %d", count, a->prim,
+             a->prim_count, nverts, d->vs, d->ps, d->rt[0], d->depth, trace_skinned);
+    VT3_INFO("  rs blend %u src %u dst %u atest %u func %u ref %u zenable %u zwrite %u cull %u",
+             (unsigned)d->rs[27], (unsigned)d->rs[19], (unsigned)d->rs[20], (unsigned)d->rs[15],
+             (unsigned)d->rs[25], (unsigned)(d->rs[24] & 0xFF), (unsigned)d->rs[7], (unsigned)d->rs[14],
+             (unsigned)d->rs[22]);
+    if (trace_skinned && getenv("VT3_TRACE_PSC")) {   /* the first pixel constants of skinned draws */
+        for (int r = 0; r < 16; r += 2)
+            VT3_INFO("  psc c%-2d %9.4f %9.4f %9.4f %9.4f | c%-2d %9.4f %9.4f %9.4f %9.4f", r, d->psc[r][0],
+                     d->psc[r][1], d->psc[r][2], d->psc[r][3], r + 1, d->psc[r + 1][0], d->psc[r + 1][1],
+                     d->psc[r + 1][2], d->psc[r + 1][3]);
+    }
+    if (trace_skinned && getenv("VT3_TRACE_VSC")) {   /* the whole vertex constant block of skinned draws */
+        for (int r = 147; r < 171; r += 3)
+            VT3_INFO("  vsc c%-2d %9.4f %9.4f %9.4f %9.4f | c%-2d %9.4f %9.4f %9.4f %9.4f | c%-2d %9.4f %9.4f %9.4f %9.4f",
+                     r, d->vsc[r][0], d->vsc[r][1], d->vsc[r][2], d->vsc[r][3],
+                     r + 1, d->vsc[r + 1][0], d->vsc[r + 1][1], d->vsc[r + 1][2], d->vsc[r + 1][3],
+                     r + 2, d->vsc[r + 2][0], d->vsc[r + 2][1], d->vsc[r + 2][2], d->vsc[r + 2][3]);
+    }
     VT3_INFO("  psc c0 %g %g %g %g | c1 %g %g %g %g | c2 %g %g %g %g | c3 %g %g %g %g",
              d->psc[0][0], d->psc[0][1], d->psc[0][2], d->psc[0][3],
              d->psc[1][0], d->psc[1][1], d->psc[1][2], d->psc[1][3],
              d->psc[2][0], d->psc[2][1], d->psc[2][2], d->psc[2][3],
              d->psc[3][0], d->psc[3][1], d->psc[3][2], d->psc[3][3]);
+    {
+        char vb[17], pb[17];
+        for (int k = 0; k < 16; k++) { vb[k] = d->vsb[k] ? '1' : '0'; pb[k] = d->psb[k] ? '1' : '0'; }
+        vb[16] = pb[16] = 0;
+        VT3_INFO("  bools vs %s ps %s", vb, pb);
+    }
     VT3_INFO("  vsc c0 %g %g %g %g | c4 %g %g %g %g | c15 %g %g %g %g",
              d->vsc[0][0], d->vsc[0][1], d->vsc[0][2], d->vsc[0][3],
              d->vsc[4][0], d->vsc[4][1], d->vsc[4][2], d->vsc[4][3],
@@ -270,15 +296,25 @@ static void trace_draw(const d3d9_device *d, const d3d9_draw_args *a, uint32_t n
     }
 }
 
+int d3d9_frame_draws;
+
 HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
 {
     if (!d3d9_gpu_ok()) return S_OK;   /* headless: nothing to draw into */
-    /* Only the back buffer is drawn. Render-to-texture is not implemented, so a draw aimed at a
-     * render texture (the shadow and depth passes) would land on screen. Skip it instead. */
-    if (d->rt[0] && d->rt[0] != d->backbuffer) {
-        static int once;
-        if (!warned_once(&once)) VT3_WARN("draw: render target is not the back buffer; skipped");
-        return S_OK;
+    if (d3d9_target_missing(d->rt[0])) return S_OK;   /* no renderer target: skip, do not paint the back buffer */
+    d3d9_gpu_rt_bind(d3d9_surface_target(d->rt[0]));   /* draws go to the device's render target */
+    /* VT3_SKIP_FRAME_DRAWS=a-b (or a) drops draws a..b of each frame, to find which draws make up a
+     * picture. Debug only. */
+    {
+        static int lo = -2, hi = -2;
+        if (lo == -2) {
+            const char *e = getenv("VT3_SKIP_FRAME_DRAWS");
+            lo = e ? atoi(e) : -1;
+            const char *dash = e ? strchr(e, '-') : NULL;
+            hi = dash ? atoi(dash + 1) : lo;
+        }
+        int idx = d3d9_frame_draws++;
+        if (lo >= 0 && idx >= lo && idx <= hi) return S_OK;
     }
     uint32_t nverts = prim_vertex_count(a->prim, a->prim_count);
     if (nverts == 0) {
@@ -422,6 +458,11 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     d3d9_host *ph = d->ps ? d3d9_host_of(d->ps, D3D9_KIND_PSHADER) : NULL;
     d3d9_shader *vsh = vh ? vh->data : NULL;
     d3d9_shader *psh = ph ? ph->data : NULL;
+    {   /* VT3_ONLY_SKINNED=1 keeps only the draws whose vertex shader is skinned (debug: isolate the players) */
+        static int only = -1;
+        if (only < 0) only = getenv("VT3_ONLY_SKINNED") != NULL;
+        if (only && vsh && !vsh->skinned) return S_OK;
+    }
     if (!vsh || !vsh->translated || (d->ps && (!psh || !psh->translated))) {
         if (!warned_once(&g_warn_no_prog))
             VT3_WARN("draw: shader not translated (skipped): vs 0x%x %s, ps 0x%x %s", d->vs,
@@ -450,6 +491,25 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     if (!vcopy) { free(idx16); return E_OUTOFMEMORY_D3D9; }
     copy_vertices(vcopy, vbase + (size_t)v0 * stride, nv, stride, dc);
     (void)swap;
+    {   /* VT3_DUMP_SKIN=1: layout and the first vertices of skinned draws, as the renderer receives them */
+        static int dump = -1, dumped;
+        if (dump < 0) dump = getenv("VT3_DUMP_SKIN") != NULL;
+        if (dump && vsh->skinned && dumped < 3) {
+            dumped++;
+            VT3_INFO("skin draw: stride %d, %d attributes, first vertex %u, %u vertices", stride, lay.count,
+                     (unsigned)v0, (unsigned)nv);
+            for (int k = 0; k < lay.count; k++)
+                VT3_INFO("  attr loc %d comps %d type %d offset %d", lay.attr[k].location, lay.attr[k].components,
+                         (int)lay.attr[k].type, lay.attr[k].offset);
+            for (uint32_t vi = 0; vi < 3 && vi < nv; vi++) {
+                const uint32_t *w = (const uint32_t *)(vcopy + (size_t)vi * stride);
+                char line[256]; int pos = 0;
+                for (int k = 0; k < stride / 4 && pos < 230; k++)
+                    pos += snprintf(line + pos, sizeof line - pos, "%08x ", w[k]);
+                VT3_INFO("  v%u: %s", (unsigned)vi, line);
+            }
+        }
+    }
 
     /* Plain draws reference vertices 0..nverts-1 of the copy. */
     static float vsc_copy[256 * 4];

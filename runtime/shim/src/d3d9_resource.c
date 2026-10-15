@@ -7,6 +7,7 @@
 #include "d3d9_internal.h"
 #include "vt3/vt3_log.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -101,7 +102,7 @@ GPTR d3d9_create_texture_obj(GPTR dev, uint32_t cube, uint32_t w, uint32_t h, ui
             t->lv[f][l].bytes = bytes;
         }
     }
-    if (!cube) t->gl = d3d9_gpu_tex_create(w, h, fmt);
+    if (!cube) t->gl = (usage & D3DUSAGE_RENDERTARGET_CHK) ? d3d9_gpu_rt_create(w, h, fmt) : d3d9_gpu_tex_create(w, h, fmt);
     else t->gl = d3d9_gpu_cube_create(w, fmt);
     GPTR obj = d3d9_obj_new(cube ? D3D9_KIND_CUBETEXTURE : D3D9_KIND_TEXTURE, t, dev);
     if (!obj) goto fail;
@@ -232,6 +233,12 @@ GPTR d3d9_create_shader_obj(GPTR dev, int is_ps, GPTR byte_code)
     sh->is_ps = is_ps;
     sh->ntok = n;
     sh->tok = tok;
+    for (uint32_t i = 1; i < n && tok[i] != 0x0000FFFFu; ) {   /* dcl instructions: usage in the first operand */
+        uint32_t op = tok[i] & 0xFFFFu;
+        if (op == 31 && i + 1 < n && ((tok[i + 1] & 0x1Fu) == 1 || (tok[i + 1] & 0x1Fu) == 2)) sh->skinned = 1;
+        i += ((tok[i] >> 24) & 0xFu) + 1;
+    }
+    if (getenv("VT3_TRACE_SHADERS")) VT3_INFO("shader created: %s, %u tokens, skinned %d", is_ps ? "ps" : "vs", (unsigned)n, sh->skinned);
     if (vt3_sm2_translate_ex(tok, n, &sh->sm, vt3_gfx_glsl_flags()) == 0) {
         sh->translated = 1;
     } else {
@@ -243,6 +250,12 @@ GPTR d3d9_create_shader_obj(GPTR dev, int is_ps, GPTR byte_code)
         vt3_sm2_free(&sh->sm);
         free(tok);
         free(sh);
+    }
+    if (obj && getenv("VT3_DUMP_SHADERS")) {   /* debug: each bytecode, named by the object address the game sees */
+        char path[512];
+        snprintf(path, sizeof path, "%s/%s_%08x.bin", getenv("VT3_DUMP_SHADERS"), is_ps ? "ps" : "vs", (unsigned)obj);
+        FILE *f = fopen(path, "wb");
+        if (f) { fwrite(tok, 4, n, f); fclose(f); }
     }
     return obj;
 }

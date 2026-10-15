@@ -38,6 +38,9 @@ enum {
 
 #define D3D9_MAX_HOST 4096
 
+#define D3DUSAGE_RENDERTARGET_CHK 0x1u
+#define D3DUSAGE_DEPTHSTENCIL_CHK 0x2u
+
 typedef struct d3d9_host {
     uint32_t kind;
     uint32_t refs;        /* host copy of the guest count */
@@ -110,6 +113,7 @@ typedef struct d3d9_surface {
     uint32_t pitch;
     int backbuffer;
     int locked;
+    vt3_tex rt;           /* renderer target for a surface with no texture owner (made on first use) */
 } d3d9_surface;
 
 typedef struct d3d9_buffer {
@@ -133,6 +137,7 @@ typedef struct d3d9_shader {
     vt3_sm2_shader sm;
     int translated;                     /* sm holds valid GLSL */
     int failed_logged;
+    int skinned;                        /* declares blend weights or indices (usage 1 or 2) */
 } d3d9_shader;
 
 /* ---- device state ------------------------------------------------------- */
@@ -163,6 +168,8 @@ typedef struct d3d9_device {
     int scissor_set;                    /* 0: the rect is the whole target */
 } d3d9_device;
 
+extern int d3d9_frame_draws;   /* draws since the last Present (debug bisect) */
+
 void d3d9_device_free(d3d9_device *d);
 
 /* ---- GPU glue (d3d9_gpu.c) ----------------------------------------------- */
@@ -174,6 +181,11 @@ void d3d9_gpu_clear(uint32_t argb, int do_color, int do_depth, float depth);
 void d3d9_gpu_set_scissor(int enable, int x, int y, int w, int h);
 void d3d9_gpu_present(void);
 vt3_tex d3d9_gpu_tex_create(uint32_t w, uint32_t h, uint32_t fmt);
+vt3_tex d3d9_gpu_rt_create(uint32_t w, uint32_t h, uint32_t fmt);                   /* a render target texture; 0 if refused */
+void d3d9_gpu_rt_bind(vt3_tex t);                                     /* draws and clears go to t; 0: back buffer */
+void d3d9_gpu_blit(vt3_tex dst, vt3_rect dr, vt3_tex src, vt3_rect sr, int nearest);
+vt3_tex d3d9_surface_target(GPTR surf);                               /* renderer target of a surface; 0: back buffer */
+int d3d9_target_missing(GPTR surf);                                    /* a render target that the renderer cannot make */
 void d3d9_gpu_tex_destroy(vt3_tex t);
 void d3d9_gpu_tex_upload(vt3_tex t, const uint8_t *src, uint32_t pitch, uint32_t w, uint32_t h, uint32_t fmt);
 vt3_tex d3d9_gpu_cube_create(uint32_t size, uint32_t fmt);           /* 0 when the renderer refuses */

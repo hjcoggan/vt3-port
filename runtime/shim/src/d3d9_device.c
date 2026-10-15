@@ -17,7 +17,6 @@
 #define TEXTURE_BYTES (512u * 1024u * 1024u)
 #define D3DCLEAR_TARGET_CHK 1u
 #define D3DCLEAR_ZBUFFER_CHK 2u
-#define D3DUSAGE_RENDERTARGET_CHK 0x1u
 #define D3DUSAGE_DEPTHSTENCIL_CHK 0x2u
 
 d3d9_device *d3d9_device_of(GPTR dev)
@@ -148,6 +147,8 @@ HRESULT WINAPI IDirect3DDevice9_Present(GPTR This, GPTR src_rect, GPTR dst_rect,
     d3d9_device *d = DEV(This);
     if (!d) return D3DERR_CHK_INVALIDCALL;
     d3d9_gpu_present();
+    if (getenv("VT3_TRACE_FRAMES")) VT3_INFO("frame: %d draws", d3d9_frame_draws);
+    d3d9_frame_draws = 0;
     /* VT3_TRACE_FPS=1 logs the frames presented each second, to check the game's frame pacing. */
     static int fps_on = -1;
     static uint32_t frames;
@@ -196,11 +197,35 @@ HRESULT WINAPI IDirect3DDevice9_Clear(GPTR This, DWORD rect_count, GPTR rects, D
     (void)rect_count; (void)rects; (void)stencil;
     d3d9_device *d = DEV(This);
     if (!d) return D3DERR_CHK_INVALIDCALL;
-    if (d->rt[0] && d->rt[0] != d->backbuffer) return S_OK;   /* render-to-texture is not implemented; see d3d9_draw */
+    if (d3d9_target_missing(d->rt[0])) return S_OK;
+    d3d9_gpu_rt_bind(d3d9_surface_target(d->rt[0]));
     union { uint32_t u; float f; } zb;
     zb.u = z;
     d3d9_gpu_clear(color, (flags & D3DCLEAR_TARGET_CHK) != 0, (flags & D3DCLEAR_ZBUFFER_CHK) != 0, zb.f);
     return S_OK;
+}
+
+/* The renderer target behind a surface: 0 for the back buffer. Level 0 of a texture that was
+ * created as a render target is its own target. Any other surface gets one of its own, on first use. */
+vt3_tex d3d9_surface_target(GPTR surf)
+{
+    d3d9_surface *s = surf ? d3d9_surface_of(surf) : NULL;
+    if (!s || s->backbuffer) return 0;
+    if (s->owner && s->level == 0 && s->face == 0) {
+        d3d9_host *th = d3d9_host_of(s->owner, D3D9_KIND_TEXTURE);
+        d3d9_texture *tx = th ? (d3d9_texture *)th->data : NULL;
+        if (tx && tx->gl) return tx->gl;
+    }
+    if (!s->rt) s->rt = d3d9_gpu_rt_create(s->w, s->h, s->fmt);
+    return s->rt;
+}
+
+/* A surface that is not the back buffer but has no renderer target. Draws and copies to it are
+ * skipped: drawing them to the back buffer would paint the scene over the screen. */
+int d3d9_target_missing(GPTR surf)
+{
+    d3d9_surface *s = surf ? d3d9_surface_of(surf) : NULL;
+    return s && !s->backbuffer && d3d9_surface_target(surf) == 0;
 }
 
 /* ---- render targets and viewport ------------------------------------------- */
@@ -210,9 +235,13 @@ HRESULT WINAPI IDirect3DDevice9_SetRenderTarget(GPTR This, DWORD RenderTargetInd
     d3d9_device *d = DEV(This);
     if (!d || RenderTargetIndex >= 4) return D3DERR_CHK_INVALIDCALL;
     d->rt[RenderTargetIndex] = pRenderTarget;
-    if (RenderTargetIndex == 0 && pRenderTarget && pRenderTarget != d->backbuffer) {
-        static int once;
-        if (!once) { once = 1; VT3_WARN("SetRenderTarget: rendering still goes to the back buffer"); }
+    if (getenv("VT3_TRACE_RTSEQ")) VT3_INFO("seq: set rt %u -> 0x%x", (unsigned)RenderTargetIndex, (unsigned)pRenderTarget);
+    if (getenv("VT3_TRACE_RT")) {
+        d3d9_surface *rs = pRenderTarget ? d3d9_surface_of(pRenderTarget) : NULL;
+        VT3_INFO("SetRenderTarget %u -> 0x%08x (%s %ux%u fmt 0x%x usage 0x%x)", (unsigned)RenderTargetIndex,
+                 (unsigned)pRenderTarget, rs ? (rs->backbuffer ? "backbuffer" : "surface") : "none",
+                 rs ? (unsigned)rs->w : 0u, rs ? (unsigned)rs->h : 0u, rs ? (unsigned)rs->fmt : 0u,
+                 rs ? (unsigned)rs->usage : 0u);
     }
     return S_OK;
 }
@@ -464,11 +493,31 @@ HRESULT WINAPI IDirect3DDevice9_CreateOffscreenPlainSurface(GPTR This, UINT Widt
     return S_OK;
 }
 
+/* A RECT at p (left, top, right, bottom as int32), or the whole surface when p is 0. */
+static vt3_rect rect_at(GPTR p, uint32_t w, uint32_t h)
+{
+    vt3_rect r = { 0, 0, (int)w, (int)h };
+    if (!p) return r;
+    int l = (int32_t)d3d9_rd(p, 0), t = (int32_t)d3d9_rd(p, 4);
+    int rr = (int32_t)d3d9_rd(p, 8), b = (int32_t)d3d9_rd(p, 12);
+    if (rr <= l || b <= t) return r;
+    r.x = l; r.y = t; r.w = rr - l; r.h = b - t;
+    return r;
+}
+
 HRESULT WINAPI IDirect3DDevice9_StretchRect(GPTR This, GPTR src_surface, GPTR src_rect, GPTR dst_surface,
                                             GPTR dst_rect, UINT filter)
 {
-    (void)src_surface; (void)src_rect; (void)dst_surface; (void)dst_rect; (void)filter;
-    return DEV(This) ? S_OK : D3DERR_CHK_INVALIDCALL;   /* copies are not modelled yet */
+    d3d9_device *d = DEV(This);
+    if (!d) return D3DERR_CHK_INVALIDCALL;
+    d3d9_surface *ss = src_surface ? d3d9_surface_of(src_surface) : NULL;
+    d3d9_surface *ds = dst_surface ? d3d9_surface_of(dst_surface) : NULL;
+    if (!ss || !ds) return D3DERR_CHK_INVALIDCALL;
+    if (d3d9_target_missing(src_surface) || d3d9_target_missing(dst_surface)) return S_OK;
+    d3d9_gpu_blit(d3d9_surface_target(dst_surface), rect_at(dst_rect, ds->w, ds->h),
+                  d3d9_surface_target(src_surface), rect_at(src_rect, ss->w, ss->h),
+                  filter != 2 /* D3DTEXF_LINEAR */);
+    return S_OK;
 }
 
 HRESULT WINAPI IDirect3DDevice9_ValidateDevice(GPTR This, GPTR pNumPasses)

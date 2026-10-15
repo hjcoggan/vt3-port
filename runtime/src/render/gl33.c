@@ -111,6 +111,7 @@ typedef struct gl_prog {
     GLint loc_vsb[16], loc_psb[16];
     GLint loc_samp[VT3_MAX_SAMPLERS];
     GLint loc_at_func, loc_at_ref;   /* alpha test uniforms (sm2_glsl.c) */
+    GLint loc_flip;                  /* vt3_flip: -1 when drawing into a render texture */
     int used;
 } gl_prog;
 #define VT3_VERTEX_BYTES ((GLsizeiptr)sizeof(vt3_tlvertex))
@@ -121,6 +122,8 @@ typedef struct gl_tex {
     vt3_texfmt fmt;
     int used;
     int cube;                     /* GL_TEXTURE_CUBE_MAP rather than GL_TEXTURE_2D */
+    int rt;                       /* a render target: fbo and depth below are its own */
+    GLuint fbo, depth;
 } gl_tex;
 
 static struct {
@@ -139,6 +142,8 @@ static struct {
     gl_tex tex[VT3_MAX_TEX];
     int scissor_on;               /* set_scissor state, applied to every logical-FBO operation */
     vt3_rect scissor;             /* logical pixels, top-left origin */
+    vt3_tex tgt;                  /* render target: 0 = the logical back buffer */
+    GLint u_flip;                 /* uFlip in k_vs */
 } g;
 
 static const char *k_vs =
@@ -147,12 +152,14 @@ static const char *k_vs =
     "layout(location = 1) in vec4 aColor;\n"        /* bytes arrive as B,G,R,A */
     "layout(location = 2) in vec2 aUV;\n"
     "uniform vec2 uLogicalSize;\n"
+    "uniform float uFlip;\n"                       /* -1 when drawing into a render texture */
     "out vec4 vColor;\n"
     "out vec2 vUV;\n"
     "void main() {\n"
     "    float invw = 1.0 / aPosRhw.w;\n"
     "    vec2 ndc = vec2(aPosRhw.x / uLogicalSize.x * 2.0 - 1.0,\n"
     "                    1.0 - aPosRhw.y / uLogicalSize.y * 2.0);\n"
+    "    ndc.y *= uFlip;\n"
     "    float zndc = aPosRhw.z * 2.0 - 1.0;\n"
     "    gl_Position = vec4(ndc * invw, zndc * invw, invw);\n"
     "    vColor = aColor.bgra;\n"
@@ -229,6 +236,7 @@ static int gl_init(int logical_w, int logical_h)
     p_glDeleteShader(vs);
     p_glDeleteShader(fs);
     g.u_logical_size = p_glGetUniformLocation(g.program, "uLogicalSize");
+    g.u_flip = p_glGetUniformLocation(g.program, "uFlip");
     g.u_tex = p_glGetUniformLocation(g.program, "uTex");
     g.u_use_tex = p_glGetUniformLocation(g.program, "uUseTex");
 
@@ -359,9 +367,12 @@ static int gl_tex_create(vt3_tex *out, int w, int h, vt3_texfmt fmt)
     GLuint id;
     p_glGenTextures(1, &id);
     p_glBindTexture(GL_TEXTURE_2D, id);
-    GLenum internal = (fmt == VT3_TEXFMT_A8) ? GL_R8 : GL_RGBA8;
-    p_glTexImage2D(GL_TEXTURE_2D, 0, internal, w, h, 0,
-                   (fmt == VT3_TEXFMT_A8) ? GL_RED : GL_BGRA, GL_UNSIGNED_BYTE, NULL);
+    GLenum internal = (fmt == VT3_TEXFMT_A8) ? GL_R8 : (fmt == VT3_TEXFMT_RGBA16F) ? GL_RGBA16F : GL_RGBA8;
+    if (fmt == VT3_TEXFMT_RGBA16F)
+        p_glTexImage2D(GL_TEXTURE_2D, 0, internal, w, h, 0, GL_RGBA, GL_FLOAT, NULL);
+    else
+        p_glTexImage2D(GL_TEXTURE_2D, 0, internal, w, h, 0,
+                       (fmt == VT3_TEXFMT_A8) ? GL_RED : GL_BGRA, GL_UNSIGNED_BYTE, NULL);
     p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -404,8 +415,14 @@ static void gl_tex_upload(vt3_tex t, const void *pixels, int pitch, int w, int h
 static void gl_tex_destroy(vt3_tex t)
 {
     if (t == 0 || t > VT3_MAX_TEX || !g.tex[t - 1].used) return;
+    if (g.tex[t - 1].rt) {
+        p_glDeleteFramebuffers(1, &g.tex[t - 1].fbo);
+        p_glDeleteRenderbuffers(1, &g.tex[t - 1].depth);
+        if (g.tgt == t) g.tgt = 0;
+    }
     p_glDeleteTextures(1, &g.tex[t - 1].id);
     g.tex[t - 1].used = 0;
+    g.tex[t - 1].rt = 0;
 }
 
 /* A cube map: six square faces, level 0 only, BGRA like the 2D colour textures. */
@@ -453,34 +470,114 @@ static void gl_set_scissor(int enable, vt3_rect r)
     g.scissor = r;
 }
 
+/* Size and framebuffer of a target: 0 is the logical back buffer, anything else a render texture. */
+static void gl_dims_of(vt3_tex t, int *w, int *h, GLuint *fbo)
+{
+    if (t == 0 || t > VT3_MAX_TEX || !g.tex[t - 1].rt) {
+        *w = g.logical_w;
+        *h = g.logical_h;
+        *fbo = g.fbo;
+        return;
+    }
+    *w = g.tex[t - 1].w;
+    *h = g.tex[t - 1].h;
+    *fbo = g.tex[t - 1].fbo;
+}
+
+/* Window row of a top-first row y in target t. The back buffer's rows run bottom-up in GL; a
+ * render texture keeps the D3D row order, because draws into it are flipped (vt3_flip). */
+static GLint gl_row_of(vt3_tex t, int y, int h)
+{
+    return (t == 0 || t > VT3_MAX_TEX || !g.tex[t - 1].rt) ? (GLint)(h - y) : (GLint)y;
+}
+
 static void apply_scissor(void)
 {
     if (!g.scissor_on) {
         p_glDisable(GL_SCISSOR_TEST);
         return;
     }
+    int tw, th;
+    GLuint fbo;
+    gl_dims_of(g.tgt, &tw, &th, &fbo);
     int x0 = g.scissor.x, y0 = g.scissor.y;
     int x1 = g.scissor.x + g.scissor.w, y1 = g.scissor.y + g.scissor.h;
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
-    if (x1 > g.logical_w) x1 = g.logical_w;
-    if (y1 > g.logical_h) y1 = g.logical_h;
+    if (x1 > tw) x1 = tw;
+    if (y1 > th) y1 = th;
     if (x1 < x0) x1 = x0;
     if (y1 < y0) y1 = y0;
     p_glEnable(GL_SCISSOR_TEST);
-    p_glScissor(x0, g.logical_h - y1, x1 - x0, y1 - y0);
+    p_glScissor(x0, gl_row_of(g.tgt, y1, th), x1 - x0, y1 - y0);
 }
 
+/* Binds the current render target (the back buffer, or a texture set by gl_rt_bind). */
 static void gl_bind_logical_fbo(void)
 {
-    p_glBindFramebuffer(GL_FRAMEBUFFER, g.fbo);
-    p_glViewport(0, 0, g.logical_w, g.logical_h);
+    int w, h;
+    GLuint fbo;
+    gl_dims_of(g.tgt, &w, &h, &fbo);
+    p_glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    p_glViewport(0, 0, w, h);
     apply_scissor();
 }
 
 static void gl_begin_frame(void)
 {
     gl_bind_logical_fbo();
+}
+
+/* A render target: a texture with a framebuffer and a depth-stencil renderbuffer of the same size. */
+static int gl_rt_create(vt3_tex *out, int w, int h, vt3_texfmt fmt)
+{
+    if (fmt != VT3_TEXFMT_RGBA16F) fmt = VT3_TEXFMT_A8R8G8B8;
+    if (gl_tex_create(out, w, h, fmt) != 0) return -1;
+    gl_tex *t = &g.tex[*out - 1];
+    t->rt = 1;
+    p_glGenFramebuffers(1, &t->fbo);
+    p_glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
+    p_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t->id, 0);
+    p_glGenRenderbuffers(1, &t->depth);
+    p_glBindRenderbuffer(GL_RENDERBUFFER, t->depth);
+    p_glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
+    p_glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, t->depth);
+    GLenum st = p_glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    p_glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (st != GL_FRAMEBUFFER_COMPLETE) {
+        VT3_WARN("render target %dx%d incomplete (status 0x%x)", w, h, (unsigned)st);
+        gl_tex_destroy(*out);
+        *out = 0;
+        return -1;
+    }
+    return 0;
+}
+
+/* Draws and clears go to t from now on. 0 or a plain texture: the back buffer. */
+static void gl_rt_bind(vt3_tex t)
+{
+    g.tgt = (t != 0 && t <= VT3_MAX_TEX && g.tex[t - 1].used && g.tex[t - 1].rt) ? t : 0;
+}
+
+/* Copies src_r of src onto dst_r of dst, scaling as needed. 0 is the back buffer. The rows are
+ * converted to each target's window rows, so a copy from the back buffer into a texture (or back)
+ * comes out in the right orientation. */
+static void gl_blit(vt3_tex dst, vt3_rect dr, vt3_tex src, vt3_rect sr, int nearest)
+{
+    int sw, sh, dw, dh;
+    GLuint sf, df;
+    gl_dims_of(src, &sw, &sh, &sf);
+    gl_dims_of(dst, &dw, &dh, &df);
+    if (!sf || !df || sr.w <= 0 || sr.h <= 0 || dr.w <= 0 || dr.h <= 0) return;
+    GLint sy0 = gl_row_of(src, sr.y, sh), sy1 = gl_row_of(src, sr.y + sr.h, sh);
+    GLint dy0 = gl_row_of(dst, dr.y, dh), dy1 = gl_row_of(dst, dr.y + dr.h, dh);
+    p_glDisable(GL_SCISSOR_TEST);            /* the scissor applies to draws, not to copies */
+    p_glBindFramebuffer(GL_READ_FRAMEBUFFER, sf);
+    p_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, df);
+    p_glBlitFramebuffer(sr.x, sy0, sr.x + sr.w, sy1, dr.x, dy0, dr.x + dr.w, dy1, GL_COLOR_BUFFER_BIT,
+                        nearest ? GL_NEAREST : GL_LINEAR);
+    p_glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    p_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 }
 
 static void gl_clear(uint32_t argb)
@@ -503,7 +600,11 @@ static void gl_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_te
     p_glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)count * VT3_VERTEX_BYTES, v, GL_STREAM_DRAW);
 
     p_glUseProgram(g.program);
-    p_glUniform2f(g.u_logical_size, (GLfloat)g.logical_w, (GLfloat)g.logical_h);
+    int tw, th;
+    GLuint tfbo;
+    gl_dims_of(g.tgt, &tw, &th, &tfbo);
+    p_glUniform2f(g.u_logical_size, (GLfloat)tw, (GLfloat)th);
+    p_glUniform1f(g.u_flip, g.tgt ? -1.0f : 1.0f);
     int use_tex = (tex != 0 && tex <= VT3_MAX_TEX && g.tex[tex - 1].used);
     p_glUniform1i(g.u_use_tex, use_tex);
     p_glActiveTexture(GL_TEXTURE0);
@@ -595,7 +696,9 @@ static void apply_state(const vt3_rstate *s)
         p_glDisable(GL_DEPTH_TEST);
     }
     p_glDepthMask(s->depth_write ? GL_TRUE : GL_FALSE);
-    if (s->cull == 1) {                       /* D3DCULL_NONE */
+    int cull = s->cull;
+    if (g.tgt != 0 && (cull == 2 || cull == 3)) cull = 5 - cull;   /* flipped target: CW and CCW swap */
+    if (cull == 1) {                          /* D3DCULL_NONE */
         p_glDisable(GL_CULL_FACE);
     } else {
         /* HYPOTHESIS: D3DCULL_CW culls triangles that are clockwise in GL
@@ -603,7 +706,7 @@ static void apply_state(const vt3_rstate *s)
          * known winding before relying on it. */
         p_glEnable(GL_CULL_FACE);
         p_glCullFace(GL_BACK);
-        p_glFrontFace(s->cull == 2 ? GL_CCW : GL_CW);
+        p_glFrontFace(cull == 2 ? GL_CCW : GL_CW);
     }
 }
 
@@ -671,6 +774,7 @@ static int gl_prog_create(vt3_prog *out, const char *vs_src, const char *ps_src,
     }
     p->loc_at_func = p_glGetUniformLocation(id, "vt3_at_func");
     p->loc_at_ref = p_glGetUniformLocation(id, "vt3_at_ref");
+    p->loc_flip = p_glGetUniformLocation(id, "vt3_flip");
     for (int n = 0; n < VT3_MAX_SAMPLERS; n++) {
         char name[8];
         snprintf(name, sizeof name, "s%d", n);
@@ -724,6 +828,7 @@ static void gl_draw_program(const vt3_draw *d)
     g.attr_mask = want;
 
     p_glUseProgram(p->id);
+    if (p->loc_flip >= 0) p_glUniform1f(p->loc_flip, g.tgt ? -1.0f : 1.0f);
     if (p->loc_at_func >= 0) p_glUniform1i(p->loc_at_func, d->state.alpha_test ? d->state.alpha_func : 0);
     if (p->loc_at_ref >= 0) p_glUniform1f(p->loc_at_ref, (GLfloat)d->state.alpha_ref);
     if (p->loc_vsc >= 0) p_glUniform4fv(p->loc_vsc, VT3_CONST_REGS, d->vsc ? d->vsc : g.zero_consts);
@@ -795,6 +900,9 @@ const vt3_gfx_ops vt3_gfx_gl33 = {
     .tex_create = gl_tex_create,
     .tex_upload = gl_tex_upload,
     .tex_destroy = gl_tex_destroy,
+    .rt_create = gl_rt_create,
+    .rt_bind = gl_rt_bind,
+    .blit = gl_blit,
     .cube_create = gl_cube_create,
     .cube_upload = gl_cube_upload,
     .begin_frame = gl_begin_frame,
