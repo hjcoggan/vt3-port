@@ -29,6 +29,7 @@
 
 #include <math.h>
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -225,6 +226,8 @@ static void *mix_thread(void *arg)
     static int16_t out[MIX_MAX_FRAMES * MIX_CH];
     /* VT3_TRACE_AUDIO=1 logs once a second: buffers playing, peak level, device underruns. */
     const int trace = getenv("VT3_TRACE_AUDIO") != NULL;
+    /* VT3_DUMP_AUDIO=path writes the mixed output as raw s16 stereo 48 kHz, for analysis. */
+    FILE *dump = getenv("VT3_DUMP_AUDIO") ? fopen(getenv("VT3_DUMP_AUDIO"), "wb") : NULL;
     uint64_t window_ns = now_ns();
     int32_t window_peak = 0;
     for (;;) {
@@ -250,6 +253,7 @@ static void *mix_thread(void *arg)
                 if (v > peak) peak = v;
                 if (-v > peak) peak = -v;
             }
+            if (dump) fwrite(out, sizeof(int16_t), (size_t)frames * MIX_CH, dump);
             vt3_audio_write(g_out, out, (size_t)frames * MIX_CH * sizeof(int16_t));
             g_mix_next_ns += frames * 1000000000u / MIX_RATE;
             if (trace) {
@@ -714,8 +718,18 @@ HRESULT WINAPI IDirectSoundBuffer_Stop(GPTR This)
 HRESULT WINAPI IDirectSoundBuffer_Unlock(GPTR This, GPTR pvAudioPtr1, DWORD dwAudioBytes1, GPTR pvAudioPtr2,
                                          DWORD dwAudioBytes2)
 {
-    (void)pvAudioPtr1;
-    (void)dwAudioBytes1;
+    if (dsound_trace() && buf_of(This)) {
+        /* Hash of what the game wrote, so repeated chunks show up in the trace. */
+        uint64_t h = 1469598103934665603ull;
+        const uint8_t *p = pvAudioPtr1 ? d3d9_gmem(pvAudioPtr1, dwAudioBytes1) : NULL;
+        int constant = 1;
+        for (uint32_t i = 0; p && i < dwAudioBytes1; i++) {
+            h = (h ^ p[i]) * 1099511628211ull;
+            if (p[i] != p[0]) constant = 0;
+        }
+        VT3_INFO("DirectSound: Unlock 0x%08x bytes %u hash %016llx %s", (unsigned)This, (unsigned)dwAudioBytes1,
+                 (unsigned long long)h, constant ? "constant" : "varied");
+    }
     (void)pvAudioPtr2;
     (void)dwAudioBytes2;
     return buf_of(This) ? DS_OK : DSERR_UNSUPPORTED;

@@ -247,7 +247,13 @@ BOOL WINAPI ReadFile(HANDLE hf, LPVOID buffer, DWORD bytes, LPDWORD bytes_read, 
             return FALSE;
         }
     }
+    static int trace_reads = -1;   /* VT3_TRACE_READS=1 logs each read of 4 KB or more with its file offset */
+    if (trace_reads < 0) trace_reads = getenv("VT3_TRACE_READS") != NULL;
+    off_t at = trace_reads && bytes >= 4096 ? lseek(f->fd, 0, SEEK_CUR) : 0;
     ssize_t r = bytes ? read(f->fd, vt3_g2h(buffer), bytes) : 0;
+    if (trace_reads && bytes >= 4096)
+        VT3_INFO("ReadFile: handle 0x%08x offset %lld bytes %u got %ld", (unsigned)hf, (long long)at,
+                 (unsigned)bytes, (long)r);
     if (r < 0) {
         vt3s_set_last_error((DWORD)errno);
         return FALSE;
