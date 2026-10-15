@@ -79,6 +79,7 @@
     X(void, glDrawElements, (GLenum, GLsizei, GLenum, const void *))                      \
     X(void, glDepthFunc, (GLenum))                                                        \
     X(void, glDepthMask, (GLboolean))                                                     \
+    X(void, glColorMask, (GLboolean, GLboolean, GLboolean, GLboolean))                    \
     X(void, glCullFace, (GLenum))                                                         \
     X(void, glFrontFace, (GLenum))                                                        \
     X(void, glReadPixels, (GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *))       \
@@ -572,6 +573,7 @@ static void gl_blit(vt3_tex dst, vt3_rect dr, vt3_tex src, vt3_rect sr, int near
     GLint sy0 = gl_row_of(src, sr.y, sh), sy1 = gl_row_of(src, sr.y + sr.h, sh);
     GLint dy0 = gl_row_of(dst, dr.y, dh), dy1 = gl_row_of(dst, dr.y + dr.h, dh);
     p_glDisable(GL_SCISSOR_TEST);            /* the scissor applies to draws, not to copies */
+    p_glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     p_glBindFramebuffer(GL_READ_FRAMEBUFFER, sf);
     p_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, df);
     p_glBlitFramebuffer(sr.x, sy0, sr.x + sr.w, sy1, dr.x, dy0, dr.x + dr.w, dy1, GL_COLOR_BUFFER_BIT,
@@ -583,6 +585,7 @@ static void gl_blit(vt3_tex dst, vt3_rect dr, vt3_tex src, vt3_rect sr, int near
 static void gl_clear(uint32_t argb)
 {
     gl_bind_logical_fbo();
+    p_glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);   /* D3D clears every channel, whatever the write mask */
     p_glClearColor(((argb >> 16) & 0xFF) / 255.0f, ((argb >> 8) & 0xFF) / 255.0f,
                    (argb & 0xFF) / 255.0f, ((argb >> 24) & 0xFF) / 255.0f);
     p_glClear(GL_COLOR_BUFFER_BIT);
@@ -593,7 +596,7 @@ static void apply_state(const vt3_rstate *s);
 static void gl_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex)
 {
     gl_bind_logical_fbo();
-    static const vt3_rstate tl_state = { 1, 5, 6, 0, 0, 8, 1, 1, 0, 0, 0 };   /* alpha blend, no depth, no cull, ADD */
+    static const vt3_rstate tl_state = { 1, 5, 6, 0, 0, 8, 1, 1, 0, 0, 0, 0xF };   /* alpha blend, no depth, no cull, ADD */
     apply_state(&tl_state);
     p_glBindVertexArray(g.vao_tl);
     p_glBindBuffer(GL_ARRAY_BUFFER, g.vbo_tl);
@@ -696,6 +699,8 @@ static void apply_state(const vt3_rstate *s)
         p_glDisable(GL_DEPTH_TEST);
     }
     p_glDepthMask(s->depth_write ? GL_TRUE : GL_FALSE);
+    p_glColorMask((s->color_write & 1) != 0, (s->color_write & 2) != 0, (s->color_write & 4) != 0,
+                  (s->color_write & 8) != 0);
     int cull = s->cull;
     if (g.tgt != 0 && (cull == 2 || cull == 3)) cull = 5 - cull;   /* flipped target: CW and CCW swap */
     if (cull == 1) {                          /* D3DCULL_NONE */

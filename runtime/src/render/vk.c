@@ -1249,7 +1249,7 @@ static void vk_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_te
     memcpy(g.vb_ptr + off, v, bytes);
     f->vb_used = (f->vb_used + bytes + 15u) & ~15u;
 
-    static const vt3_rstate tl_state = { 1, 5, 6, 0, 0, 8, 1, 1, 0, 0, 0 };
+    static const vt3_rstate tl_state = { 1, 5, 6, 0, 0, 8, 1, 1, 0, 0, 0, 0xF };
     VkPipeline pipe = get_pipeline(0, g.tl_vs, g.tl_fs, NULL, 1, &tl_state, prim == VT3_PRIM_TRIANGLESTRIP);
     VkDescriptorSet set1 = VK_NULL_HANDLE;
     vt3_tex samplers[VT3_MAX_SAMPLERS] = {0};

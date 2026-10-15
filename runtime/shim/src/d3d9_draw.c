@@ -212,6 +212,7 @@ static void fill_rstate(const d3d9_device *d, vt3_rstate *s)
     s->alpha_test = d->rs[15] != 0;                  /* D3DRS_ALPHATESTENABLE */
     s->alpha_func = d->rs[25] ? (int)d->rs[25] : 8; /* D3DRS_ALPHAFUNC, default ALWAYS */
     s->alpha_ref = (int)(d->rs[24] & 0xFFu);         /* D3DRS_ALPHAREF */
+    s->color_write = (int)(d->rs[168] & 0xFu);       /* D3DRS_COLORWRITEENABLE */
 }
 
 /* The renderer binds 2D textures only. A cube texture on a sampler gets the zero texel, and the

@@ -99,6 +99,7 @@ typedef struct vt3_rstate {
     int alpha_test;             /* D3DRS_ALPHATESTENABLE */
     int alpha_func;             /* D3DRS_ALPHAFUNC: D3DCMP_* */
     int alpha_ref;              /* D3DRS_ALPHAREF, 0..255 */
+    int color_write;            /* D3DRS_COLORWRITEENABLE: bit 0 red, 1 green, 2 blue, 3 alpha */
 } vt3_rstate;
 
 typedef struct vt3_draw {
