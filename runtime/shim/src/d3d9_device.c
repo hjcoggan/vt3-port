@@ -275,6 +275,10 @@ HRESULT WINAPI IDirect3DDevice9_SetViewport(GPTR This, GPTR viewport)
     d3d9_device *d = DEV(This);
     if (!d || !d3d9_gmem(viewport, VP_SIZE)) return D3DERR_CHK_INVALIDCALL;
     for (int i = 0; i < 6; i++) d->viewport[i] = d3d9_rd(viewport, (uint32_t)(4 * i));
+    if (getenv("VT3_TRACE_VIEWPORT")) {
+        d3d9_surface *ts = d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
+        VT3_INFO("viewport %u %u %u %u z %g %g on rt 0x%x (%ux%u)", d->viewport[0], d->viewport[1], d->viewport[2], d->viewport[3], (double)0, (double)0, (unsigned)d->rt[0], ts ? (unsigned)ts->w : 0u, ts ? (unsigned)ts->h : 0u);
+    }
     return S_OK;
 }
 
@@ -513,6 +517,12 @@ HRESULT WINAPI IDirect3DDevice9_StretchRect(GPTR This, GPTR src_surface, GPTR sr
     d3d9_surface *ss = src_surface ? d3d9_surface_of(src_surface) : NULL;
     d3d9_surface *ds = dst_surface ? d3d9_surface_of(dst_surface) : NULL;
     if (!ss || !ds) return D3DERR_CHK_INVALIDCALL;
+    if (getenv("VT3_TRACE_STRETCH")) {
+        vt3_rect tsr = rect_at(src_rect, ss->w, ss->h), tdr = rect_at(dst_rect, ds->w, ds->h);
+        VT3_INFO("stretch %ux%u src rect %d %d %d %d (rt 0x%x) -> dst %ux%u rect %d %d %d %d (rt 0x%x) filter %u",
+                 (unsigned)ss->w, (unsigned)ss->h, tsr.x, tsr.y, tsr.w, tsr.h, (unsigned)d3d9_surface_target(src_surface),
+                 (unsigned)ds->w, (unsigned)ds->h, tdr.x, tdr.y, tdr.w, tdr.h, (unsigned)d3d9_surface_target(dst_surface), filter);
+    }
     if (d3d9_target_missing(src_surface) || d3d9_target_missing(dst_surface)) return S_OK;
     d3d9_gpu_blit(d3d9_surface_target(dst_surface), rect_at(dst_rect, ds->w, ds->h),
                   d3d9_surface_target(src_surface), rect_at(src_rect, ss->w, ss->h),
