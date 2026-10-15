@@ -580,9 +580,18 @@ static int translate_walk(ctx *c)
             if (c->failed) return -1;
             int id = c->loop_ids[c->depth - 1];
             unsigned n = ireg.tok & 0x7FFu;
-            const char *pref = c->out->kind == VT3_SM_VS ? "vs" : "ps";
-            sb_add(&c->body, "  for (int _lk%d = 0; _lk%d < %si[%u].x; _lk%d++) {\n", id, id, pref, n, id);
-            sb_add(&c->body, "  aL.x = %si[%u].y + _lk%d * %si[%u].z;\n", pref, n, id, pref, n);
+            if (c->out->idef_set[n]) {
+                /* The shader's own defi: in D3D it overrides the device's integer constant for this
+                 * shader, so the loop bounds are literals (count, start, step). The uniform is never
+                 * set from the defi, and the game's skinning loops rely on it. */
+                const int32_t *iv = c->out->idef[n];
+                sb_add(&c->body, "  for (int _lk%d = 0; _lk%d < %d; _lk%d++) {\n", id, id, (int)iv[0], id);
+                sb_add(&c->body, "  aL.x = %d + _lk%d * %d;\n", (int)iv[1], id, (int)iv[2]);
+            } else {
+                const char *pref = c->out->kind == VT3_SM_VS ? "vs" : "ps";
+                sb_add(&c->body, "  for (int _lk%d = 0; _lk%d < %si[%u].x; _lk%d++) {\n", id, id, pref, n, id);
+                sb_add(&c->body, "  aL.x = %si[%u].y + _lk%d * %si[%u].z;\n", pref, n, id, pref, n);
+            }
             c->out->ninsn++;
             break;
         }
