@@ -545,6 +545,15 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     }
     memset(psc_copy, 0, sizeof psc_copy);
     memcpy(psc_copy, d->psc, sizeof d->psc);
+    /* A shader's def constants are its own values. A direct read is translated to the literal, but a
+     * relative read (c[aL + n], as the skinning loop does) reads the uniform, which never holds them. Copy
+     * them in so both read the same value. */
+    if (vsh)
+        for (int r = 0; r < VT3_SM2_MAX_CONST && r < 256; r++)
+            if (vsh->sm.cdef_set[r]) memcpy(&vsc_copy[4 * r], vsh->sm.cdef[r], 4 * sizeof(float));
+    if (psh)
+        for (int r = 0; r < VT3_SM2_MAX_CONST && r < 256; r++)
+            if (psh->sm.cdef_set[r]) memcpy(&psc_copy[4 * r], psh->sm.cdef[r], 4 * sizeof(float));
 
     vt3_draw dd;
     memset(&dd, 0, sizeof dd);
