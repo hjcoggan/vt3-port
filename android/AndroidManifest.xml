@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- NativeActivity: the game is native code, so the APK has no Java classes (hasCode=false). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="net.vt3port.probe"
+    android:versionCode="1"
+    android:versionName="0.1">
+    <uses-feature android:name="android.hardware.vulkan.level" android:required="false" android:version="1" />
+    <application android:label="VT3 probe" android:hasCode="false" android:debuggable="true">
+        <activity android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout"
+            android:screenOrientation="sensorLandscape">
+            <meta-data android:name="android.app.lib_name" android:value="vt3probe" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
