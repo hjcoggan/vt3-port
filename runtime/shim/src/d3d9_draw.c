@@ -257,6 +257,16 @@ static void trace_draw(const d3d9_device *d, const d3d9_draw_args *a, uint32_t n
     int trace_skinned = trace_vh && trace_vh->data && ((d3d9_shader *)trace_vh->data)->skinned;
     VT3_INFO("draw %d: prim %u count %u verts %u vs 0x%x ps 0x%x rt 0x%x depth 0x%x skinned %d", count, a->prim,
              a->prim_count, nverts, d->vs, d->ps, d->rt[0], d->depth, trace_skinned);
+    if (trace_skinned && getenv("VT3_TRACE_LIGHT"))   /* the light matrix the scene and shadow passes read */
+        VT3_INFO("  mvp rt 0x%x c0 %g %g %g %g | c1 %g %g %g %g | c2 %g %g %g %g | c3 %g %g %g %g", (unsigned)d->rt[0],
+                 d->vsc[0][0], d->vsc[0][1], d->vsc[0][2], d->vsc[0][3], d->vsc[1][0], d->vsc[1][1], d->vsc[1][2], d->vsc[1][3],
+                 d->vsc[2][0], d->vsc[2][1], d->vsc[2][2], d->vsc[2][3], d->vsc[3][0], d->vsc[3][1], d->vsc[3][2], d->vsc[3][3]);
+    if (trace_skinned && getenv("VT3_TRACE_LIGHT"))
+        VT3_INFO("  light rt 0x%x c248 %g %g %g %g | c249 %g %g %g %g | c250 %g %g %g %g | c251 %g %g %g %g", (unsigned)d->rt[0],
+                 d->vsc[248][0], d->vsc[248][1], d->vsc[248][2], d->vsc[248][3],
+                 d->vsc[249][0], d->vsc[249][1], d->vsc[249][2], d->vsc[249][3],
+                 d->vsc[250][0], d->vsc[250][1], d->vsc[250][2], d->vsc[250][3],
+                 d->vsc[251][0], d->vsc[251][1], d->vsc[251][2], d->vsc[251][3]);
     VT3_INFO("  rs blend %u src %u dst %u atest %u func %u ref %u zenable %u zwrite %u cull %u",
              (unsigned)d->rs[27], (unsigned)d->rs[19], (unsigned)d->rs[20], (unsigned)d->rs[15],
              (unsigned)d->rs[25], (unsigned)(d->rs[24] & 0xFF), (unsigned)d->rs[7], (unsigned)d->rs[14],
@@ -303,6 +313,16 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
 {
     if (!d3d9_gpu_ok()) return S_OK;   /* headless: nothing to draw into */
     if (d3d9_target_missing(d->rt[0])) return S_OK;   /* no renderer target: skip, do not paint the back buffer */
+    {   /* debug: VT3_SKIP_TARGET=WxH drops draws into targets of that size (for example 512x512, the shadow map) */
+        static int skip_w = -1, skip_h;
+        if (skip_w < 0) {
+            const char *e = getenv("VT3_SKIP_TARGET");
+            skip_w = e ? atoi(e) : 0;
+            skip_h = (e && strchr(e, 'x')) ? atoi(strchr(e, 'x') + 1) : 0;
+        }
+        d3d9_surface *tsurf = d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
+        if (skip_w && tsurf && !tsurf->backbuffer && (int)tsurf->w == skip_w && (int)tsurf->h == skip_h) return S_OK;
+    }
     d3d9_gpu_rt_bind(d3d9_surface_target(d->rt[0]));   /* draws go to the device's render target */
     /* VT3_SKIP_FRAME_DRAWS=a-b (or a) drops draws a..b of each frame, to find which draws make up a
      * picture. Debug only. */
@@ -516,6 +536,13 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     static float vsc_copy[256 * 4];
     static float psc_copy[256 * 4];
     memcpy(vsc_copy, d->vsc, sizeof vsc_copy);
+    {   /* debug: VT3_SHADOW_MVP=1 makes shadow-map draws (512x512 targets) use the scene's light matrix c248..c251 */
+        static int shadow_mvp = -1;
+        if (shadow_mvp < 0) shadow_mvp = getenv("VT3_SHADOW_MVP") != NULL;
+        d3d9_surface *ts = d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
+        if (shadow_mvp && ts && !ts->backbuffer && ts->w == 512 && ts->h == 512)
+            memcpy(vsc_copy, &d->vsc[248][0], 4 * 4 * sizeof(float)), memcpy(&vsc_copy[0], &d->vsc[248][0], 16 * sizeof(float));
+    }
     memset(psc_copy, 0, sizeof psc_copy);
     memcpy(psc_copy, d->psc, sizeof d->psc);
 
