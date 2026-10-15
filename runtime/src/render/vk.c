@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define NFRAMES 2
 #define VT3_CONST_REGS 256
@@ -484,10 +485,10 @@ static int create_swapchain(void)
     VkPresentModeKHR modes[8];
     if (nmodes > 8) nmodes = 8;
     vkGetPhysicalDeviceSurfacePresentModesKHR(g.phys, g.surf, &nmodes, modes);
+    /* FIFO only: the game advances once per presented frame, so presents must wait for vsync (as on
+     * the desktop, where SDL's swap interval does). Mailbox would let it run several times too fast. */
     g.present_mode = VK_PRESENT_MODE_FIFO_KHR;
-    for (uint32_t i = 0; i < nmodes; i++) {
-        if (modes[i] == VK_PRESENT_MODE_MAILBOX_KHR) g.present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
-    }
+    (void)modes;
 
     uint32_t want = caps.minImageCount + 1;
     if (caps.maxImageCount && want > caps.maxImageCount) want = caps.maxImageCount;
@@ -1341,6 +1342,35 @@ static void vk_draw_program(const vt3_draw *d)
 
 /* ---- present, readback ----------------------------------------------------------- */
 
+/* The game advances once per presented frame and was built for 60 of them a second, as on the desktop
+ * where SDL's swap interval paces it. FIFO follows the panel, which may run at 120 Hz, so the present
+ * path waits out the rest of each 1/60 s. VT3_FPS_CAP sets the rate; 0 turns the limit off. */
+static void frame_limit(void)
+{
+    static long long period_ns = -1;
+    static uint64_t last_ns;
+    if (period_ns < 0) {
+        const char *cap = getenv("VT3_FPS_CAP");
+        int hz = cap ? atoi(cap) : 60;
+        period_ns = hz > 0 ? 1000000000ll / hz : 0;
+    }
+    if (!period_ns) return;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t now = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+    if (last_ns) {
+        uint64_t elapsed = now - last_ns;
+        if (elapsed < (uint64_t)period_ns) {
+            uint64_t wait = (uint64_t)period_ns - elapsed;
+            ts.tv_sec = (time_t)(wait / 1000000000ull);
+            ts.tv_nsec = (long)(wait % 1000000000ull);
+            nanosleep(&ts, NULL);
+            now += wait;
+        }
+    }
+    last_ns = now;
+}
+
 static int recreate_swapchain(void)
 {
     vkDeviceWaitIdle(g.dev);
@@ -1422,6 +1452,7 @@ static void vk_present(const vt3_rect *dst, int nearest, int drawable_w, int dra
     VkResult pr = vkQueuePresentKHR(g.queue, &pi);
     if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) recreate_swapchain();
     else if (pr != VK_SUCCESS) VT3_ERROR("vulkan: present failed (%d)", (int)pr);
+    frame_limit();
 }
 
 /* RGBA8 rows, top row first, the logical size. The target already has D3D's row order. */
