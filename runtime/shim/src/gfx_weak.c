@@ -57,6 +57,11 @@ __attribute__((weak)) void vt3_platform_swap(void) {}
 
 __attribute__((weak)) const vt3_gfx_ops vt3_gfx_gl33 = { .name = "none (no renderer linked)" };
 
+__attribute__((weak)) const vt3_gfx_ops *vt3_gfx_default_ops(void)
+{
+    return &vt3_gfx_gl33;
+}
+
 __attribute__((weak)) int vt3_gfx_init(const vt3_gfx_ops *ops, const vt3_gfx_config *cfg)
 {
     (void)ops;

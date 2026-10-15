@@ -37,7 +37,7 @@ int d3d9_gpu_init(uint32_t width, uint32_t height)
     gc.aspect_w = (int)width;
     gc.aspect_h = (int)height;
     gc.integer_scale = 0;
-    if (vt3_gfx_init(&vt3_gfx_gl33, &gc) != 0) {
+    if (vt3_gfx_init(vt3_gfx_default_ops(), &gc) != 0) {
         VT3_WARN("gpu: renderer did not start; the device runs headless");
         vt3_platform_shutdown();
         return -1;

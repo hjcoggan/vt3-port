@@ -159,4 +159,7 @@ void vt3_gfx_set_scissor(int enable, vt3_rect r);
 
 extern const vt3_gfx_ops vt3_gfx_gl33;
 
+/* The renderer the shim uses: GL 3.3 on the desktop, Vulkan on Android. Each platform defines it. */
+const vt3_gfx_ops *vt3_gfx_default_ops(void);
+
 #endif /* VT3_RENDERER_H */

@@ -14,8 +14,14 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
 endif()
 
-# SDL3 from Homebrew (sdl3 3.4.x). Its CMake config ships with the formula.
-find_package(SDL3 REQUIRED CONFIG)
+# Android builds use NDK toolchain (android.toolchain.cmake): NativeActivity, AAudio and Vulkan.
+# Desktop builds use SDL3 from Homebrew (sdl3 3.4.x), whose CMake config ships with the formula.
+if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(VT3_ANDROID ON)
+else()
+    set(VT3_ANDROID OFF)
+    find_package(SDL3 REQUIRED CONFIG)
+endif()
 
 set(VT3_WARNINGS "")
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
@@ -23,22 +29,38 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
 endif()
 
 # Platform layer, renderer, audio, input, and the ADX decoder.
-add_library(vt3core STATIC
+set(VT3_CORE_COMMON
     src/core/log.c
     src/core/guest.c
     src/render/letterbox.c
     src/render/sm2_glsl.c
     src/render/renderer.c
-    src/render/gl33.c
     src/audio/ringbuf.c
-    src/audio/audio_sdl.c
     src/audio/adx.c
     src/input/input.c
-    src/input/input_sdl.c
-    src/platform/platform_sdl.c
 )
+if(VT3_ANDROID)
+    set(VT3_CORE_PLATFORM
+        src/audio/audio_android.c
+        src/input/input_android.c
+        src/platform/platform_android.c
+    )
+else()
+    set(VT3_CORE_PLATFORM
+        src/render/gl33.c
+        src/audio/audio_sdl.c
+        src/input/input_sdl.c
+        src/platform/platform_sdl.c
+    )
+endif()
+add_library(vt3core STATIC ${VT3_CORE_COMMON} ${VT3_CORE_PLATFORM})
 target_include_directories(vt3core PUBLIC include)
-target_link_libraries(vt3core PUBLIC SDL3::SDL3)
+if(VT3_ANDROID)
+    target_link_libraries(vt3core PUBLIC android log aaudio m)
+    target_include_directories(vt3core PRIVATE ${ANDROID_NDK}/sources/android/native_app_glue)
+else()
+    target_link_libraries(vt3core PUBLIC SDL3::SDL3)
+endif()
 target_compile_options(vt3core PRIVATE ${VT3_WARNINGS})
 
 # Win32/D3D9 shim: headers plus skeleton implementations.
@@ -75,6 +97,52 @@ add_library(vt3shim STATIC
 target_include_directories(vt3shim PUBLIC shim/include)
 target_link_libraries(vt3shim PUBLIC vt3core)
 target_compile_options(vt3shim PRIVATE ${VT3_WARNINGS})
+
+if(VT3_ANDROID)
+    # The game for the device: the loader, the adapters, the shim and the translated module, as a
+    # shared library that NativeActivity loads. VT3_GAME_DIR holds vt3.c (the translated game) and
+    # the generated adapters are built from the shim sources, as on the desktop (build_native.py).
+    if(NOT VT3_GAME_DIR)
+        message(FATAL_ERROR "Set -DVT3_GAME_DIR to the folder with the translated vt3.c")
+    endif()
+    set(VT3_RT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../tools/recomp/rt)
+    set(VT3_ADAPTERS ${CMAKE_CURRENT_BINARY_DIR}/vt3_shim_adapters.c)
+    set(VT3_SHIM_SOURCES
+        shim/src/shim_core.c shim/src/kernel32_heap.c shim/src/kernel32_file.c shim/src/kernel32_time.c
+        shim/src/kernel32_std.c shim/src/kernel32_sys.c shim/src/kernel32_thread.c shim/src/winmm_timer.c
+        shim/src/user32_stub.c shim/src/user32_window.c shim/src/user32_text.c shim/src/d3d9_object.c
+        shim/src/d3d9_iface.c shim/src/d3d9_device.c shim/src/d3d9_com_unimpl.c shim/src/d3d9_com_generic.c
+        shim/src/d3d9_format.c shim/src/d3d9_gpu.c shim/src/d3d9_resource.c shim/src/d3d9_draw.c
+        shim/src/gfx_weak.c shim/src/d3dx9_math.c shim/src/d3dx9_compile.c shim/src/d3dx9_ctable.c
+        shim/src/d3dx9_rebuilt.c shim/src/d3dx9_stub.c shim/src/dsound_stub.c shim/src/dinput8.c)
+    add_custom_command(
+        OUTPUT ${VT3_ADAPTERS}
+        COMMAND python3 ${VT3_RT_DIR}/gen_adapters.py ${CMAKE_CURRENT_SOURCE_DIR}/shim ${VT3_ADAPTERS} ${VT3_SHIM_SOURCES}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        DEPENDS ${VT3_RT_DIR}/gen_adapters.py ${VT3_SHIM_SOURCES}
+        COMMENT "Generating the stdcall adapters")
+    add_library(vt3android SHARED
+        src/platform/android_entry.c
+        ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
+        ${VT3_RT_DIR}/vt3rt.c
+        ${VT3_RT_DIR}/vt3simd.c
+        ${VT3_RT_DIR}/vt3fpu.c
+        ${VT3_ADAPTERS}
+        ${VT3_GAME_DIR}/vt3.c
+    )
+    target_include_directories(vt3android PRIVATE ${VT3_RT_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ANDROID_NDK}/sources/android/native_app_glue)
+    target_compile_options(vt3android PRIVATE -O2 -std=gnu11 -w -ffp-contract=off)
+    set_source_files_properties(${VT3_GAME_DIR}/vt3.c PROPERTIES COMPILE_OPTIONS "-O1;-std=gnu11;-w;-ffp-contract=off")
+    target_link_libraries(vt3android PRIVATE vt3shim android log aaudio vulkan m)
+    target_link_options(vt3android PRIVATE -Wl,-z,max-page-size=16384)
+
+    # The self-test as a native executable, to run on the device with adb shell.
+    add_executable(vt3selftest_android tests/android_selftest_main.c tests/selftest.c)
+    target_include_directories(vt3selftest_android PRIVATE tests)
+    target_link_libraries(vt3selftest_android PRIVATE vt3shim android log aaudio m)
+    return()
+endif()
 
 # The runtime executable. It also carries the self-test.
 add_executable(vt3rt

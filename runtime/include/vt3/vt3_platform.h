@@ -37,5 +37,7 @@ int  vt3_platform_next_event(vt3_event *ev);   /* 1 with *ev filled when one is 
 void vt3_platform_drawable_size(int *w, int *h);
 void vt3_platform_swap(void);
 void *vt3_platform_gl_proc(const char *name);
+/* Android: the ANativeWindow the Vulkan renderer presents to, or NULL before the window exists. */
+void *vt3_platform_native_window(void);
 
 #endif /* VT3_PLATFORM_H */
