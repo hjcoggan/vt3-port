@@ -8,8 +8,9 @@
 #   SHOT_TIMES  seconds after launch at which to capture the window
 # Environment variables pass through to the game (VT3_TRACE_*, VT3_SKIN_CHECK, ...).
 #
-# Default route: Tournament, the menu path from the title screen to a match (Düsseldorf, Federer as
-# 1P). It walks the same menu path each time; the opponent can differ from run to run.
+# Default route: Tournament, the menu path from the main menu (up at about 6 s) to a match, in play
+# by about 30 s. Federer is 1P every run; the tournament and the opponent change from run to run.
+# Each step has about a second of margin over the screen it waits for (timed from captures).
 # Quick Play (F1) picks a random match on each launch, so it is opt-in: QUICK_PLAY=1 run_match.sh ...
 # An explicit VT3_INPUT_SCRIPT overrides both routes.
 #
@@ -17,7 +18,7 @@
 BIN=$1; OUT=$2; SECS=$3; shift 3
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 DUMP="${VT3_DUMP:-$(dirname "$REPO")/dump}"
-TOURNAMENT_SCRIPT="28:DOWN,29:RETURN,34:RETURN,40:RETURN,46:RETURN,62:Z,70:Z"
+TOURNAMENT_SCRIPT="8:DOWN,9:RETURN,11:RETURN,14:RETURN,19:RETURN,29:Z,35:Z"
 QUICK_PLAY_SCRIPT="12:RETURN,16:BACKSPACE,20:F1"
 if [[ -z "$VT3_INPUT_SCRIPT" ]]; then
   if [[ -n "$QUICK_PLAY" ]]; then VT3_INPUT_SCRIPT="$QUICK_PLAY_SCRIPT"; else VT3_INPUT_SCRIPT="$TOURNAMENT_SCRIPT"; fi
