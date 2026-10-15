@@ -4,6 +4,7 @@
 #include "vt3/vt3_log.h"
 #include "win32/kernel32.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -62,6 +63,26 @@ void *vt3s_handle_take(HANDLE h, vt3s_hkind kind)
     g_handles[s].kind = VT3S_H_NONE;
     g_handles[s].obj = NULL;
     return obj;
+}
+
+__thread uint32_t vt3s_guest_caller;
+__thread uint32_t vt3s_guest_esp;
+
+void vt3s_guest_backtrace(char *buf, size_t size)
+{
+    size_t pos = 0;
+    int found = 0;
+    if (size) buf[0] = 0;
+    if (!vt3s_guest_esp) return;
+    /* The image's code runs from 0x401000 to about 0x6C0000 (the data sections follow). */
+    for (uint32_t i = 0; i < 256 && found < 8 && pos + 12 < size; i++) {
+        uint32_t a = vt3s_guest_esp + 4u * i;
+        if (!vt3s_guest_range_ok(a, 4)) break;
+        uint32_t w = vt3s_load_u32(a);
+        if (w < 0x00401000u || w >= 0x006C0000u) continue;
+        pos += (size_t)snprintf(buf + pos, size - pos, "%s%06x", found ? " " : "", (unsigned)w);
+        found++;
+    }
 }
 
 void vt3s_set_last_error(DWORD err)

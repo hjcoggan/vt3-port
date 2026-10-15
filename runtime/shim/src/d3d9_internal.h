@@ -169,6 +169,7 @@ typedef struct d3d9_device {
 } d3d9_device;
 
 extern int d3d9_frame_draws;   /* draws since the last Present (debug bisect) */
+extern int d3d9_pixel_watch;   /* nonzero during the frame VT3_PIXEL_AFTER picks (d3d9_draw.c) */
 
 void d3d9_device_free(d3d9_device *d);
 

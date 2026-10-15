@@ -149,6 +149,19 @@ HRESULT WINAPI IDirect3DDevice9_Present(GPTR This, GPTR src_rect, GPTR dst_rect,
     d3d9_gpu_present();
     if (getenv("VT3_TRACE_FRAMES")) VT3_INFO("frame: %d draws", d3d9_frame_draws);
     d3d9_frame_draws = 0;
+    {   /* VT3_PIXEL_AFTER=<s>: the draw path watches pixels during the first frame after that time */
+        static double after = -2.0, t0 = -1.0;
+        static int state;   /* 0 waiting, 1 watching this frame, 2 done */
+        if (after < -1.0) { const char *e = getenv("VT3_PIXEL_AFTER"); after = e ? atof(e) : -1.0; }
+        if (after >= 0.0 && state < 2) {
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            double now = (double)ts.tv_sec + ts.tv_nsec * 1e-9;
+            if (t0 < 0.0) t0 = now;
+            if (state == 1) { state = 2; d3d9_pixel_watch = 0; VT3_INFO("pixel watch: frame done"); }
+            else if (now - t0 >= after) { state = 1; d3d9_pixel_watch = 1; VT3_INFO("pixel watch: frame starts"); }
+        }
+    }
     /* VT3_TRACE_FPS=1 logs the frames presented each second, to check the game's frame pacing. */
     static int fps_on = -1;
     static uint32_t frames;
@@ -407,6 +420,12 @@ HRESULT WINAPI IDirect3DDevice9_GetFVF(GPTR This, GPTR pFVF)
 HRESULT WINAPI IDirect3DDevice9_SetTexture(GPTR This, DWORD Stage, GPTR pTexture)
 {
     d3d9_device *d = DEV(This);
+    if (getenv("VT3_PIXEL_TEX") && d3d9_pixel_watch) {   /* the bindings of the watched frame, in order */
+        d3d9_texture *t = d3d9_texture_of(pTexture);
+        VT3_INFO("SetTexture stage %u tex 0x%x gl %u (%ux%u) before draw %d caller 0x%08x", (unsigned)Stage,
+                 (unsigned)pTexture, t ? (unsigned)t->gl : 0u, t ? t->w : 0u, t ? t->h : 0u, d3d9_frame_draws,
+                 (unsigned)vt3s_guest_caller);
+    }
     if (!d || Stage >= 16) return D3DERR_CHK_INVALIDCALL;
     d->textures[Stage] = pTexture;
     return S_OK;

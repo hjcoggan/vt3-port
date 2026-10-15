@@ -85,6 +85,9 @@ def emit(protos, names):
         "",
         "#define VT_ARG(c, i) rd32((c)->esp + 4u + 4u * (uint32_t)(i))",
         "",
+        "/* The guest return address of the call in progress, for shim traces (shim_internal.h). */",
+        "extern __thread uint32_t vt3s_guest_caller, vt3s_guest_esp;",
+        "",
     ]
     table = []
     for name in names:
@@ -94,6 +97,8 @@ def emit(protos, names):
         nslots = sum(slot_counts)
         out.append(f"static void imp_{name}(vt3_cpu *c)")
         out.append("{")
+        out.append("    vt3s_guest_caller = rd32(c->esp);")
+        out.append("    vt3s_guest_esp = c->esp;")
         idx = 0
         args = []
         for p, n in zip(fixed, slot_counts):

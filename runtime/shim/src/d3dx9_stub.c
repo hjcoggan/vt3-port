@@ -349,6 +349,15 @@ HRESULT WINAPI D3DXCreateTextureFromFileInMemoryEx(GPTR device, GPTR srcdata, UI
     const char *why = NULL;
     if (dds_texture(device, srcdata, srcdatasize, 0, &want, usage, pool, &obj, &why) == 0) {
         put32(texture, obj);
+        const char *dump_dir = getenv("VT3_DUMP_TEX");   /* the source file as given: <dir>/dds_<gl>.dds */
+        d3d9_texture *t = dump_dir ? d3d9_texture_of(obj) : NULL;
+        const void *bytes = t ? d3d9_gmem(srcdata, srcdatasize) : NULL;
+        if (bytes) {
+            char path[1024];
+            snprintf(path, sizeof path, "%s/dds_%u.dds", dump_dir, (unsigned)t->gl);
+            FILE *f = fopen(path, "wb");
+            if (f) { fwrite(bytes, 1, srcdatasize, f); fclose(f); }
+        }
         return S_OK;
     }
     VT3_WARN("D3DXCreateTextureFromFileInMemoryEx: %s; returning a stub texture", why);

@@ -34,6 +34,16 @@ void  *vt3s_handle_take(HANDLE h, vt3s_hkind kind);   /* removes the entry */
 void vt3s_set_last_error(DWORD err);
 void vt3s_unimpl(const char *api);   /* logs once per API name */
 
+/* The guest return address of the shim call in progress on this thread: the generated adapters
+ * (tools/recomp/rt/gen_adapters.py) set it before each call, for traces that name the caller.
+ * 0 when the shim is called from the host. */
+extern __thread uint32_t vt3s_guest_caller;
+extern __thread uint32_t vt3s_guest_esp;   /* the guest stack pointer at that call */
+
+/* A rough guest backtrace for traces: the words on the guest stack above vt3s_guest_esp that look
+ * like return addresses into the game's code, nearest first, written as hex into buf. */
+void vt3s_guest_backtrace(char *buf, size_t size);
+
 /* Guest memory access helpers. Return 0 / do nothing for NULL or out of range. */
 int      vt3s_guest_range_ok(GPTR p, DWORD bytes);
 void     vt3s_store_u32(GPTR p, uint32_t v);

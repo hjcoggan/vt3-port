@@ -366,7 +366,8 @@ static void attr_read(const vt3_vattr *at, const uint8_t *v, float out[4])
  * the NDC box, vertices behind the eye, weight sums, palette rows that are all zero. The raw box
  * (position through c0..c3 with no skinning) shows whether the mesh is in bind space. */
 static void skin_check(const d3d9_device *d, const d3d9_shader *vsh, const d3d9_draw_args *a,
-                       const vt3_vlayout *lay, const uint8_t *verts, uint32_t nv, uint32_t stride)
+                       const vt3_vlayout *lay, const uint8_t *verts, uint32_t nv, uint32_t stride,
+                       const uint16_t *idx, uint32_t nidx, int is_list)
 {
     static int limit = -1, count;
     static double after_s, first_s = -1.0;
@@ -382,6 +383,7 @@ static void skin_check(const d3d9_device *d, const d3d9_shader *vsh, const d3d9_
     double now_s = (double)ts_now.tv_sec + ts_now.tv_nsec * 1e-9;
     if (first_s < 0.0) first_s = now_s;
     if (now_s - first_s < after_s || !vsh->skinned || !trace_hash_match(vsh)) return;
+    if (isnan(d->vsc[0][0]) && !getenv("VT3_SKIN_NAN")) return;   /* a NaN camera draws nothing; VT3_SKIN_NAN keeps them */
     const vt3_vattr *pos = NULL, *wt = NULL, *ix = NULL;
     for (int k = 0; k < lay->count; k++) {
         if (lay->attr[k].location == 0) pos = &lay->attr[k];
@@ -396,11 +398,12 @@ static void skin_check(const d3d9_device *d, const d3d9_shader *vsh, const d3d9_
     {
         d3d9_host *hp = d->ps ? d3d9_host_of(d->ps, D3D9_KIND_PSHADER) : NULL;
         d3d9_texture *t0 = d3d9_texture_of(d->textures[0]);
-        VT3_INFO("  ps %08x | blend %u %u/%u atest %u ref %u func %u | z %u zw %u cull %u cw 0x%x | s0 %ux%u fmt 0x%x",
+        VT3_INFO("  ps %08x | blend %u %u/%u atest %u ref %u func %u | z %u zw %u cull %u cw 0x%x | s0 %ux%u fmt 0x%x gl %u"
+                 " | c14 %g %g",
                  hp ? shader_hash(hp->data) : 0u, (unsigned)d->rs[27], (unsigned)d->rs[19], (unsigned)d->rs[20],
                  (unsigned)d->rs[15], (unsigned)(d->rs[24] & 0xFF), (unsigned)d->rs[25], (unsigned)d->rs[7],
                  (unsigned)d->rs[14], (unsigned)d->rs[22], (unsigned)d->rs[168], t0 ? t0->w : 0, t0 ? t0->h : 0,
-                 t0 ? t0->fmt : 0);
+                 t0 ? t0->fmt : 0, t0 ? (unsigned)t0->gl : 0u, d->vsc[14][0], d->vsc[14][1]);
     }
     VT3_INFO("  t %.2f s | c0 %g %g %g %g | c1 %g %g %g %g | c2 %g %g %g %g | c3 %g %g %g %g", now_s - first_s,
              d->vsc[0][0], d->vsc[0][1], d->vsc[0][2], d->vsc[0][3], d->vsc[1][0], d->vsc[1][1], d->vsc[1][2],
@@ -434,12 +437,22 @@ static void skin_check(const d3d9_device *d, const d3d9_shader *vsh, const d3d9_
     int max_index = -1;
     static uint8_t zero_bone[256];
     memset(zero_bone, 0, sizeof zero_bone);
+    const vt3_vattr *nrm_at = NULL;
+    for (int k = 0; k < lay->count; k++)
+        if (lay->attr[k].location == 3) nrm_at = &lay->attr[k];
+    /* Per vertex, for the facing check below: clip x, y, w, world position, world normal. */
+    float *pv = malloc((size_t)nv * 9 * sizeof *pv);
     for (uint32_t v = 0; v < nv; v++) {
         const uint8_t *vp = verts + (size_t)v * stride;
-        float p[4], w[4] = { 0, 0, 0, 1 }, ind[4] = { 0, 0, 0, 1 }, s[3] = { 0, 0, 0 };
+        float p[4], w[4] = { 0, 0, 0, 1 }, ind[4] = { 0, 0, 0, 1 }, s[3] = { 0, 0, 0 }, n[4] = { 0, 0, 0, 0 };
+        float sn[3] = { 0, 0, 0 };
         attr_read(pos, vp, p);
         if (wt) attr_read(wt, vp, w);
         if (ix) attr_read(ix, vp, ind);
+        if (nrm_at) {
+            attr_read(nrm_at, vp, n);
+            for (int c = 0; c < 3; c++) n[c] = n[c] * 2.0f - 1.0f;   /* the shader's mad v1, 2, -1 */
+        }
         float wsum = 0.0f;
         for (int b = 0; b < bones; b++) wsum += w[b];
         if (wsum < wmin) wmin = wsum;
@@ -455,6 +468,9 @@ static void skin_check(const d3d9_device *d, const d3d9_shader *vsh, const d3d9_
             s[0] += w[b] * (p[0] * r0[0] + p[1] * r0[1] + p[2] * r0[2] + p[3] * r0[3]);
             s[1] += w[b] * (p[0] * r1[0] + p[1] * r1[1] + p[2] * r1[2] + p[3] * r1[3]);
             s[2] += w[b] * (p[0] * r2[0] + p[1] * r2[1] + p[2] * r2[2] + p[3] * r2[3]);
+            sn[0] += w[b] * (n[0] * r0[0] + n[1] * r0[1] + n[2] * r0[2]);
+            sn[1] += w[b] * (n[0] * r1[0] + n[1] * r1[1] + n[2] * r1[2]);
+            sn[2] += w[b] * (n[0] * r2[0] + n[1] * r2[1] + n[2] * r2[2]);
         }
         for (int c = 0; c < 3; c++) {
             if (s[c] < wlo[c]) wlo[c] = s[c];
@@ -464,6 +480,12 @@ static void skin_check(const d3d9_device *d, const d3d9_shader *vsh, const d3d9_
         for (int c = 0; c < 4; c++) {
             clip[c] = d->vsc[0][c] * s[0] + d->vsc[1][c] * s[1] + d->vsc[2][c] * s[2] + d->vsc[3][c];
             raw[c] = d->vsc[0][c] * p[0] + d->vsc[1][c] * p[1] + d->vsc[2][c] * p[2] + d->vsc[3][c];
+        }
+        if (pv) {
+            float *q = pv + (size_t)v * 9;
+            q[0] = clip[0]; q[1] = clip[1]; q[2] = clip[3];
+            q[3] = s[0]; q[4] = s[1]; q[5] = s[2];
+            q[6] = sn[0]; q[7] = sn[1]; q[8] = sn[2];
         }
         if (v < 2)
             VT3_INFO("  v%u pos %g %g %g w %g %g %g %g idx %g %g %g %g -> skinned %g %g %g clip %g %g %g %g", v,
@@ -488,9 +510,98 @@ static void skin_check(const d3d9_device *d, const d3d9_shader *vsh, const d3d9_
              "out of range %u, zero bones %d | raw ndc x %.3f..%.3f y %.3f..%.3f", lo[0], hi[0], lo[1], hi[1],
              lo[2], hi[2], behind, wmin, wmax, max_index, bad_index, zeros, rlo[0], rhi[0], rlo[1], rhi[1]);
     VT3_INFO("  world x %.2f..%.2f y %.2f..%.2f z %.2f..%.2f", wlo[0], whi[0], wlo[1], whi[1], wlo[2], whi[2]);
+
+    /* Facing check (triangle lists): the eye is where clip x = y = w = 0. A triangle whose skinned
+     * vertex normals point at the eye should be the one the cull mode keeps. Kept means: D3DCULL_CW
+     * keeps triangles counter-clockwise in NDC (y up), CCW keeps clockwise ones, NONE keeps all. */
+    if (pv && nrm_at && is_list) {
+        const float (*m)[4] = (const float (*)[4])d->vsc;
+        float a00 = m[0][0], a01 = m[1][0], a02 = m[2][0], b0 = -m[3][0];
+        float a10 = m[0][1], a11 = m[1][1], a12 = m[2][1], b1 = -m[3][1];
+        float a20 = m[0][3], a21 = m[1][3], a22 = m[2][3], b2 = -m[3][3];
+        float det = a00 * (a11 * a22 - a12 * a21) - a01 * (a10 * a22 - a12 * a20) + a02 * (a10 * a21 - a11 * a20);
+        if (fabsf(det) > 1e-12f) {
+            float eye[3] = {
+                (b0 * (a11 * a22 - a12 * a21) - a01 * (b1 * a22 - a12 * b2) + a02 * (b1 * a21 - a11 * b2)) / det,
+                (a00 * (b1 * a22 - a12 * b2) - b0 * (a10 * a22 - a12 * a20) + a02 * (a10 * b2 - b1 * a20)) / det,
+                (a00 * (a11 * b2 - b1 * a21) - a01 * (a10 * b2 - b1 * a20) + b0 * (a10 * a21 - a11 * a20)) / det };
+            int cull = d->rs[22] ? (int)d->rs[22] : 3;
+            uint32_t tk = 0, tc = 0, ak = 0, ac = 0;
+            for (uint32_t t = 0; t + 2 < nidx; t += 3) {
+                uint32_t i0 = idx ? idx[t] : t, i1 = idx ? idx[t + 1] : t + 1, i2 = idx ? idx[t + 2] : t + 2;
+                if (i0 >= nv || i1 >= nv || i2 >= nv) continue;
+                const float *q0 = pv + (size_t)i0 * 9, *q1 = pv + (size_t)i1 * 9, *q2 = pv + (size_t)i2 * 9;
+                if (q0[2] <= 0.0f || q1[2] <= 0.0f || q2[2] <= 0.0f) continue;
+                float x0 = q0[0] / q0[2], y0 = q0[1] / q0[2], x1 = q1[0] / q1[2], y1 = q1[1] / q1[2];
+                float x2 = q2[0] / q2[2], y2 = q2[1] / q2[2];
+                float area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+                int kept = cull == 1 ? 1 : cull == 2 ? area > 0.0f : area < 0.0f;
+                float f = 0.0f;
+                for (int c = 0; c < 3; c++) {
+                    float nc = q0[6 + c] + q1[6 + c] + q2[6 + c];
+                    float vc = eye[c] - (q0[3 + c] + q1[3 + c] + q2[3 + c]) / 3.0f;
+                    f += nc * vc;
+                }
+                if (f > 0.0f) { if (kept) tk++; else tc++; }
+                else          { if (kept) ak++; else ac++; }
+            }
+            VT3_INFO("  facing (cull %d): toward eye kept %u culled %u | away kept %u culled %u", cull, tk, tc, ak, ac);
+        }
+    }
+    free(pv);
 }
 
 int d3d9_frame_draws;
+int d3d9_pixel_watch;   /* set by Present for the one frame VT3_PIXEL_AFTER picks */
+
+/* VT3_PIXEL="x,y[;x,y...]" with VT3_PIXEL_AFTER=<s>: in one frame after that time, read the back
+ * buffer after each draw that targets it and log the draws that change a watched pixel (logical
+ * coordinates, top-left origin). Names the draw that put a wrong colour on screen. */
+static void pixel_watch(const d3d9_device *d, const d3d9_draw_args *a, const d3d9_shader *vsh,
+                        const d3d9_shader *psh)
+{
+    static int n = -1;
+    static int px[4][2];
+    static uint32_t last[4];
+    static uint8_t *buf;
+    static uint32_t bw, bh;
+    if (n < 0) {
+        n = 0;
+        const char *e = getenv("VT3_PIXEL");
+        while (e && *e && n < 4) {
+            char *end;
+            px[n][0] = (int)strtol(e, &end, 10);
+            if (*end != ',') break;
+            px[n][1] = (int)strtol(end + 1, &end, 10);
+            last[n] = 0xFFFFFFFFu;
+            n++;
+            e = *end == ';' ? end + 1 : NULL;
+        }
+    }
+    if (!n || !d3d9_pixel_watch) return;
+    d3d9_surface *ts = d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
+    if (!ts || !ts->backbuffer) return;
+    if (!buf || bw != ts->w || bh != ts->h) {
+        free(buf);
+        bw = ts->w;
+        bh = ts->h;
+        buf = malloc((size_t)bw * bh * 4);
+        if (!buf) return;
+    }
+    vt3_gfx_readback(buf);
+    for (int k = 0; k < n; k++) {
+        if (px[k][0] < 0 || px[k][1] < 0 || (uint32_t)px[k][0] >= bw || (uint32_t)px[k][1] >= bh) continue;
+        const uint8_t *p = buf + ((size_t)px[k][1] * bw + (size_t)px[k][0]) * 4;
+        uint32_t v = (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+        if (v == last[k]) continue;
+        last[k] = v;
+        VT3_INFO("pixel %d,%d -> %3u %3u %3u %3u after draw %d: vs %08x ps %08x prims %u blend %u %u/%u z %u zw %u "
+                 "zf %u cull %u atest %u", px[k][0], px[k][1], p[0], p[1], p[2], p[3], d3d9_frame_draws,
+                 shader_hash(vsh), psh ? shader_hash(psh) : 0u, a->prim_count, (unsigned)d->rs[27],
+                 (unsigned)d->rs[19], (unsigned)d->rs[20], (unsigned)d->rs[7], (unsigned)d->rs[14],
+                 (unsigned)d->rs[23], (unsigned)d->rs[22], (unsigned)d->rs[15]);
+    }
+}
 
 HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
 {
@@ -675,6 +786,23 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         free(idx16);
         return S_OK;
     }
+    {   /* VT3_SKIP_MESH=<vs hash>:<prims>[,...]: drop those draws (debug: see what one mesh covers) */
+        static int n_skip = -1;
+        static uint32_t skip_hash[8], skip_prims[8];
+        if (n_skip < 0) {
+            n_skip = 0;
+            const char *e = getenv("VT3_SKIP_MESH");
+            while (e && *e && n_skip < 8) {
+                char *end;
+                skip_hash[n_skip] = (uint32_t)strtoul(e, &end, 16);
+                if (*end != ':') break;
+                skip_prims[n_skip++] = (uint32_t)strtoul(end + 1, &end, 10);
+                e = *end == ',' ? end + 1 : NULL;
+            }
+        }
+        for (int k = 0; k < n_skip; k++)
+            if (a->prim_count == skip_prims[k] && shader_hash(vsh) == skip_hash[k]) { free(idx16); return S_OK; }
+    }
     vt3_prog prog = program_for(d->vs, d->ps, vsh, psh);
     if (!prog) { free(idx16); return S_OK; }
 
@@ -695,7 +823,8 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     if (!vcopy) { free(idx16); return E_OUTOFMEMORY_D3D9; }
     copy_vertices(vcopy, vbase + (size_t)v0 * stride, nv, stride, dc);
     (void)swap;
-    skin_check(d, vsh, a, &lay, vcopy, nv, stride);
+    skin_check(d, vsh, a, &lay, vcopy, nv, stride, use_idx ? idx16 : NULL, use_idx ? nidx : nverts,
+               prim_list != PRIM_TRIANGLESTRIP);
     {   /* VT3_DUMP_SKIN=1: layout and the first vertices of skinned draws, as the renderer receives them */
         static int dump = -1, dumped;
         if (dump < 0) dump = getenv("VT3_DUMP_SKIN") != NULL;
@@ -739,6 +868,14 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         for (int r = 0; r < VT3_SM2_MAX_CONST && r < 256; r++)
             if (psh->sm.cdef_set[r]) memcpy(&psc_copy[4 * r], psh->sm.cdef[r], 4 * sizeof(float));
 
+    {   /* VT3_NO_VSM=1 (debug): skinned draws outside the shadow pass get a huge variance floor
+         * (c10.x), so the variance shadow factor of the player shaders reads 1 (fully lit). */
+        static int no_vsm = -1;
+        if (no_vsm < 0) no_vsm = getenv("VT3_NO_VSM") != NULL;
+        d3d9_surface *ns = no_vsm && d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
+        if (no_vsm && vsh->skinned && !(ns && ns->w == 512 && ns->h == 512)) psc_copy[10 * 4 + 0] = 1.0e6f;
+    }
+
     vt3_draw dd;
     memset(&dd, 0, sizeof dd);
     dd.prog = prog;
@@ -754,8 +891,12 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     memcpy(dd.psb, d->psb, sizeof dd.psb);
     fill_textures(d, dd.samplers);
     fill_rstate(d, &dd.state);
+    if (vsh->skinned && getenv("VT3_SKIN_NOCULL")) dd.state.cull = 1;   /* debug: skinned meshes drawn two-sided */
+    if (vsh->skinned && getenv("VT3_SKIN_FLIPCULL") && (dd.state.cull == 2 || dd.state.cull == 3))
+        dd.state.cull = 5 - dd.state.cull;                              /* debug: skinned meshes, culling reversed */
     trace_draw(d, a, nverts);
     vt3_gfx_draw_program(&dd);
+    pixel_watch(d, a, vsh, psh);
 
     free(vcopy);
     free(idx16);

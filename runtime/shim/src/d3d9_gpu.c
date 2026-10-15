@@ -5,9 +5,11 @@
  * device runs headless: it records state and skips drawing.
  */
 #include "d3d9_internal.h"
+#include "vt3/vt3_input.h"
 #include "vt3/vt3_log.h"
 #include "vt3/vt3_platform.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -111,6 +113,7 @@ vt3_tex d3d9_gpu_tex_create(uint32_t w, uint32_t h, uint32_t fmt)
     default: tf = VT3_TEXFMT_A8R8G8B8; break;   /* everything else is converted to BGRA */
     }
     vt3_tex t = 0;
+    vt3_input_note_load();   /* loading activity, for the input script's quiet waits */
     if (vt3_gfx_tex_create(&t, (int)w, (int)h, tf) != 0) {
         static int warned_create;
         if (!warned_create) {
@@ -144,6 +147,22 @@ void d3d9_gpu_tex_upload(vt3_tex t, const uint8_t *src, uint32_t pitch, uint32_t
                 for (int c = 0; c < 4; c++) sum[c] += bgra[4 * k + c];
             VT3_INFO("tex upload gl %u %ux%u fmt 0x%x avg rgba %.0f %.0f %.0f %.0f", (unsigned)t, (unsigned)w,
                      (unsigned)h, (unsigned)fmt, sum[2] / n, sum[1] / n, sum[0] / n, sum[3] / n);
+        }
+        const char *dump_dir = getenv("VT3_DUMP_TEX");   /* each decoded upload as <dir>/tex_<gl>_<w>x<h>.tga */
+        if (dump_dir) {
+            char path[1024];
+            snprintf(path, sizeof path, "%s/tex_%u_%ux%u.tga", dump_dir, (unsigned)t, (unsigned)w, (unsigned)h);
+            FILE *f = fopen(path, "wb");
+            if (f) {
+                /* Uncompressed true-colour TGA, 32 bits BGRA, top-left origin: the bytes as they are. */
+                uint8_t hdr[18] = { 0, 0, 2 };
+                hdr[12] = (uint8_t)w; hdr[13] = (uint8_t)(w >> 8);
+                hdr[14] = (uint8_t)h; hdr[15] = (uint8_t)(h >> 8);
+                hdr[16] = 32; hdr[17] = 0x28;
+                fwrite(hdr, 1, sizeof hdr, f);
+                fwrite(bgra, 4, (size_t)w * h, f);
+                fclose(f);
+            }
         }
         vt3_gfx_tex_upload(t, bgra, (int)(w * 4), (int)w, (int)h);
     }

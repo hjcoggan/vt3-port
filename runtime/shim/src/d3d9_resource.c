@@ -329,6 +329,15 @@ static void unlock_level(d3d9_texture *t, UINT face, UINT level)
     if (level != 0 || !t->gl) return;
     d3d9_level *lv = &t->lv[face][0];
     const uint8_t *src = d3d9_gmem(lv->data, lv->bytes);
+    static int trace_lock = -1;   /* VT3_TRACE_LOCK=1: each level 0 upload, with the guest code that filled it */
+    if (trace_lock < 0) trace_lock = getenv("VT3_TRACE_LOCK") != NULL;
+    if (trace_lock) {
+        char bt[128];
+        vt3s_guest_backtrace(bt, sizeof bt);
+        VT3_INFO("unlock gl %u %ux%u fmt 0x%x face %u data 0x%x caller 0x%08x stack %s", (unsigned)t->gl,
+                 (unsigned)lv->w, (unsigned)lv->h, (unsigned)t->fmt, (unsigned)face, (unsigned)lv->data,
+                 (unsigned)vt3s_guest_caller, bt);
+    }
     if (t->faces == 6) d3d9_gpu_cube_upload(t->gl, face, src, lv->pitch, lv->w, t->fmt);
     else if (face == 0) d3d9_gpu_tex_upload(t->gl, src, lv->pitch, lv->w, lv->h, t->fmt);
 }
