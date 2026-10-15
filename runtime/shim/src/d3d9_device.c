@@ -9,6 +9,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <time.h>
 
 #define DEV(This) d3d9_device_of(This)
@@ -710,6 +711,26 @@ HRESULT WINAPI IDirect3DDevice9_SetVertexShaderConstantF(GPTR This, UINT reg_idx
     d3d9_device *d = DEV(This);
     if (!d || reg_idx + count > 256) return D3DERR_CHK_INVALIDCALL;
     copy_guest_floats(&d->vsc[reg_idx][0], data, count);
+    static int trace_nan = -1;   /* VT3_TRACE_NAN=1: uploads with a NaN or Inf, once per guest caller */
+    if (trace_nan < 0) trace_nan = getenv("VT3_TRACE_NAN") != NULL;
+    if (trace_nan) {
+        int bad = -1;
+        for (UINT r = 0; r < count && bad < 0; r++)
+            for (int c = 0; c < 4; c++)
+                if (!isfinite(d->vsc[reg_idx + r][c])) { bad = (int)(reg_idx + r); break; }
+        static uint32_t seen[32];
+        static int nseen;
+        int known = 0;
+        for (int i = 0; i < nseen; i++) known |= seen[i] == vt3s_guest_caller;
+        if (bad >= 0 && !known && nseen < 32) {
+            seen[nseen++] = vt3s_guest_caller;
+            char bt[128];
+            vt3s_guest_backtrace(bt, sizeof bt);
+            VT3_INFO("NaN in vertex constants c%u..c%u (first at c%d: %g %g %g %g) from 0x%08x stack %s",
+                     (unsigned)reg_idx, (unsigned)(reg_idx + count - 1), bad, d->vsc[bad][0], d->vsc[bad][1],
+                     d->vsc[bad][2], d->vsc[bad][3], (unsigned)vt3s_guest_caller, bt);
+        }
+    }
     return S_OK;
 }
 
