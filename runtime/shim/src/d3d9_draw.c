@@ -12,6 +12,7 @@
 #include "vt3/vt3_log.h"
 
 #include <float.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -231,6 +232,31 @@ static void fill_textures(const d3d9_device *d, vt3_tex out[VT3_MAX_SAMPLERS])
     }
 }
 
+/* FNV-1a over a shader's bytecode. Handles change from run to run (allocation order follows the
+ * match being loaded), so traces name a shader by this hash. It matches the same hash taken over
+ * a dumped shader's .bin file. */
+static uint32_t shader_hash(const d3d9_shader *s)
+{
+    uint32_t h = 2166136261u;
+    if (!s || !s->tok) return 0;
+    const uint8_t *p = (const uint8_t *)s->tok;
+    for (uint32_t i = 0; i < s->ntok * 4u; i++) { h ^= p[i]; h *= 16777619u; }
+    return h;
+}
+
+/* VT3_TRACE_HASH=<hex>: the traces below keep only draws whose vertex shader has that hash. */
+static int trace_hash_match(const d3d9_shader *vs)
+{
+    static int set = -1;
+    static uint32_t want;
+    if (set < 0) {
+        const char *e = getenv("VT3_TRACE_HASH");
+        set = e != NULL;
+        want = e ? (uint32_t)strtoul(e, NULL, 16) : 0;
+    }
+    return !set || (vs && shader_hash(vs) == want);
+}
+
 /* VT3_TRACE_DRAW=N logs the first N draws with at least VT3_TRACE_MIN primitives (default 0): the
  * shaders, the first constants of each bank, and each bound sampler's texture. Sprites are small,
  * so a minimum keeps the log on the 3D draws. It is for finding why a draw comes out dark. */
@@ -247,6 +273,10 @@ static void trace_draw(const d3d9_device *d, const d3d9_draw_args *a, uint32_t n
         after_s = t ? atof(t) : 0.0;
     }
     if (count >= limit || a->prim_count < (uint32_t)min_prims) return;
+    {
+        d3d9_host *fh = d3d9_host_of(d->vs, D3D9_KIND_VSHADER);
+        if (!trace_hash_match(fh ? fh->data : NULL)) return;
+    }
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     double now_s = (double)ts.tv_sec + ts.tv_nsec * 1e-9;
@@ -257,6 +287,11 @@ static void trace_draw(const d3d9_device *d, const d3d9_draw_args *a, uint32_t n
     int trace_skinned = trace_vh && trace_vh->data && ((d3d9_shader *)trace_vh->data)->skinned;
     VT3_INFO("draw %d: prim %u count %u verts %u vs 0x%x ps 0x%x rt 0x%x depth 0x%x skinned %d", count, a->prim,
              a->prim_count, nverts, d->vs, d->ps, d->rt[0], d->depth, trace_skinned);
+    {
+        d3d9_host *hp = d->ps ? d3d9_host_of(d->ps, D3D9_KIND_PSHADER) : NULL;
+        VT3_INFO("  hash vs %08x ps %08x", trace_vh ? shader_hash(trace_vh->data) : 0u,
+                 hp ? shader_hash(hp->data) : 0u);
+    }
     if (trace_skinned && getenv("VT3_TRACE_LIGHT"))   /* the light matrix the scene and shadow passes read */
         VT3_INFO("  mvp rt 0x%x c0 %g %g %g %g | c1 %g %g %g %g | c2 %g %g %g %g | c3 %g %g %g %g", (unsigned)d->rt[0],
                  d->vsc[0][0], d->vsc[0][1], d->vsc[0][2], d->vsc[0][3], d->vsc[1][0], d->vsc[1][1], d->vsc[1][2], d->vsc[1][3],
@@ -305,6 +340,138 @@ static void trace_draw(const d3d9_device *d, const d3d9_draw_args *a, uint32_t n
         VT3_INFO("  sampler %d: texture %ux%u fmt 0x%x faces %u gl %u", s, t->w, t->h, t->fmt, t->faces,
                  (unsigned)t->gl);
     }
+}
+
+/* One vertex attribute as the shader sees it: missing components read (0, 0, 0, 1). */
+static void attr_read(const vt3_vattr *at, const uint8_t *v, float out[4])
+{
+    out[0] = out[1] = out[2] = 0.0f;
+    out[3] = 1.0f;
+    const uint8_t *p = v + at->offset;
+    for (int i = 0; i < at->components && i < 4; i++) {
+        switch (at->type) {
+        case VT3_VT_FLOAT: memcpy(&out[i], p + 4 * i, 4); break;
+        case VT3_VT_UBYTE_NORM: out[i] = p[i] / 255.0f; break;
+        case VT3_VT_UBYTE: out[i] = (float)p[i]; break;
+        case VT3_VT_SHORT: { int16_t s; memcpy(&s, p + 2 * i, 2); out[i] = (float)s; break; }
+        case VT3_VT_SHORT_NORM: { int16_t s; memcpy(&s, p + 2 * i, 2); out[i] = s / 32767.0f; break; }
+        default: break;
+        }
+    }
+}
+
+/* VT3_SKIN_CHECK=N: for the first N skinned draws (only those VT3_TRACE_HASH names, when set), skin
+ * every vertex on the CPU the way the game's skinning shader does (up to four bones, palette rows
+ * c[index + 15..17], weights from BLENDWEIGHT), project it with c0..c3, and log where the draw lands:
+ * the NDC box, vertices behind the eye, weight sums, palette rows that are all zero. The raw box
+ * (position through c0..c3 with no skinning) shows whether the mesh is in bind space. */
+static void skin_check(const d3d9_device *d, const d3d9_shader *vsh, const d3d9_draw_args *a,
+                       const vt3_vlayout *lay, const uint8_t *verts, uint32_t nv, uint32_t stride)
+{
+    static int limit = -1, count;
+    static double after_s, first_s = -1.0;
+    if (limit < 0) {
+        const char *e = getenv("VT3_SKIN_CHECK");
+        const char *t = getenv("VT3_SKIN_AFTER");   /* seconds after the first draw, to line up with a capture */
+        limit = e ? atoi(e) : 0;
+        after_s = t ? atof(t) : 0.0;
+    }
+    if (count >= limit) return;
+    struct timespec ts_now;
+    clock_gettime(CLOCK_MONOTONIC, &ts_now);
+    double now_s = (double)ts_now.tv_sec + ts_now.tv_nsec * 1e-9;
+    if (first_s < 0.0) first_s = now_s;
+    if (now_s - first_s < after_s || !vsh->skinned || !trace_hash_match(vsh)) return;
+    const vt3_vattr *pos = NULL, *wt = NULL, *ix = NULL;
+    for (int k = 0; k < lay->count; k++) {
+        if (lay->attr[k].location == 0) pos = &lay->attr[k];
+        if (lay->attr[k].location == 1) wt = &lay->attr[k];
+        if (lay->attr[k].location == 2) ix = &lay->attr[k];
+    }
+    count++;
+    d3d9_surface *ts = d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
+    VT3_INFO("skin check %d: vs %08x prims %u verts %u rt 0x%x %ux%u%s, attrs pos %d weight %d index %d", count,
+             shader_hash(vsh), a->prim_count, nv, d->rt[0], ts ? ts->w : 0, ts ? ts->h : 0,
+             ts && ts->backbuffer ? " (back buffer)" : "", pos != NULL, wt != NULL, ix != NULL);
+    VT3_INFO("  t %.2f s | c0 %g %g %g %g | c1 %g %g %g %g | c2 %g %g %g %g | c3 %g %g %g %g", now_s - first_s,
+             d->vsc[0][0], d->vsc[0][1], d->vsc[0][2], d->vsc[0][3], d->vsc[1][0], d->vsc[1][1], d->vsc[1][2],
+             d->vsc[1][3], d->vsc[2][0], d->vsc[2][1], d->vsc[2][2], d->vsc[2][3], d->vsc[3][0], d->vsc[3][1],
+             d->vsc[3][2], d->vsc[3][3]);
+    {   /* court landmarks through c0..c3 (world units are decimetres; the net is at z = 0) */
+        static const float probe[5][3] = {
+            { 0, 0, -118.9f }, { 0, 0, 118.9f }, { -41.15f, 0, -118.9f }, { 41.15f, 0, -118.9f }, { 0, 0, 0 } };
+        static const char *name[5] = { "baseline centre z-", "baseline centre z+", "singles corner x- z-",
+                                       "singles corner x+ z-", "net centre" };
+        for (int k = 0; k < 5; k++) {
+            float c[4];
+            for (int i = 0; i < 4; i++)
+                c[i] = d->vsc[0][i] * probe[k][0] + d->vsc[1][i] * probe[k][1] + d->vsc[2][i] * probe[k][2] + d->vsc[3][i];
+            VT3_INFO("  probe %-26s ndc %.3f %.3f (w %g)", name[k], c[3] != 0.0f ? c[0] / c[3] : 0.0f,
+                     c[3] != 0.0f ? c[1] / c[3] : 0.0f, c[3]);
+        }
+    }
+    if (!pos) return;
+    float lo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, hi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+    float rlo[2] = { FLT_MAX, FLT_MAX }, rhi[2] = { -FLT_MAX, -FLT_MAX };
+    float wmin = FLT_MAX, wmax = -FLT_MAX;
+    float wlo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, whi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+    uint32_t behind = 0, bad_index = 0;
+    int max_index = -1;
+    static uint8_t zero_bone[256];
+    memset(zero_bone, 0, sizeof zero_bone);
+    for (uint32_t v = 0; v < nv; v++) {
+        const uint8_t *vp = verts + (size_t)v * stride;
+        float p[4], w[4] = { 0, 0, 0, 1 }, ind[4] = { 0, 0, 0, 1 }, s[3] = { 0, 0, 0 };
+        attr_read(pos, vp, p);
+        if (wt) attr_read(wt, vp, w);
+        if (ix) attr_read(ix, vp, ind);
+        float wsum = w[0] + w[1] + w[2] + w[3];
+        if (wsum < wmin) wmin = wsum;
+        if (wsum > wmax) wmax = wsum;
+        for (int b = 0; b < 4; b++) {
+            int i = (int)floorf(ind[b]);
+            if (i > max_index) max_index = i;
+            if (i < 0 || i + 17 > 255) { bad_index++; continue; }
+            const float *r0 = d->vsc[i + 15], *r1 = d->vsc[i + 16], *r2 = d->vsc[i + 17];
+            int zero = 1;
+            for (int c = 0; c < 4; c++) if (r0[c] != 0.0f || r1[c] != 0.0f || r2[c] != 0.0f) zero = 0;
+            if (zero && w[b] != 0.0f) zero_bone[i] = 1;
+            s[0] += w[b] * (p[0] * r0[0] + p[1] * r0[1] + p[2] * r0[2] + p[3] * r0[3]);
+            s[1] += w[b] * (p[0] * r1[0] + p[1] * r1[1] + p[2] * r1[2] + p[3] * r1[3]);
+            s[2] += w[b] * (p[0] * r2[0] + p[1] * r2[1] + p[2] * r2[2] + p[3] * r2[3]);
+        }
+        for (int c = 0; c < 3; c++) {
+            if (s[c] < wlo[c]) wlo[c] = s[c];
+            if (s[c] > whi[c]) whi[c] = s[c];
+        }
+        float clip[4], raw[4];
+        for (int c = 0; c < 4; c++) {
+            clip[c] = d->vsc[0][c] * s[0] + d->vsc[1][c] * s[1] + d->vsc[2][c] * s[2] + d->vsc[3][c];
+            raw[c] = d->vsc[0][c] * p[0] + d->vsc[1][c] * p[1] + d->vsc[2][c] * p[2] + d->vsc[3][c];
+        }
+        if (v < 2)
+            VT3_INFO("  v%u pos %g %g %g w %g %g %g %g idx %g %g %g %g -> skinned %g %g %g clip %g %g %g %g", v,
+                     p[0], p[1], p[2], w[0], w[1], w[2], w[3], ind[0], ind[1], ind[2], ind[3], s[0], s[1], s[2],
+                     clip[0], clip[1], clip[2], clip[3]);
+        if (clip[3] <= 0.0f) { behind++; continue; }
+        for (int c = 0; c < 3; c++) {
+            float n = clip[c] / clip[3];
+            if (n < lo[c]) lo[c] = n;
+            if (n > hi[c]) hi[c] = n;
+        }
+        if (raw[3] > 0.0f)
+            for (int c = 0; c < 2; c++) {
+                float n = raw[c] / raw[3];
+                if (n < rlo[c]) rlo[c] = n;
+                if (n > rhi[c]) rhi[c] = n;
+            }
+    }
+    int zeros = 0;
+    for (int i = 0; i < 256; i++) zeros += zero_bone[i];
+    VT3_INFO("  ndc x %.3f..%.3f y %.3f..%.3f z %.3f..%.3f | behind %u | weight sum %.3f..%.3f | max index %d, "
+             "out of range %u, zero bones %d | raw ndc x %.3f..%.3f y %.3f..%.3f", lo[0], hi[0], lo[1], hi[1],
+             lo[2], hi[2], behind, wmin, wmax, max_index, bad_index, zeros, rlo[0], rhi[0], rlo[1], rhi[1]);
+    VT3_INFO("  world x %.2f..%.2f y %.2f..%.2f z %.2f..%.2f", wlo[0], whi[0], wlo[1], whi[1], wlo[2], whi[2]);
 }
 
 int d3d9_frame_draws;
@@ -512,6 +679,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     if (!vcopy) { free(idx16); return E_OUTOFMEMORY_D3D9; }
     copy_vertices(vcopy, vbase + (size_t)v0 * stride, nv, stride, dc);
     (void)swap;
+    skin_check(d, vsh, a, &lay, vcopy, nv, stride);
     {   /* VT3_DUMP_SKIN=1: layout and the first vertices of skinned draws, as the renderer receives them */
         static int dump = -1, dumped;
         if (dump < 0) dump = getenv("VT3_DUMP_SKIN") != NULL;

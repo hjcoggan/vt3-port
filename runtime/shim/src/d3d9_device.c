@@ -197,6 +197,9 @@ HRESULT WINAPI IDirect3DDevice9_Clear(GPTR This, DWORD rect_count, GPTR rects, D
     (void)rect_count; (void)rects; (void)stencil;
     d3d9_device *d = DEV(This);
     if (!d) return D3DERR_CHK_INVALIDCALL;
+    if (getenv("VT3_TRACE_RTSEQ"))
+        VT3_INFO("seq: clear rt 0x%x depth 0x%x flags 0x%x rects %u colour 0x%08x", (unsigned)d->rt[0],
+                 (unsigned)d->depth, (unsigned)flags, (unsigned)rect_count, (unsigned)color);
     if (d3d9_target_missing(d->rt[0])) return S_OK;
     d3d9_gpu_rt_bind(d3d9_surface_target(d->rt[0]));
     union { uint32_t u; float f; } zb;
