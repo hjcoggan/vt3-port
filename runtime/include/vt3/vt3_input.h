@@ -68,4 +68,10 @@ uint32_t vt3_input_pad_buttons(void);
 void     vt3_input_set_pad_connected(int connected);
 int      vt3_input_pad_connected(void);
 
+/* Loading activity, for the input script's quiet waits ("wN:KEY" in VT3_INPUT_SCRIPT). The shim
+ * notes each texture it creates; a quiet wait presses its key once none has been made for N seconds. */
+void     vt3_input_note_load(void);
+double   vt3_input_seconds_since_load(void);   /* since the last load, or since start when none yet */
+uint32_t vt3_input_load_count(void);
+
 #endif /* VT3_INPUT_H */

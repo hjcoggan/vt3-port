@@ -158,21 +158,29 @@ void vt3_input_sdl_poll(void)
  * thread pushes the presses as SDL events with SDL_PushEvent, so they take the same path
  * as a real press: the SDL queue, vt3_input_sdl_event, then the raw keyboard state that
  * DirectInput reads. Off unless the variable is set.
+ * A "wN:KEY" entry is a quiet wait: it presses KEY once N seconds have passed since the
+ * previous entry and no texture has been created for N seconds (vt3_input_note_load), so a
+ * menu step waits for its screen to finish loading however long that takes. "wN@T:KEY" also
+ * waits until T seconds after the start: the boot reads its archives for a few seconds
+ * before it creates any texture, so the first step needs a floor. After 30 s without quiet
+ * it presses anyway. A script with quiet waits runs in the order written.
  * Keys: UP DOWN LEFT RIGHT RETURN ESCAPE (keyboard), START (gamepad button).
  */
 #define SCRIPT_MAX_ENTRIES 64
 #define SCRIPT_HOLD_NS 120000000ull
+#define SCRIPT_QUIET_CAP_NS 30000000000ull
 
-typedef struct script_event {
-    uint64_t at_ns;              /* offset from the script start */
+typedef struct script_entry {
+    uint64_t at_ns;              /* offset from the script start: the time, or a quiet wait's floor */
+    double quiet_s;              /* quiet waits: seconds since the previous entry and the last load */
+    int quiet;
     int is_pad;                  /* 0: keyboard scancode, 1: gamepad button */
     int code;                    /* SDL_Scancode or SDL_GamepadButton */
-    int down;
     char name[16];
-} script_event;
+} script_entry;
 
-static script_event g_script[2 * SCRIPT_MAX_ENTRIES];
-static int g_script_n;
+static script_entry g_script[SCRIPT_MAX_ENTRIES];
+static int g_script_n, g_script_quiet;
 
 static int script_lookup(const char *name, int *is_pad, int *code)
 {
@@ -210,10 +218,18 @@ static int script_parse(const char *spec)
     char *save = NULL;
     for (char *tok = strtok_r(copy, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
         while (*tok == ' ') tok++;
+        int quiet = (*tok == 'w' || *tok == 'W');
+        const char *num = quiet ? tok + 1 : tok;
         char *end = NULL;
-        double at = strtod(tok, &end);
-        if (end == tok || *end != ':' || at < 0.0) {
-            VT3_WARN("VT3_INPUT_SCRIPT: bad entry '%s' (want time:KEY)", tok);
+        double at = strtod(num, &end);
+        double floor_s = 0.0;
+        if (quiet && end != num && *end == '@') {
+            const char *f = end + 1;
+            floor_s = strtod(f, &end);
+            if (end == f) end = (char *)f;   /* no number after '@': reported as a bad entry below */
+        }
+        if (end == num || *end != ':' || at < 0.0 || floor_s < 0.0) {
+            VT3_WARN("VT3_INPUT_SCRIPT: bad entry '%s' (want time:KEY, wN:KEY or wN@T:KEY)", tok);
             continue;
         }
         char name[16] = { 0 };
@@ -227,27 +243,27 @@ static int script_parse(const char *spec)
             continue;
         }
         if (entries >= SCRIPT_MAX_ENTRIES) break;
-        uint64_t t = (uint64_t)(at * 1000000000.0 + 0.5);
-        for (int down = 1; down >= 0; down--) {
-            script_event *e = &g_script[g_script_n++];
-            e->at_ns = down ? t : t + SCRIPT_HOLD_NS;
-            e->is_pad = is_pad;
-            e->code = code;
-            e->down = down;
-            memcpy(e->name, name, sizeof e->name);
-        }
+        script_entry *e = &g_script[g_script_n++];
+        e->at_ns = (uint64_t)((quiet ? floor_s : at) * 1000000000.0 + 0.5);
+        e->quiet_s = quiet ? at : 0.0;
+        e->quiet = quiet;
+        e->is_pad = is_pad;
+        e->code = code;
+        memcpy(e->name, name, sizeof e->name);
+        if (quiet) g_script_quiet = 1;
         entries++;
     }
     free(copy);
-    for (int i = 1; i < g_script_n; i++) {          /* sort by time; releases follow presses */
-        script_event x = g_script[i];
-        int j = i - 1;
-        while (j >= 0 && g_script[j].at_ns > x.at_ns) {
-            g_script[j + 1] = g_script[j];
-            j--;
+    if (!g_script_quiet)
+        for (int i = 1; i < g_script_n; i++) {      /* absolute times only: sort by time */
+            script_entry x = g_script[i];
+            int j = i - 1;
+            while (j >= 0 && g_script[j].at_ns > x.at_ns) {
+                g_script[j + 1] = g_script[j];
+                j--;
+            }
+            g_script[j + 1] = x;
         }
-        g_script[j + 1] = x;
-    }
     return entries;
 }
 
@@ -261,21 +277,21 @@ static void script_wait_until(uint64_t t)
     }
 }
 
-static void script_push(const script_event *e)
+static void script_push(const script_entry *e, int down)
 {
     SDL_Event ev;
     SDL_zero(ev);
     uint64_t now = SDL_GetTicksNS();
     if (e->is_pad) {
-        ev.type = e->down ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP;
+        ev.type = down ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP;
         ev.gbutton.timestamp = now;
         ev.gbutton.button = (Uint8)e->code;
-        ev.gbutton.down = e->down != 0;
+        ev.gbutton.down = down != 0;
     } else {
-        ev.type = e->down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+        ev.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
         ev.key.timestamp = now;
         ev.key.scancode = (SDL_Scancode)e->code;
-        ev.key.down = e->down != 0;
+        ev.key.down = down != 0;
     }
     if (!SDL_PushEvent(&ev)) VT3_WARN("input script: SDL_PushEvent failed: %s", SDL_GetError());
 }
@@ -283,12 +299,29 @@ static void script_push(const script_event *e)
 static void *script_thread(void *arg)
 {
     (void)arg;
-    uint64_t t0 = SDL_GetTicksNS();
+    uint64_t t0 = SDL_GetTicksNS(), prev = t0;
     for (int i = 0; i < g_script_n; i++) {
-        script_wait_until(t0 + g_script[i].at_ns);
-        script_push(&g_script[i]);
-        VT3_INFO("input script: %s %s at %.2f s", g_script[i].name, g_script[i].down ? "down" : "up",
-                 (double)g_script[i].at_ns / 1e9);
+        const script_entry *e = &g_script[i];
+        if (e->quiet) {
+            script_wait_until(t0 + e->at_ns);
+            script_wait_until(prev + (uint64_t)(e->quiet_s * 1e9));
+            while (vt3_input_seconds_since_load() < e->quiet_s) {
+                if (SDL_GetTicksNS() - prev > SCRIPT_QUIET_CAP_NS) {
+                    VT3_WARN("input script: %s: no %.1f s without loading in 30 s; pressing anyway", e->name,
+                             e->quiet_s);
+                    break;
+                }
+                SDL_DelayNS(20000000ull);
+            }
+        } else {
+            script_wait_until(t0 + e->at_ns);
+        }
+        prev = SDL_GetTicksNS();
+        script_push(e, 1);
+        VT3_INFO("input script: %s at %.2f s (%u textures created so far)", e->name, (double)(prev - t0) / 1e9,
+                 vt3_input_load_count());
+        script_wait_until(prev + SCRIPT_HOLD_NS);
+        script_push(e, 0);
     }
     return NULL;
 }

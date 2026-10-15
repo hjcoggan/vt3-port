@@ -8,9 +8,10 @@
 #   SHOT_TIMES  seconds after launch at which to capture the window
 # Environment variables pass through to the game (VT3_TRACE_*, VT3_SKIN_CHECK, ...).
 #
-# Default route: Tournament, the menu path from the main menu (up at about 6 s) to a match, in play
-# by about 30 s. Federer is 1P every run; the tournament and the opponent change from run to run.
-# Each step has about a second of margin over the screen it waits for (timed from captures).
+# Default route: Tournament, the menu path from the main menu to a match, in play by about 28 s.
+# Federer is 1P every run; the tournament and the opponent change from run to run. Each step is a
+# quiet wait (wN:KEY, see input_sdl.c): it presses once no texture has been created for N seconds,
+# so the route keeps in step with the screens when loading is slow (traces, texture dumps).
 # Quick Play (F1) picks a random match on each launch, so it is opt-in: QUICK_PLAY=1 run_match.sh ...
 # An explicit VT3_INPUT_SCRIPT overrides both routes.
 #
@@ -18,7 +19,8 @@
 BIN=$1; OUT=$2; SECS=$3; shift 3
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 DUMP="${VT3_DUMP:-$(dirname "$REPO")/dump}"
-TOURNAMENT_SCRIPT="8:DOWN,9:RETURN,11:RETURN,14:RETURN,19:RETURN,29:Z,35:Z"
+# The Singles and player-select screens create no textures, so their steps wait a fixed margin.
+TOURNAMENT_SCRIPT="w2@6:DOWN,w1:RETURN,w2:RETURN,w3:RETURN,w2:RETURN,w2:Z,w3:Z"
 QUICK_PLAY_SCRIPT="12:RETURN,16:BACKSPACE,20:F1"
 if [[ -z "$VT3_INPUT_SCRIPT" ]]; then
   if [[ -n "$QUICK_PLAY" ]]; then VT3_INPUT_SCRIPT="$QUICK_PLAY_SCRIPT"; else VT3_INPUT_SCRIPT="$TOURNAMENT_SCRIPT"; fi
@@ -37,4 +39,9 @@ for t in "$@"; do
 done
 while (( $(date +%s) - start < SECS )); do sleep 1; done
 kill -9 $PID 2>/dev/null
+# A match loads well over 150 textures; the menus about 60. Flag a route that went astray.
+last=$(grep 'input script: [A-Z]' "$OUT/err.txt" | tail -1 | sed -nE 's/.*\(([0-9]+) textures.*/\1/p')
+if [[ -z "$QUICK_PLAY" && -n "$last" && "$last" -lt 150 ]]; then
+  echo "WARNING: only $last textures by the last scripted key; the run may not have reached a match"
+fi
 echo "done $OUT"
