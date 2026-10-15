@@ -43,7 +43,7 @@ int d3d9_gpu_init(uint32_t width, uint32_t height)
         return -1;
     }
     g_gpu_ok = 1;
-    VT3_INFO("gpu: %ux%u window and OpenGL 3.3 renderer", (unsigned)width, (unsigned)height);
+    VT3_INFO("gpu: %ux%u window and renderer", (unsigned)width, (unsigned)height);
     return 0;
 }
 

@@ -7,6 +7,8 @@
 #include "vt3/vt3_platform.h"
 #include "vt3rt.h"
 
+#include <android/native_activity.h>
+#include <android/window.h>
 #include <android_native_app_glue.h>
 #include <stdlib.h>
 
@@ -18,6 +20,8 @@ void vt3_platform_android_attach(struct android_app *app);
 void android_main(struct android_app *app)
 {
     vt3_platform_android_attach(app);
+    /* Full screen: the game draws over the whole panel, with no status bar (the activity has no Java). */
+    ANativeActivity_setWindowFlags(app->activity, AWINDOW_FLAG_FULLSCREEN, 0);
     /* Game data: <root>/data2 is the extracted English archive set; <root>/image.bin is the image. */
     setenv("VT3_GAME_ROOT", VT3_ANDROID_ROOT "/data2", 1);
     setenv("VT3_SHADER_PACK", VT3_ANDROID_ROOT "/shaders.pack", 1);

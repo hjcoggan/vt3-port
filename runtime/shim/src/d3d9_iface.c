@@ -279,6 +279,6 @@ HRESULT WINAPI IDirect3D9_CreateDevice(GPTR This, UINT Adapter, UINT DeviceType,
     }
     vt3s_store_u32(ppReturnedDeviceInterface, dev);
     VT3_INFO("CreateDevice: IDirect3DDevice9 at 0x%08x (%ux%u back buffer, %s)", dev, (unsigned)w,
-             (unsigned)h, d->gpu ? "GL renderer" : "headless");
+             (unsigned)h, d->gpu ? "renderer" : "headless");
     return S_OK;
 }
