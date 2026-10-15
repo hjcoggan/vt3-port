@@ -32,3 +32,6 @@ build/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Agent worktrees (Claude Code)
+.claude/worktrees/
