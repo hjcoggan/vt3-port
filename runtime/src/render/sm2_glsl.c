@@ -352,8 +352,8 @@ static void do_arith(ctx *c, uint32_t op, opnd dst, opnd s[3], int nsrc)
     case OP_FRC:  snprintf(value, sizeof value, "fract(%s)", e[0]); break;
     case OP_LRP:  snprintf(value, sizeof value, "mix(%s, %s, %s)", e[2], e[1], e[0]); break;
     case OP_ABS:  snprintf(value, sizeof value, "abs(%s)", e[0]); break;
-    case OP_NRM:  snprintf(value, sizeof value, "normalize(%s)", e[0]); break;
-    case OP_POW:  snprintf(value, sizeof value, "pow(abs(%s), %s)", e[0], e[1]); break;
+    case OP_NRM:  snprintf(value, sizeof value, "vt3_nrm(%s)", e[0]); break;
+    case OP_POW:  snprintf(value, sizeof value, "pow(max(abs(%s), vec4(1e-30)), %s)", e[0], e[1]); break;   /* pow(0, y) is undefined in GLSL */
     case OP_CMP:  snprintf(value, sizeof value, "mix(%s, %s, greaterThanEqual(%s, vec4(0.0)))", e[2], e[1], e[0]); break;
     case OP_SINCOS: snprintf(value, sizeof value, "vec4(cos((%s).x), sin((%s).x), 0.0, 0.0)", e[0], e[0]); break;
     default:
@@ -726,6 +726,11 @@ static void emit_header(ctx *c, sb *h)
     for (int i = 0; i < VT3_SM2_MAX_TEMP; i++) {
         if (c->temps_used & (1u << i)) sb_add(h, "vec4 r%d;\n", i);
     }
+    /* D3D nrm normalises xyz only; w is left undefined. Zero length gives zero, not NaN. */
+    sb_add(h, "vec4 vt3_nrm(vec4 v) {\n"
+              "  float l2 = dot(v.xyz, v.xyz);\n"
+              "  return vec4(l2 > 1e-30 ? v.xyz * inversesqrt(l2) : vec3(0.0), 0.0);\n"
+              "}\n");
     sb_add(h, "\nvoid main() {\n");
     sb_add(h, "  a0 = ivec4(0);\n  aL = ivec4(0);\n");
     if (vs) {
