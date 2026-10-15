@@ -164,6 +164,8 @@ void vt3_input_sdl_poll(void)
  * waits until T seconds after the start: the boot reads its archives for a few seconds
  * before it creates any texture, so the first step needs a floor. After 30 s without quiet
  * it presses anyway. A script with quiet waits runs in the order written.
+ * An "rN:KEY" entry repeats: from where it stands in the script, it presses KEY every N
+ * seconds until the game exits (it serves and plays shots, so points keep coming).
  * Keys: UP DOWN LEFT RIGHT RETURN ESCAPE (keyboard), START (gamepad button).
  */
 #define SCRIPT_MAX_ENTRIES 64
@@ -174,6 +176,7 @@ typedef struct script_entry {
     uint64_t at_ns;              /* offset from the script start: the time, or a quiet wait's floor */
     double quiet_s;              /* quiet waits: seconds since the previous entry and the last load */
     int quiet;
+    double repeat_s;             /* repeating entries: the period; 0 for a single press */
     int is_pad;                  /* 0: keyboard scancode, 1: gamepad button */
     int code;                    /* SDL_Scancode or SDL_GamepadButton */
     char name[16];
@@ -219,7 +222,8 @@ static int script_parse(const char *spec)
     for (char *tok = strtok_r(copy, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
         while (*tok == ' ') tok++;
         int quiet = (*tok == 'w' || *tok == 'W');
-        const char *num = quiet ? tok + 1 : tok;
+        int repeat = (*tok == 'r' || *tok == 'R');
+        const char *num = quiet || repeat ? tok + 1 : tok;
         char *end = NULL;
         double at = strtod(num, &end);
         double floor_s = 0.0;
@@ -244,9 +248,11 @@ static int script_parse(const char *spec)
         }
         if (entries >= SCRIPT_MAX_ENTRIES) break;
         script_entry *e = &g_script[g_script_n++];
-        e->at_ns = (uint64_t)((quiet ? floor_s : at) * 1000000000.0 + 0.5);
+        e->at_ns = (uint64_t)((quiet ? floor_s : repeat ? 0.0 : at) * 1000000000.0 + 0.5);
         e->quiet_s = quiet ? at : 0.0;
         e->quiet = quiet;
+        e->repeat_s = repeat ? (at > 0.2 ? at : 0.2) : 0.0;
+        if (repeat) g_script_quiet = 1;   /* runs in the order written, like quiet waits */
         e->is_pad = is_pad;
         e->code = code;
         memcpy(e->name, name, sizeof e->name);
@@ -302,6 +308,17 @@ static void *script_thread(void *arg)
     uint64_t t0 = SDL_GetTicksNS(), prev = t0;
     for (int i = 0; i < g_script_n; i++) {
         const script_entry *e = &g_script[i];
+        if (e->repeat_s > 0.0) {
+            VT3_INFO("input script: %s every %.1f s from %.2f s", e->name, e->repeat_s,
+                     (double)(SDL_GetTicksNS() - t0) / 1e9);
+            for (;;) {
+                prev += (uint64_t)(e->repeat_s * 1e9);
+                script_wait_until(prev);
+                script_push(e, 1);
+                script_wait_until(prev + SCRIPT_HOLD_NS);
+                script_push(e, 0);
+            }
+        }
         if (e->quiet) {
             script_wait_until(t0 + e->at_ns);
             script_wait_until(prev + (uint64_t)(e->quiet_s * 1e9));

@@ -24,6 +24,10 @@ TOURNAMENT_SCRIPT="w2@6:DOWN,w1:RETURN,w2:RETURN,w3:RETURN,w2:RETURN,w2:Z,w3:Z"
 QUICK_PLAY_SCRIPT="12:RETURN,16:BACKSPACE,20:F1"
 if [[ -z "$VT3_INPUT_SCRIPT" ]]; then
   if [[ -n "$QUICK_PLAY" ]]; then VT3_INPUT_SCRIPT="$QUICK_PLAY_SCRIPT"; else VT3_INPUT_SCRIPT="$TOURNAMENT_SCRIPT"; fi
+  # PLAY_POINTS=1 keeps the match moving: the human player serves and swings on a timer
+  # (every PLAY_POINTS_EVERY seconds, default 6), so points, changeovers and cutscenes come.
+  # Without it the match waits at the first 1P serve.
+  [[ -n "$PLAY_POINTS" ]] && VT3_INPUT_SCRIPT="$VT3_INPUT_SCRIPT,r${PLAY_POINTS_EVERY:-6}:Z"
 fi
 mkdir -p "$OUT"; rm -f "$OUT"/shot_*.png
 export VT3_GAME_ROOT="$DUMP/pc/extracted/data2"
