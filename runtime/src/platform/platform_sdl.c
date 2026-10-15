@@ -124,10 +124,8 @@ int vt3_platform_pump_events(void)
             evq_push(VT3_EV_BLUR, 0, 0);
             break;
         case SDL_EVENT_KEY_DOWN:
-            if (e.key.scancode == SDL_SCANCODE_ESCAPE) {
-                evq_push(VT3_EV_CLOSE, 0, 0);
-                running = 0;
-            }
+            /* Escape is not quit here. Steam Input sends it for the B button, so quitting on it
+             * closed the game. Quit is the window close button or Cmd+Q (SDL_EVENT_QUIT). */
             vt3_input_sdl_event(&e);
             break;
         default:

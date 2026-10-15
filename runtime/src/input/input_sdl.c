@@ -48,7 +48,7 @@ typedef struct key_button_map {
     uint32_t vt3;
 } key_button_map;
 
-/* Keyboard fallback. Escape is handled by the platform layer as quit. */
+/* Keyboard fallback. Escape is not mapped: it does not quit (see platform_sdl.c). */
 static const key_button_map k_key_map[] = {
     /* TODO(verify): keyboard layout is a placeholder. */
     { SDL_SCANCODE_UP,     VT3_BTN_UP },
