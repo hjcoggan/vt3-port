@@ -35,6 +35,7 @@ set(VT3_CORE_COMMON
     src/render/letterbox.c
     src/render/sm2_glsl.c
     src/render/renderer.c
+    src/render/builtin_glsl.c
     src/audio/ringbuf.c
     src/audio/adx.c
     src/input/input.c
@@ -44,6 +45,7 @@ if(VT3_ANDROID)
         src/audio/audio_android.c
         src/input/input_android.c
         src/platform/platform_android.c
+        src/render/vk.c
     )
 else()
     set(VT3_CORE_PLATFORM
@@ -134,7 +136,10 @@ if(VT3_ANDROID)
         ${ANDROID_NDK}/sources/android/native_app_glue)
     target_compile_options(vt3android PRIVATE -O2 -std=gnu11 -w -ffp-contract=off)
     set_source_files_properties(${VT3_GAME_DIR}/vt3.c PROPERTIES COMPILE_OPTIONS "-O1;-std=gnu11;-w;-ffp-contract=off")
-    target_link_libraries(vt3android PRIVATE vt3shim android log aaudio vulkan m)
+    # The weak defaults in vt3shim must lose to the real renderer, platform and audio in vt3core, so
+    # every member of both archives is linked in (as -all_load does on the desktop).
+    target_link_libraries(vt3android PRIVATE "-Wl,--whole-archive" vt3shim vt3core "-Wl,--no-whole-archive"
+        android log aaudio vulkan m)
     target_link_options(vt3android PRIVATE -Wl,-z,max-page-size=16384)
 
     # The self-test as a native executable, to run on the device with adb shell.

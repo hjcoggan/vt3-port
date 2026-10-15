@@ -8,6 +8,7 @@
  * D3D_OK, so the game keeps running.
  */
 #include "d3d9_internal.h"
+#include "vt3/vt3_builtin.h"
 #include "vt3/vt3_log.h"
 
 #include <float.h>
@@ -182,7 +183,7 @@ static vt3_prog program_for(uint32_t vs_obj, uint32_t ps_obj, const d3d9_shader 
     if (free_slot < 0) return 0;
     char err[1024] = "";
     vt3_prog p = 0;
-    const char *ps_src = ps ? ps->sm.glsl : k_ff_ps;
+    const char *ps_src = ps ? ps->sm.glsl : (vt3_gfx_glsl_flags() ? vt3_builtin_ff_fs_vk : k_ff_ps);
     if (vt3_gfx_prog_create(&p, vs->sm.glsl, ps_src, err, sizeof err) != 0) {
         VT3_WARN("program: link failed (vs 0x%x, ps 0x%x): %s", vs_obj, ps_obj, err);
         p = 0;

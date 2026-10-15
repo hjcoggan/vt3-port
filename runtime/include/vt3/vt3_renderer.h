@@ -48,6 +48,7 @@ typedef enum vt3_texfmt {
 } vt3_texfmt;
 
 typedef uint32_t vt3_tex;    /* handle; 0 = no texture */
+#define VT3_MAX_TEX 4096      /* live texture handles (the GL and Vulkan backends agree on it) */
 /* A texture the sampler cannot use (for example a cube map on a 2D sampler): the renderer binds its zero texel. */
 #define VT3_TEX_ZERO ((vt3_tex)0xFFFFFFFFu)
 
@@ -134,6 +135,7 @@ typedef struct vt3_gfx_ops {
     void (*readback)(uint8_t *rgba);        /* logical size, RGBA8, top row first */
     void (*clear_depth)(float depth);
     void (*set_scissor)(int enable, vt3_rect r);   /* logical pixels, top-left origin */
+    int  glsl_vulkan;           /* 1: the renderer wants translated shaders as GLSL 450 (SPIR-V) */
 } vt3_gfx_ops;
 
 int  vt3_gfx_init(const vt3_gfx_ops *ops, const vt3_gfx_config *cfg);
@@ -161,5 +163,7 @@ extern const vt3_gfx_ops vt3_gfx_gl33;
 
 /* The renderer the shim uses: GL 3.3 on the desktop, Vulkan on Android. Each platform defines it. */
 const vt3_gfx_ops *vt3_gfx_default_ops(void);
+/* Translator flags for the active renderer: VT3_SM2_FLAG_VULKAN when it runs SPIR-V, else 0. */
+unsigned vt3_gfx_glsl_flags(void);
 
 #endif /* VT3_RENDERER_H */

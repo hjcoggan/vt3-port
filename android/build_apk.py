@@ -5,8 +5,9 @@ The APK holds one native library and no Java code. Steps: NDK clang builds lib<n
 arm64-v8a; aapt2 links the manifest into base.apk; the library is added to the zip; zipalign and
 apksigner finish it. The debug keystore and all outputs live under dump/android/, outside the repo.
 
-Usage: build_apk.py SOURCE_DIR NAME [--install SERIAL]
-  SOURCE_DIR holds AndroidManifest.xml (in android/) and the C sources.
+Usage: build_apk.py SOURCE_DIR NAME [--so LIBRARY] [--install SERIAL]
+  SOURCE_DIR holds the C sources (compiled with NDK clang), or is ignored when --so names a library
+  that is already built. The manifest is android/<SOURCE_DIR's name>/AndroidManifest.xml.
 """
 import os
 import shutil
@@ -45,25 +46,31 @@ def main(argv):
     src_dir = os.path.abspath(argv[1])
     name = argv[2]
     install = argv[argv.index("--install") + 1] if "--install" in argv else None
+    prebuilt = argv[argv.index("--so") + 1] if "--so" in argv else None
+    manifest = os.path.join(REPO, "android", os.path.basename(src_dir), "AndroidManifest.xml")
 
     build = os.path.join(DUMP, "build", name)
     stage = os.path.join(build, "stage")
     shutil.rmtree(build, ignore_errors=True)
     os.makedirs(os.path.join(stage, "lib", "arm64-v8a"))
 
-    clang = tool(NDK, "toolchains", "llvm", "prebuilt", "darwin-x86_64", "bin", "aarch64-linux-android%d-clang" % API)
-    glue_dir = tool(NDK, "sources", "android", "native_app_glue")
-    sources = [os.path.join(src_dir, f) for f in sorted(os.listdir(src_dir)) if f.endswith(".c")]
     so = os.path.join(stage, "lib", "arm64-v8a", "lib%s.so" % name)
-    run([clang, "-shared", "-fPIC", "-O2", "-Wall", "-DANDROID", "-I", glue_dir,
-         "-Wl,-z,max-page-size=16384", "-o", so, os.path.join(glue_dir, "android_native_app_glue.c")] + sources
-        + ["-llog", "-landroid", "-lvulkan", "-lm"])
+    if prebuilt:
+        shutil.copy(prebuilt, so)
+    else:
+        clang = tool(NDK, "toolchains", "llvm", "prebuilt", "darwin-x86_64", "bin",
+                     "aarch64-linux-android%d-clang" % API)
+        glue_dir = tool(NDK, "sources", "android", "native_app_glue")
+        sources = [os.path.join(src_dir, f) for f in sorted(os.listdir(src_dir)) if f.endswith(".c")]
+        run([clang, "-shared", "-fPIC", "-O2", "-Wall", "-DANDROID", "-I", glue_dir,
+             "-Wl,-z,max-page-size=16384", "-o", so, os.path.join(glue_dir, "android_native_app_glue.c")] + sources
+            + ["-llog", "-landroid", "-lvulkan", "-lm"])
 
     bt = tool(SDK, "build-tools", "36.1.0")
     jar = tool(SDK, "platforms", "android-%d" % TARGET_API, "android.jar")
     base = os.path.join(build, "base.apk")
     run([tool(bt, "aapt2"), "link", "-o", base, "-I", jar,
-         "--manifest", os.path.join(REPO, "android", "AndroidManifest.xml"),
+         "--manifest", manifest,
          "--min-sdk-version", str(API), "--target-sdk-version", str(TARGET_API),
          "--version-code", "1", "--version-name", "0.1"])
     run(["zip", "-q", "-r", base, "lib"], cwd=stage)

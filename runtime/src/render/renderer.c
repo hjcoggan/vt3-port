@@ -1,6 +1,7 @@
 /* Renderer front end: holds the active backend and the letterbox settings. */
 #include "vt3/vt3_log.h"
 #include "vt3/vt3_renderer.h"
+#include "vt3/vt3_sm2.h"
 
 #include <stddef.h>
 
@@ -37,6 +38,11 @@ int vt3_gfx_tex_create(vt3_tex *out, int w, int h, vt3_texfmt fmt)
 void vt3_gfx_tex_upload(vt3_tex t, const void *pixels, int pitch, int w, int h)
 {
     if (g_ops) g_ops->tex_upload(t, pixels, pitch, w, h);
+}
+
+unsigned vt3_gfx_glsl_flags(void)
+{
+    return g_ops && g_ops->glsl_vulkan ? VT3_SM2_FLAG_VULKAN : 0u;
 }
 
 int vt3_gfx_cube_create(vt3_tex *out, int size, vt3_texfmt fmt)

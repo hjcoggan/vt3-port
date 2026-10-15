@@ -232,7 +232,7 @@ GPTR d3d9_create_shader_obj(GPTR dev, int is_ps, GPTR byte_code)
     sh->is_ps = is_ps;
     sh->ntok = n;
     sh->tok = tok;
-    if (vt3_sm2_translate(tok, n, &sh->sm) == 0) {
+    if (vt3_sm2_translate_ex(tok, n, &sh->sm, vt3_gfx_glsl_flags()) == 0) {
         sh->translated = 1;
     } else {
         VT3_WARN("%s shader not translated: %s", is_ps ? "pixel" : "vertex", sh->sm.error);

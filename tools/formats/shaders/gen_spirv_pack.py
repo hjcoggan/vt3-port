@@ -25,10 +25,12 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))           # vt3-por
 DUMP = os.path.abspath(os.path.join(ROOT, "..", "dump"))                 # Virtua Tennis 3/dump
 GAME_BINS = os.path.join(DUMP, "runtime", "shaders", "bin")
 REBUILT_BINS = os.path.join(DUMP, "runtime", "shaders", "rebuilt")
-BUILTIN_GLSL = os.path.join(ROOT, "runtime", "src", "render", "glsl")
+BUILTIN_TOOL_SRC = os.path.join(ROOT, "runtime", "tools", "builtin_dump.c")
+BUILTIN_SRC = os.path.join(ROOT, "runtime", "src", "render", "builtin_glsl.c")
 TOOL_SRC = os.path.join(ROOT, "runtime", "tools", "sm2tool.c")
 TOOL_DIR = os.path.join(DUMP, "android", "tools")
 TOOL = os.path.join(TOOL_DIR, "vt3sm2")
+BUILTIN_TOOL = os.path.join(TOOL_DIR, "vt3builtin")
 GLSLANG = "glslangValidator"
 
 
@@ -46,6 +48,17 @@ def build_tool():
             os.path.join(ROOT, "runtime", "src", "core", "log.c")]
     inc = os.path.join(ROOT, "runtime", "include")
     subprocess.run(["cc", "-std=c11", "-O1", "-I", inc, "-o", TOOL] + srcs, check=True)
+
+
+def build_builtin_dump():
+    """The built-in Vulkan GLSL, written to a directory the pack reads as text."""
+    inc = os.path.join(ROOT, "runtime", "include")
+    subprocess.run(["cc", "-std=c11", "-O1", "-I", inc, "-o", BUILTIN_TOOL, BUILTIN_TOOL_SRC, BUILTIN_SRC],
+                   check=True)
+    out = os.path.join(TOOL_DIR, "builtin_glsl")
+    os.makedirs(out, exist_ok=True)
+    subprocess.run([BUILTIN_TOOL, out], check=True)
+    return out
 
 
 def write_rebuilt_bins():
@@ -75,7 +88,7 @@ def main(argv):
         return 2
     out_path = argv[1]
     bins = []
-    glsl_dirs = [BUILTIN_GLSL]
+    glsl_dirs = []
     i = 2
     while i < len(argv):
         if argv[i] == "--bins":
@@ -89,6 +102,7 @@ def main(argv):
     if not bins:
         bins = [GAME_BINS]
     build_tool()
+    glsl_dirs.insert(0, build_builtin_dump())
     write_rebuilt_bins()
     bins.append(REBUILT_BINS)
 

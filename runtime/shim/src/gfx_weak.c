@@ -157,6 +157,18 @@ __attribute__((weak)) void vt3_gfx_present(int drawable_w, int drawable_h)
     (void)drawable_h;
 }
 
+__attribute__((weak)) unsigned vt3_gfx_glsl_flags(void)
+{
+    return 0;
+}
+
+__attribute__((weak)) int vt3_sm2_translate_ex(const uint32_t *tokens, size_t ntokens, vt3_sm2_shader *out,
+                                               unsigned flags)
+{
+    (void)flags;
+    return vt3_sm2_translate(tokens, ntokens, out);
+}
+
 __attribute__((weak)) int vt3_sm2_translate(const uint32_t *tokens, size_t ntokens, vt3_sm2_shader *out)
 {
     (void)tokens;
