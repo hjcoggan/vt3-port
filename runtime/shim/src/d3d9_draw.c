@@ -393,6 +393,15 @@ static void skin_check(const d3d9_device *d, const d3d9_shader *vsh, const d3d9_
     VT3_INFO("skin check %d: vs %08x prims %u verts %u rt 0x%x %ux%u%s, attrs pos %d weight %d index %d", count,
              shader_hash(vsh), a->prim_count, nv, d->rt[0], ts ? ts->w : 0, ts ? ts->h : 0,
              ts && ts->backbuffer ? " (back buffer)" : "", pos != NULL, wt != NULL, ix != NULL);
+    {
+        d3d9_host *hp = d->ps ? d3d9_host_of(d->ps, D3D9_KIND_PSHADER) : NULL;
+        d3d9_texture *t0 = d3d9_texture_of(d->textures[0]);
+        VT3_INFO("  ps %08x | blend %u %u/%u atest %u ref %u func %u | z %u zw %u cull %u cw 0x%x | s0 %ux%u fmt 0x%x",
+                 hp ? shader_hash(hp->data) : 0u, (unsigned)d->rs[27], (unsigned)d->rs[19], (unsigned)d->rs[20],
+                 (unsigned)d->rs[15], (unsigned)(d->rs[24] & 0xFF), (unsigned)d->rs[25], (unsigned)d->rs[7],
+                 (unsigned)d->rs[14], (unsigned)d->rs[22], (unsigned)d->rs[168], t0 ? t0->w : 0, t0 ? t0->h : 0,
+                 t0 ? t0->fmt : 0);
+    }
     VT3_INFO("  t %.2f s | c0 %g %g %g %g | c1 %g %g %g %g | c2 %g %g %g %g | c3 %g %g %g %g", now_s - first_s,
              d->vsc[0][0], d->vsc[0][1], d->vsc[0][2], d->vsc[0][3], d->vsc[1][0], d->vsc[1][1], d->vsc[1][2],
              d->vsc[1][3], d->vsc[2][0], d->vsc[2][1], d->vsc[2][2], d->vsc[2][3], d->vsc[3][0], d->vsc[3][1],
@@ -410,7 +419,13 @@ static void skin_check(const d3d9_device *d, const d3d9_shader *vsh, const d3d9_
                      c[3] != 0.0f ? c[1] / c[3] : 0.0f, c[3]);
         }
     }
+    for (int k = 0; k < lay->count; k++)
+        VT3_INFO("  attr loc %d comps %d type %d offset %d", lay->attr[k].location, lay->attr[k].components,
+                 (int)lay->attr[k].type, lay->attr[k].offset);
     if (!pos) return;
+    /* The bones per vertex are the shader's skinning loop count (its defi i0): 4 or 2 in this game. */
+    int bones = vsh->sm.idef_set[0] ? (int)vsh->sm.idef[0][0] : 4;
+    if (bones < 1 || bones > 4) bones = 4;
     float lo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, hi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
     float rlo[2] = { FLT_MAX, FLT_MAX }, rhi[2] = { -FLT_MAX, -FLT_MAX };
     float wmin = FLT_MAX, wmax = -FLT_MAX;
@@ -425,10 +440,11 @@ static void skin_check(const d3d9_device *d, const d3d9_shader *vsh, const d3d9_
         attr_read(pos, vp, p);
         if (wt) attr_read(wt, vp, w);
         if (ix) attr_read(ix, vp, ind);
-        float wsum = w[0] + w[1] + w[2] + w[3];
+        float wsum = 0.0f;
+        for (int b = 0; b < bones; b++) wsum += w[b];
         if (wsum < wmin) wmin = wsum;
         if (wsum > wmax) wmax = wsum;
-        for (int b = 0; b < 4; b++) {
+        for (int b = 0; b < bones; b++) {
             int i = (int)floorf(ind[b]);
             if (i > max_index) max_index = i;
             if (i < 0 || i + 17 > 255) { bad_index++; continue; }
