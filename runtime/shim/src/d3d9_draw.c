@@ -283,16 +283,16 @@ static void trace_draw(const d3d9_device *d, const d3d9_draw_args *a, uint32_t n
         min_prims = m ? atoi(m) : 0;
         after_s = t ? atof(t) : 0.0;
     }
-    if (count >= limit || a->prim_count < (uint32_t)min_prims) return;
+    if (count >= limit) return;
+    struct timespec ts;   /* VT3_TRACE_AFTER counts from the first draw of the run */
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    double now_s = (double)ts.tv_sec + ts.tv_nsec * 1e-9;
+    if (first_s < 0.0) first_s = now_s;
+    if (now_s - first_s < after_s || a->prim_count < (uint32_t)min_prims) return;
     {
         d3d9_host *fh = d3d9_host_of(d->vs, D3D9_KIND_VSHADER);
         if (!trace_hash_match(fh ? fh->data : NULL)) return;
     }
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    double now_s = (double)ts.tv_sec + ts.tv_nsec * 1e-9;
-    if (first_s < 0.0) first_s = now_s;
-    if (now_s - first_s < after_s) return;
     count++;
     d3d9_host *trace_vh = d3d9_host_of(d->vs, D3D9_KIND_VSHADER);
     int trace_skinned = trace_vh && trace_vh->data && ((d3d9_shader *)trace_vh->data)->skinned;

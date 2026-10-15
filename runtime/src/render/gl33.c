@@ -488,16 +488,26 @@ static void gl_dims_of(vt3_tex t, int *w, int *h, GLuint *fbo)
 
 /* Window row of a top-first row y in target t. The back buffer's rows run bottom-up in GL; a
  * render texture keeps the D3D row order, because draws into it are flipped (vt3_flip). */
+/* Whether draws into target t are flipped (vt3_flip -1), so its rows keep the D3D order. The
+ * back buffer is not. VT3_SHADOW_NOFLIP=1 (debug) leaves half-float targets unflipped too. */
+static int gl_target_flipped(vt3_tex t)
+{
+    if (t == 0 || t > VT3_MAX_TEX || !g.tex[t - 1].rt) return 0;
+    static int noflip16 = -1;
+    if (noflip16 < 0) noflip16 = getenv("VT3_SHADOW_NOFLIP") != NULL;
+    return !(noflip16 && g.tex[t - 1].fmt == VT3_TEXFMT_RGBA16F);
+}
+
 static GLint gl_row_of(vt3_tex t, int y, int h)
 {
-    return (t == 0 || t > VT3_MAX_TEX || !g.tex[t - 1].rt) ? (GLint)(h - y) : (GLint)y;
+    return gl_target_flipped(t) ? (GLint)y : (GLint)(h - y);
 }
 
 /* GL's lower window row of the top-first rows [y0, y1) of target t: the back buffer runs
  * bottom-up, a render texture keeps the D3D row order (see gl_row_of). */
 static GLint gl_rect_low(vt3_tex t, int y0, int y1, int h)
 {
-    return (t == 0 || t > VT3_MAX_TEX || !g.tex[t - 1].rt) ? (GLint)(h - y1) : (GLint)y0;
+    return gl_target_flipped(t) ? (GLint)y0 : (GLint)(h - y1);
 }
 
 static void apply_scissor(void)
@@ -615,7 +625,7 @@ static void gl_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_te
     GLuint tfbo;
     gl_dims_of(g.tgt, &tw, &th, &tfbo);
     p_glUniform2f(g.u_logical_size, (GLfloat)tw, (GLfloat)th);
-    p_glUniform1f(g.u_flip, g.tgt ? -1.0f : 1.0f);
+    p_glUniform1f(g.u_flip, gl_target_flipped(g.tgt) ? -1.0f : 1.0f);
     int use_tex = (tex != 0 && tex <= VT3_MAX_TEX && g.tex[tex - 1].used);
     p_glUniform1i(g.u_use_tex, use_tex);
     p_glActiveTexture(GL_TEXTURE0);
@@ -722,7 +732,7 @@ static void apply_state(const vt3_rstate *s)
         }
     }
     int cull = s->cull;
-    if (g.tgt != 0 && (cull == 2 || cull == 3)) cull = 5 - cull;   /* flipped target: CW and CCW swap */
+    if (gl_target_flipped(g.tgt) && (cull == 2 || cull == 3)) cull = 5 - cull;   /* flipped target: CW and CCW swap */
     if (cull == 1) {                          /* D3DCULL_NONE */
         p_glDisable(GL_CULL_FACE);
     } else {
@@ -853,7 +863,7 @@ static void gl_draw_program(const vt3_draw *d)
     g.attr_mask = want;
 
     p_glUseProgram(p->id);
-    if (p->loc_flip >= 0) p_glUniform1f(p->loc_flip, g.tgt ? -1.0f : 1.0f);
+    if (p->loc_flip >= 0) p_glUniform1f(p->loc_flip, gl_target_flipped(g.tgt) ? -1.0f : 1.0f);
     if (p->loc_at_func >= 0) p_glUniform1i(p->loc_at_func, d->state.alpha_test ? d->state.alpha_func : 0);
     if (p->loc_at_ref >= 0) p_glUniform1f(p->loc_at_ref, (GLfloat)d->state.alpha_ref);
     if (p->loc_vsc >= 0) p_glUniform4fv(p->loc_vsc, VT3_CONST_REGS, d->vsc ? d->vsc : g.zero_consts);
