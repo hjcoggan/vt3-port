@@ -196,6 +196,7 @@ HRESULT WINAPI IDirect3DDevice9_Clear(GPTR This, DWORD rect_count, GPTR rects, D
     (void)rect_count; (void)rects; (void)stencil;
     d3d9_device *d = DEV(This);
     if (!d) return D3DERR_CHK_INVALIDCALL;
+    if (d->rt[0] && d->rt[0] != d->backbuffer) return S_OK;   /* render-to-texture is not implemented; see d3d9_draw */
     union { uint32_t u; float f; } zb;
     zb.u = z;
     d3d9_gpu_clear(color, (flags & D3DCLEAR_TARGET_CHK) != 0, (flags & D3DCLEAR_ZBUFFER_CHK) != 0, zb.f);

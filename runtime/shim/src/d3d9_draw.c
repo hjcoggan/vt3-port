@@ -273,6 +273,13 @@ static void trace_draw(const d3d9_device *d, const d3d9_draw_args *a, uint32_t n
 HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
 {
     if (!d3d9_gpu_ok()) return S_OK;   /* headless: nothing to draw into */
+    /* Only the back buffer is drawn. Render-to-texture is not implemented, so a draw aimed at a
+     * render texture (the shadow and depth passes) would land on screen. Skip it instead. */
+    if (d->rt[0] && d->rt[0] != d->backbuffer) {
+        static int once;
+        if (!warned_once(&once)) VT3_WARN("draw: render target is not the back buffer; skipped");
+        return S_OK;
+    }
     uint32_t nverts = prim_vertex_count(a->prim, a->prim_count);
     if (nverts == 0) {
         static int once;
