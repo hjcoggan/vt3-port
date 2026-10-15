@@ -518,6 +518,10 @@ HRESULT WINAPI IDirectSoundBuffer_GetCurrentPosition(GPTR This, GPTR pdwCurrentP
     if (!b) return DSERR_UNSUPPORTED;
     put32(pdwCurrentPlayCursor, play_cursor(b));
     put32(pdwCurrentWriteCursor, write_cursor(b));
+    if (dsound_trace())
+        VT3_INFO("DirectSound: GetCurrentPosition 0x%08x play %u write %u (playing %d) t=%llu ms thr %llu", (unsigned)This,
+                 (unsigned)play_cursor(b), (unsigned)write_cursor(b), b->playing,
+                 (unsigned long long)(now_ns() / 1000000u % 100000u), (unsigned long long)((uintptr_t)pthread_self() % 1000u));
     return DS_OK;
 }
 
@@ -595,6 +599,10 @@ HRESULT WINAPI IDirectSoundBuffer_Lock(GPTR This, DWORD dwOffset, DWORD dwBytes,
         off = 0;
         n = b->bytes;
     }
+    if (dsound_trace())
+        VT3_INFO("DirectSound: Lock 0x%08x offset %u bytes %u flags 0x%x (play %u) t=%llu ms thr %llu", (unsigned)This, (unsigned)off,
+                 (unsigned)n, (unsigned)dwFlags, (unsigned)play_cursor(b),
+                 (unsigned long long)(now_ns() / 1000000u % 100000u), (unsigned long long)((uintptr_t)pthread_self() % 1000u));
     if (!b->bytes || off >= b->bytes || n > b->bytes) return DSERR_INVALIDPARAM;
     uint32_t n1 = n, n2 = 0;
     if (off + n > b->bytes) {                     /* the region wraps past the end of the buffer */
@@ -636,6 +644,9 @@ HRESULT WINAPI IDirectSoundBuffer_SetCurrentPosition(GPTR This, DWORD dwNewPosit
     ds_buffer *b = buf_of(This);
     if (!b) return DSERR_UNSUPPORTED;
     if (dwNewPosition >= b->bytes) return DSERR_INVALIDPARAM;
+    if (dsound_trace())
+        VT3_INFO("DirectSound: SetCurrentPosition 0x%08x to %u (playing %d)", (unsigned)This, (unsigned)dwNewPosition,
+                 b->playing);
     b->pos = dwNewPosition;
     if (b->playing) {
         b->play_base = dwNewPosition;
