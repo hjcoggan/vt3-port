@@ -100,6 +100,8 @@ typedef struct vt3_rstate {
     int alpha_func;             /* D3DRS_ALPHAFUNC: D3DCMP_* */
     int alpha_ref;              /* D3DRS_ALPHAREF, 0..255 */
     int color_write;            /* D3DRS_COLORWRITEENABLE: bit 0 red, 1 green, 2 blue, 3 alpha */
+    int vp_x, vp_y, vp_w, vp_h; /* D3D viewport, logical pixels, top-left origin; vp_w 0 = the whole target */
+    float vp_min_z, vp_max_z;   /* its depth range */
 } vt3_rstate;
 
 typedef struct vt3_draw {

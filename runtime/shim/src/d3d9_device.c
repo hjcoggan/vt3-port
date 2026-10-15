@@ -205,6 +205,8 @@ HRESULT WINAPI IDirect3DDevice9_EndScene(GPTR This)
     return S_OK;
 }
 
+static void push_scissor(const d3d9_device *d);
+
 HRESULT WINAPI IDirect3DDevice9_Clear(GPTR This, DWORD rect_count, GPTR rects, DWORD flags,
                                       UINT color, DWORD z, DWORD stencil)
 {
@@ -218,7 +220,44 @@ HRESULT WINAPI IDirect3DDevice9_Clear(GPTR This, DWORD rect_count, GPTR rects, D
     d3d9_gpu_rt_bind(d3d9_surface_target(d->rt[0]));
     union { uint32_t u; float f; } zb;
     zb.u = z;
-    d3d9_gpu_clear(color, (flags & D3DCLEAR_TARGET_CHK) != 0, (flags & D3DCLEAR_ZBUFFER_CHK) != 0, zb.f);
+    int do_color = (flags & D3DCLEAR_TARGET_CHK) != 0, do_depth = (flags & D3DCLEAR_ZBUFFER_CHK) != 0;
+    /* D3D clears the viewport, or the rectangles given, clipped to it. The renderer's clear
+     * covers the target within the scissor, so each rectangle goes through the scissor. */
+    d3d9_surface *ts = d3d9_surface_of(d->rt[0]);
+    int tw = ts ? (int)ts->w : 0, th = ts ? (int)ts->h : 0;
+    int vx = 0, vy = 0, vw = tw, vh = th;
+    if (d->viewport[2] && d->viewport[3]) {
+        vx = (int)d->viewport[0];
+        vy = (int)d->viewport[1];
+        vw = (int)d->viewport[2];
+        vh = (int)d->viewport[3];
+    }
+    int use_rects = rect_count != 0 && rects != 0;
+    if (!use_rects && vx <= 0 && vy <= 0 && vx + vw >= tw && vy + vh >= th) {
+        d3d9_gpu_clear(color, do_color, do_depth, zb.f);
+        return S_OK;
+    }
+    for (DWORD i = 0; i < (use_rects ? rect_count : 1u); i++) {
+        int x0 = vx, y0 = vy, x1 = vx + vw, y1 = vy + vh;
+        if (use_rects) {   /* D3DRECT: x1, y1, x2, y2 */
+            int32_t r[4];
+            for (int k = 0; k < 4; k++) r[k] = (int32_t)d3d9_rd(rects, (uint32_t)(16 * i + 4 * k));
+            if (r[0] > x0) x0 = r[0];
+            if (r[1] > y0) y0 = r[1];
+            if (r[2] < x1) x1 = r[2];
+            if (r[3] < y1) y1 = r[3];
+        }
+        if (d->rs[D3DRS_CHK_SCISSORTESTENABLE] && d->scissor_set) {
+            if (d->scissor_rc[0] > x0) x0 = d->scissor_rc[0];
+            if (d->scissor_rc[1] > y0) y0 = d->scissor_rc[1];
+            if (d->scissor_rc[2] < x1) x1 = d->scissor_rc[2];
+            if (d->scissor_rc[3] < y1) y1 = d->scissor_rc[3];
+        }
+        if (x1 <= x0 || y1 <= y0) continue;
+        d3d9_gpu_set_scissor(1, x0, y0, x1 - x0, y1 - y0);
+        d3d9_gpu_clear(color, do_color, do_depth, zb.f);
+    }
+    push_scissor(d);   /* back to the game's own scissor state */
     return S_OK;
 }
 
@@ -252,6 +291,16 @@ HRESULT WINAPI IDirect3DDevice9_SetRenderTarget(GPTR This, DWORD RenderTargetInd
     d3d9_device *d = DEV(This);
     if (!d || RenderTargetIndex >= 4) return D3DERR_CHK_INVALIDCALL;
     d->rt[RenderTargetIndex] = pRenderTarget;
+    if (RenderTargetIndex == 0 && pRenderTarget) {   /* D3D resets the viewport to the whole new target */
+        d3d9_surface *ns = d3d9_surface_of(pRenderTarget);
+        if (ns) {
+            d->viewport[0] = d->viewport[1] = 0;
+            d->viewport[2] = ns->w;
+            d->viewport[3] = ns->h;
+            d->viewport[4] = 0x00000000u;   /* MinZ 0.0f */
+            d->viewport[5] = 0x3f800000u;   /* MaxZ 1.0f */
+        }
+    }
     if (getenv("VT3_TRACE_RTSEQ")) VT3_INFO("seq: set rt %u -> 0x%x", (unsigned)RenderTargetIndex, (unsigned)pRenderTarget);
     if (getenv("VT3_TRACE_RT")) {
         d3d9_surface *rs = pRenderTarget ? d3d9_surface_of(pRenderTarget) : NULL;

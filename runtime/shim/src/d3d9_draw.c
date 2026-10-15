@@ -214,6 +214,17 @@ static void fill_rstate(const d3d9_device *d, vt3_rstate *s)
     s->alpha_func = d->rs[25] ? (int)d->rs[25] : 8; /* D3DRS_ALPHAFUNC, default ALWAYS */
     s->alpha_ref = (int)(d->rs[24] & 0xFFu);         /* D3DRS_ALPHAREF */
     s->color_write = (int)(d->rs[168] & 0xFu);       /* D3DRS_COLORWRITEENABLE */
+    if (d->viewport[2] && d->viewport[3]) {          /* SetViewport; SetRenderTarget resets it */
+        union { uint32_t u; float f; } mn, mx;
+        mn.u = d->viewport[4];
+        mx.u = d->viewport[5];
+        s->vp_x = (int)d->viewport[0];
+        s->vp_y = (int)d->viewport[1];
+        s->vp_w = (int)d->viewport[2];
+        s->vp_h = (int)d->viewport[3];
+        s->vp_min_z = mn.f;
+        s->vp_max_z = mx.f;
+    }
 }
 
 /* The renderer binds 2D textures only. A cube texture on a sampler gets the zero texel, and the

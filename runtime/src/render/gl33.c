@@ -26,6 +26,7 @@
     X(void, glClear, (GLbitfield))                                                        \
     X(void, glViewport, (GLint, GLint, GLsizei, GLsizei))                                 \
     X(void, glScissor, (GLint, GLint, GLsizei, GLsizei))                                  \
+    X(void, glDepthRange, (GLclampd, GLclampd))                                           \
     X(void, glEnable, (GLenum))                                                           \
     X(void, glDisable, (GLenum))                                                          \
     X(void, glBlendFunc, (GLenum, GLenum))                                                \
@@ -492,6 +493,13 @@ static GLint gl_row_of(vt3_tex t, int y, int h)
     return (t == 0 || t > VT3_MAX_TEX || !g.tex[t - 1].rt) ? (GLint)(h - y) : (GLint)y;
 }
 
+/* GL's lower window row of the top-first rows [y0, y1) of target t: the back buffer runs
+ * bottom-up, a render texture keeps the D3D row order (see gl_row_of). */
+static GLint gl_rect_low(vt3_tex t, int y0, int y1, int h)
+{
+    return (t == 0 || t > VT3_MAX_TEX || !g.tex[t - 1].rt) ? (GLint)(h - y1) : (GLint)y0;
+}
+
 static void apply_scissor(void)
 {
     if (!g.scissor_on) {
@@ -510,7 +518,7 @@ static void apply_scissor(void)
     if (x1 < x0) x1 = x0;
     if (y1 < y0) y1 = y0;
     p_glEnable(GL_SCISSOR_TEST);
-    p_glScissor(x0, gl_row_of(g.tgt, y1, th), x1 - x0, y1 - y0);
+    p_glScissor(x0, gl_rect_low(g.tgt, y0, y1, th), x1 - x0, y1 - y0);
 }
 
 /* Binds the current render target (the back buffer, or a texture set by gl_rt_bind). */
@@ -701,6 +709,18 @@ static void apply_state(const vt3_rstate *s)
     p_glDepthMask(s->depth_write ? GL_TRUE : GL_FALSE);
     p_glColorMask((s->color_write & 1) != 0, (s->color_write & 2) != 0, (s->color_write & 4) != 0,
                   (s->color_write & 8) != 0);
+    {   /* the D3D viewport: a sub-rectangle of the target and a depth range; none = the whole target */
+        int tw, th;
+        GLuint fbo;
+        gl_dims_of(g.tgt, &tw, &th, &fbo);
+        if (s->vp_w > 0 && s->vp_h > 0) {
+            p_glViewport(s->vp_x, gl_rect_low(g.tgt, s->vp_y, s->vp_y + s->vp_h, th), s->vp_w, s->vp_h);
+            p_glDepthRange((GLclampd)s->vp_min_z, (GLclampd)s->vp_max_z);
+        } else {
+            p_glViewport(0, 0, tw, th);
+            p_glDepthRange(0.0, 1.0);
+        }
+    }
     int cull = s->cull;
     if (g.tgt != 0 && (cull == 2 || cull == 3)) cull = 5 - cull;   /* flipped target: CW and CCW swap */
     if (cull == 1) {                          /* D3DCULL_NONE */
