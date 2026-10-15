@@ -17,4 +17,11 @@ uint32_t d3dx_buffer_new(const void *bytes, uint32_t nbytes);
 /* Frees the data of an ID3DXConstantTable object (d3dx9_ctable.c). */
 void d3dx_ctab_free(void *data);
 
+/* A new ID3DXConstantTable from the CTAB comment of shader bytecode (host copy). 0 when out of memory. */
+uint32_t d3dx_ctable_object(const void *code, uint32_t bytes);
+
+/* The rebuilt bytecode for a source the game compiles at run time (d3dx9_rebuilt.c), or NULL. Key:
+ * the source's address in the game image, its length, the entry point, and the profile kind 'v' or 'p'. */
+const uint32_t *d3dx_rebuilt_lookup(uint32_t src, uint32_t len, const char *entry, char kind, uint32_t *ntokens);
+
 #endif /* VT3_SHIM_D3DX9_COMPILE_H */

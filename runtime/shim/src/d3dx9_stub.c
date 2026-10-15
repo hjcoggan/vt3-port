@@ -100,6 +100,20 @@ HRESULT WINAPI D3DXCompileShader(GPTR src_data, UINT data_len, GPTR defines, GPT
              src_data, (unsigned)data_len, entry, target, (unsigned)flags, defines ? "yes" : "no", include ? "yes" : "no");
     dump_source(src_data, data_len);
 
+    uint32_t rb_n = 0;
+    const uint32_t *rb = d3dx_rebuilt_lookup(src_data, data_len, entry, target[0], &rb_n);
+    if (rb) {
+        uint32_t blob = d3dx_buffer_new(rb, rb_n * 4u);
+        VT3_INFO("D3DXCompileShader: %s returns the rebuilt blob (%u bytes)", entry, (unsigned)(rb_n * 4u));
+        put32(ppShader, blob ? blob : d3d9_new_stub(D3D9_KIND_D3DXBUFFER, 0));
+        put32(ppErrorMsgs, 0);
+        if (ppConstantTable) {
+            uint32_t table = d3dx_ctable_object(rb, rb_n * 4u);
+            put32(ppConstantTable, table ? table : d3d9_new_stub(D3D9_KIND_D3DXCONSTTABLE, 0));
+        }
+        return S_OK;
+    }
+
     const vt3_shipped *sb = shipped_for(src_data, data_len, entry, target);
     if (sb) {
         const void *bytes = d3d9_gmem(sb->blob, sb->blob_len);

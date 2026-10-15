@@ -102,6 +102,15 @@ static uint8_t *copy_bytecode(GPTR code, uint32_t *bytes)
     return buf;
 }
 
+uint32_t d3dx_ctable_object(const void *code, uint32_t bytes)
+{
+    ctab_data *t = ctab_from_code((const uint8_t *)code, bytes);
+    if (!t) return 0;
+    GPTR obj = d3d9_obj_new(D3D9_KIND_D3DXCONSTTABLE, t, 0);
+    if (!obj) d3dx_ctab_free(t);
+    return obj;
+}
+
 HRESULT WINAPI D3DXGetShaderConstantTable(GPTR byte_code, GPTR constant_table)
 {
     if (!constant_table) return D3DERR_CHK_INVALIDCALL;
@@ -110,11 +119,9 @@ HRESULT WINAPI D3DXGetShaderConstantTable(GPTR byte_code, GPTR constant_table)
     uint32_t bytes = 0;
     uint8_t *code = copy_bytecode(byte_code, &bytes);
     if (!code) return D3DERR_CHK_INVALIDCALL;
-    ctab_data *t = ctab_from_code(code, bytes);
+    uint32_t obj = d3dx_ctable_object(code, bytes);
     free(code);
-    if (!t) return E_OUTOFMEMORY_D3D9;
-    GPTR obj = d3d9_obj_new(D3D9_KIND_D3DXCONSTTABLE, t, 0);
-    if (!obj) { d3dx_ctab_free(t); return E_OUTOFMEMORY_D3D9; }
+    if (!obj) return E_OUTOFMEMORY_D3D9;
     vt3s_store_u32(constant_table, obj);
     return S_OK;
 }

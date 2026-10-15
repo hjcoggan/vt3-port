@@ -67,6 +67,7 @@ add_library(vt3shim STATIC
     shim/src/d3dx9_math.c
     shim/src/d3dx9_compile.c
     shim/src/d3dx9_ctable.c
+    shim/src/d3dx9_rebuilt.c
     shim/src/d3dx9_stub.c
     shim/src/dsound_stub.c
     shim/src/dinput8.c
