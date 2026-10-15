@@ -57,6 +57,13 @@ typedef struct vt3_sm2_shader {
 
 /* Translate one shader. Returns 0 on success. On failure, out->error holds why. */
 int  vt3_sm2_translate(const uint32_t *tokens, size_t ntokens, vt3_sm2_shader *out);
+
+/* The same, with flags. VT3_SM2_FLAG_VULKAN writes GLSL 450 for SPIR-V (see the note above):
+ * constants in uniform blocks (binding 0 for vs, 1 for ps), samplers in set 1 at their index,
+ * varyings at fixed locations (D0 = 0, D1 = 1, T# = 2 + #), clip space as Vulkan's (z kept,
+ * y negated so that the image is D3D's orientation). */
+#define VT3_SM2_FLAG_VULKAN 1u
+int  vt3_sm2_translate_ex(const uint32_t *tokens, size_t ntokens, vt3_sm2_shader *out, unsigned flags);
 void vt3_sm2_free(vt3_sm2_shader *out);
 
 /*
