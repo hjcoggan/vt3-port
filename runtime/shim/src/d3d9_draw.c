@@ -139,7 +139,7 @@ static int layout_from_decl(const d3d9_decl *dc, vt3_vlayout *lay, uint32_t stri
 static void copy_vertices(uint8_t *dst, const uint8_t *src, uint32_t n, uint32_t stride,
                           const d3d9_decl *dc)
 {
-    memcpy(dst, src, (size_t)n * stride);
+    if (dst != src) memcpy(dst, src, (size_t)n * stride);
     for (uint32_t i = 0; i < dc->n; i++) {
         const uint8_t *e = dc->el[i];
         if ((e[0] | (e[1] << 8)) != 0 || e[4] != DT_D3DCOLOR) continue;
@@ -382,7 +382,10 @@ static void skin_check(const d3d9_device *d, const d3d9_shader *vsh, const d3d9_
     clock_gettime(CLOCK_MONOTONIC, &ts_now);
     double now_s = (double)ts_now.tv_sec + ts_now.tv_nsec * 1e-9;
     if (first_s < 0.0) first_s = now_s;
-    if (now_s - first_s < after_s || !vsh->skinned || !trace_hash_match(vsh)) return;
+    /* Skinned draws, or any draw whose vertex shader VT3_TRACE_HASH names (positions then go
+     * straight through c0..c3, as a rigid mesh's shader does). */
+    if (now_s - first_s < after_s || !trace_hash_match(vsh)) return;
+    if (!vsh->skinned && !getenv("VT3_TRACE_HASH")) return;
     if (isnan(d->vsc[0][0]) && !getenv("VT3_SKIN_NAN")) return;   /* a NaN camera draws nothing; VT3_SKIN_NAN keeps them */
     const vt3_vattr *pos = NULL, *wt = NULL, *ix = NULL;
     for (int k = 0; k < lay->count; k++) {
@@ -429,6 +432,7 @@ static void skin_check(const d3d9_device *d, const d3d9_shader *vsh, const d3d9_
     /* The bones per vertex are the shader's skinning loop count (its defi i0): 4 or 2 in this game. */
     int bones = vsh->sm.idef_set[0] ? (int)vsh->sm.idef[0][0] : 4;
     if (bones < 1 || bones > 4) bones = 4;
+    if (!vsh->skinned) bones = 0;   /* rigid: the position is used as is */
     float lo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, hi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
     float rlo[2] = { FLT_MAX, FLT_MAX }, rhi[2] = { -FLT_MAX, -FLT_MAX };
     float wmin = FLT_MAX, wmax = -FLT_MAX;
@@ -472,6 +476,8 @@ static void skin_check(const d3d9_device *d, const d3d9_shader *vsh, const d3d9_
             sn[1] += w[b] * (n[0] * r1[0] + n[1] * r1[1] + n[2] * r1[2]);
             sn[2] += w[b] * (n[0] * r2[0] + n[1] * r2[1] + n[2] * r2[2]);
         }
+        if (!bones)
+            for (int c = 0; c < 3; c++) { s[c] = p[c]; sn[c] = n[c]; }
         for (int c = 0; c < 3; c++) {
             if (s[c] < wlo[c]) wlo[c] = s[c];
             if (s[c] > whi[c]) whi[c] = s[c];
@@ -669,6 +675,48 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     if (stride == 0) stride = dc->stride[0];
     if (stride == 0) return D3DERR_CHK_INVALIDCALL;
 
+    /* Several vertex streams (the game's cloth keeps positions and normals in a dynamic stream
+     * and the UVs in another): each vertex is merged into one interleaved vertex, the streams in
+     * order, and the declaration is rewritten to match, so the rest of the path sees stream 0. */
+    d3d9_decl merged;
+    int multi = 0;
+    uint32_t sbase[16] = { 0 }, sstride[16] = { 0 };
+    const uint8_t *sptr[16] = { 0 };
+    if (!from_user) {
+        uint32_t used = 0;
+        for (uint32_t i = 0; i < dc->n; i++) {
+            uint32_t s = dc->el[i][0] | (dc->el[i][1] << 8);
+            if (s < 16) used |= 1u << s;
+        }
+        if (used & ~1u) {
+            uint32_t off = 0;
+            for (uint32_t s = 0; s < 16; s++) {
+                if (!(used & (1u << s))) continue;
+                d3d9_buffer *sb = d3d9_buffer_of(d->streams[s][0]);
+                uint32_t st = d->streams[s][2] ? d->streams[s][2] : dc->stride[s];
+                if (!sb || !sb->data || st == 0) return D3DERR_CHK_INVALIDCALL;
+                sptr[s] = vt3_g2h(sb->data + d->streams[s][1]);
+                sstride[s] = st;
+                sbase[s] = off;
+                off += st;
+            }
+            merged = *dc;
+            for (uint32_t i = 0; i < merged.n; i++) {
+                uint8_t *e = merged.el[i];
+                uint32_t s = e[0] | (e[1] << 8);
+                if (s >= 16) continue;
+                uint32_t o = (uint32_t)(e[2] | (e[3] << 8)) + sbase[s];
+                e[0] = e[1] = 0;
+                e[2] = (uint8_t)o;
+                e[3] = (uint8_t)(o >> 8);
+            }
+            merged.stride[0] = off;
+            dc = &merged;
+            stride = off;
+            multi = 1;
+        }
+    }
+
     /* ---- vertex range and index list ---- */
     uint32_t first_v = 0, count_v = 0;
     uint16_t *idx16 = NULL;
@@ -821,7 +869,15 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     size_t bytes = (size_t)nv * stride;
     uint8_t *vcopy = malloc(bytes ? bytes : 1);
     if (!vcopy) { free(idx16); return E_OUTOFMEMORY_D3D9; }
-    copy_vertices(vcopy, vbase + (size_t)v0 * stride, nv, stride, dc);
+    if (multi) {
+        for (uint32_t v = 0; v < nv; v++)
+            for (uint32_t s = 0; s < 16; s++)
+                if (sptr[s])
+                    memcpy(vcopy + (size_t)v * stride + sbase[s], sptr[s] + (size_t)(v0 + v) * sstride[s], sstride[s]);
+        copy_vertices(vcopy, vcopy, nv, stride, dc);   /* in place: the D3DCOLOR swaps only */
+    } else {
+        copy_vertices(vcopy, vbase + (size_t)v0 * stride, nv, stride, dc);
+    }
     (void)swap;
     skin_check(d, vsh, a, &lay, vcopy, nv, stride, use_idx ? idx16 : NULL, use_idx ? nidx : nverts,
                prim_list != PRIM_TRIANGLESTRIP);
