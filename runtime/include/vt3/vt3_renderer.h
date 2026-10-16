@@ -172,8 +172,10 @@ void vt3_gfx_blit(vt3_tex dst, vt3_rect dr, vt3_tex src, vt3_rect sr, int neares
 void vt3_gfx_set_scissor(int enable, vt3_rect r);
 
 extern const vt3_gfx_ops vt3_gfx_gl33;
+extern const vt3_gfx_ops vt3_gfx_vk;   /* compile-time present: Vulkan on Android, MoltenVK on macOS */
 
-/* The renderer the shim uses: GL 3.3 on the desktop, Vulkan on Android. Each platform defines it. */
+/* The renderer the shim uses: GL 3.3 on the desktop by default (VT3_RENDERER=vulkan selects the
+ * Vulkan backend), Vulkan on Android. Each platform defines it. */
 const vt3_gfx_ops *vt3_gfx_default_ops(void);
 /* Translator flags for the active renderer: VT3_SM2_FLAG_VULKAN when it runs SPIR-V, else 0. */
 unsigned vt3_gfx_glsl_flags(void);

@@ -5,6 +5,10 @@
 #include <string.h>
 
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_vulkan.h>
+
+#include <stdlib.h>
+#include <string.h>
 
 /* Defined in src/input/input_sdl.c */
 void vt3_input_sdl_event(const SDL_Event *e);
@@ -15,6 +19,8 @@ void vt3_input_sdl_open_attached(void);     /* gamepads attached before the pump
 
 static SDL_Window *g_win;
 static SDL_GLContext g_ctx;
+static int g_vk;              /* VT3_RENDERER=vulkan: a surface window, no GL context; the renderers
+                               * decide the backend themselves and read the same variable. */
 
 void vt3_config_defaults(vt3_config *c)
 {
@@ -32,6 +38,12 @@ void vt3_config_defaults(vt3_config *c)
     c->game_root = NULL;
 }
 
+static int wants_vulkan(void)
+{
+    const char *r = getenv("VT3_RENDERER");
+    return r && strcmp(r, "vulkan") == 0;
+}
+
 int vt3_platform_init(const vt3_config *c)
 {
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
@@ -39,27 +51,33 @@ int vt3_platform_init(const vt3_config *c)
         return -1;
     }
 
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    /* macOS only gives a 3.2+ core context when forward-compatible is set. */
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    g_vk = wants_vulkan();
+    if (!g_vk) {                 /* the GL path must see exactly the context it used to */
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+        /* macOS only gives a 3.2+ core context when forward-compatible is set. */
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
+        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    }
 
     g_win = SDL_CreateWindow(c->title, c->window_w, c->window_h,
-                             SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+                             (g_vk ? SDL_WINDOW_VULKAN : SDL_WINDOW_OPENGL) | SDL_WINDOW_RESIZABLE |
+                                 SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!g_win) {
         VT3_ERROR("SDL_CreateWindow failed: %s", SDL_GetError());
         return -1;
     }
 
-    g_ctx = SDL_GL_CreateContext(g_win);
-    if (!g_ctx) {
-        VT3_ERROR("SDL_GL_CreateContext (3.3 core) failed: %s", SDL_GetError());
-        return -1;
+    if (!g_vk) {
+        g_ctx = SDL_GL_CreateContext(g_win);
+        if (!g_ctx) {
+            VT3_ERROR("SDL_GL_CreateContext (3.3 core) failed: %s", SDL_GetError());
+            return -1;
+        }
+        SDL_GL_MakeCurrent(g_win, g_ctx);
+        SDL_GL_SetSwapInterval(c->vsync ? 1 : 0);
     }
-    SDL_GL_MakeCurrent(g_win, g_ctx);
-    SDL_GL_SetSwapInterval(c->vsync ? 1 : 0);
 
     int pw, ph;
     SDL_GetWindowSizeInPixels(g_win, &pw, &ph);
@@ -78,7 +96,6 @@ void vt3_platform_shutdown(void)
     g_win = NULL;
     SDL_Quit();
 }
-
 /* Window events waiting for the shim. The pump fills it; vt3_platform_next_event drains it. */
 #define VT3_EVQ_CAP 64
 static vt3_event g_evq[VT3_EVQ_CAP];
@@ -144,10 +161,23 @@ void vt3_platform_drawable_size(int *w, int *h)
 
 void vt3_platform_swap(void)
 {
+    if (g_vk) return;   /* the Vulkan renderer presents through its own queue; there is no GL context */
     SDL_GL_SwapWindow(g_win);
 }
 
 void *vt3_platform_gl_proc(const char *name)
 {
     return (void *)SDL_GL_GetProcAddress(name);
+}
+
+const char *const *vt3_platform_vk_instance_extensions(uint32_t *count)
+{
+    return g_vk && g_win ? SDL_Vulkan_GetInstanceExtensions(count) : NULL;
+}
+
+int vt3_platform_vk_create_surface(void *instance, void *surface)
+{
+    if (!g_vk || !g_win) return -1;
+    /* SDL owns the CAMetalLayer the surface lives on, so it creates it too. */
+    return SDL_Vulkan_CreateSurface(g_win, (VkInstance)instance, NULL, (VkSurfaceKHR *)surface) ? 0 : -1;
 }

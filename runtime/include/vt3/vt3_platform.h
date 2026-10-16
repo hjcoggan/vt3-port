@@ -18,6 +18,8 @@ typedef struct vt3_config {
     const char *game_root;       /* NULL = no game data (no game-root mount) */
 } vt3_config;
 
+#include <stdint.h>
+
 void vt3_config_defaults(vt3_config *c);
 
 int  vt3_platform_init(const vt3_config *c);   /* window, GL 3.3 core context */
@@ -39,5 +41,11 @@ void vt3_platform_swap(void);
 void *vt3_platform_gl_proc(const char *name);
 /* Android: the ANativeWindow the Vulkan renderer presents to, or NULL before the window exists. */
 void *vt3_platform_native_window(void);
+/* Vulkan window support on the SDL platform (VT3_RENDERER=vulkan): the instance extensions the
+ * window needs (SDL_Vulkan_GetInstanceExtensions), and a VkSurfaceKHR for the window. NULL/-1
+ * before the window exists or when the platform is not Vulkan-ready. Android uses
+ * vt3_platform_native_window instead. Passing handles as void* keeps vulkan.h out of this header. */
+const char *const *vt3_platform_vk_instance_extensions(uint32_t *count);
+int vt3_platform_vk_create_surface(void *instance, void *surface);
 
 #endif /* VT3_PLATFORM_H */

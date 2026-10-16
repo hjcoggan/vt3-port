@@ -16,12 +16,13 @@
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 
+#ifdef __ANDROID__
 #ifndef VK_USE_PLATFORM_ANDROID_KHR
 #define VK_USE_PLATFORM_ANDROID_KHR 1
 #endif
-#include <vulkan/vulkan.h>
-
 #include <android/native_window.h>
+#endif
+#include <vulkan/vulkan.h>
 
 #include "vt3/vt3_builtin.h"
 #include "vt3/vt3_log.h"
@@ -33,6 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <SDL3/SDL.h>
 
 #define NFRAMES 2
 #define VT3_CONST_REGS 256
@@ -52,6 +54,9 @@
 #define TEX_ZERO_CUBE (VT3_MAX_TEX + 2)
 #define TEX_SLOTS (VT3_MAX_TEX + 3)
 #define TL_VERTEX_BYTES 28u
+#ifndef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
+#define VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME "VK_KHR_portability_subset"
+#endif
 
 #define VKT(expr, what)                                                  \
     do {                                                                 \
@@ -130,7 +135,11 @@ typedef struct vk_frame {
 
 static struct {
     int logical_w, logical_h;
+#ifdef __ANDROID__
     ANativeWindow *window;
+#else
+    void *window;                  /* unused on the desktop */
+#endif
     VkInstance inst;
     VkSurfaceKHR surf;
     VkPhysicalDevice phys;
@@ -461,10 +470,12 @@ static int create_swapchain(void)
     VkSurfaceCapabilitiesKHR caps;
     VKT(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g.phys, g.surf, &caps), "surface capabilities");
     VkExtent2D ext = caps.currentExtent;
+#ifdef __ANDROID__
     if (ext.width == 0xFFFFFFFFu) {
         ext.width = (uint32_t)ANativeWindow_getWidth(g.window);
         ext.height = (uint32_t)ANativeWindow_getHeight(g.window);
     }
+#endif
     if (ext.width == 0 || ext.height == 0) return -1;
 
     uint32_t nfmt = 0;
@@ -1525,24 +1536,54 @@ static int vk_init(int logical_w, int logical_h)
 {
     g.logical_w = logical_w;
     g.logical_h = logical_h;
+#ifdef __ANDROID__
     g.window = vt3_platform_native_window();
     if (!g.window) {
         VT3_ERROR("vulkan: no window yet");
         return -1;
     }
+#endif
+
 
     VkApplicationInfo app = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
     app.pApplicationName = "vt3";
     app.apiVersion = VK_API_VERSION_1_1;
+#ifdef __ANDROID__
     const char *iext[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_ANDROID_SURFACE_EXTENSION_NAME };
     VkInstanceCreateInfo ici = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
     ici.pApplicationInfo = &app;
     ici.enabledExtensionCount = 2;
     ici.ppEnabledExtensionNames = iext;
+#else
+    /* SDL names the surface extensions the window needs (VK_KHR_surface + VK_EXT_metal_surface on
+     * macOS). MoltenVK's devices are portability devices: without the enumeration opt-in they are
+     * hidden and vkEnumeratePhysicalDevices finds nothing. */
+    const char *iext[8];
+    uint32_t n_ext = 0;
+    const char *const *sdl_ext = vt3_platform_vk_instance_extensions(&n_ext);
+    if (!sdl_ext) {
+        VT3_ERROR("vulkan: no window or no surface extensions (SDL_WINDOW_VULKAN missing?)");
+        return -1;
+    }
+    for (uint32_t i = 0; i < n_ext && n_ext < 7; i++) iext[n_ext++] = sdl_ext[i];
+    iext[n_ext++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+    VkInstanceCreateInfo ici = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
+    ici.flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
+    ici.pApplicationInfo = &app;
+    ici.enabledExtensionCount = n_ext;
+    ici.ppEnabledExtensionNames = iext;
     VKT(vkCreateInstance(&ici, NULL, &g.inst), "vkCreateInstance");
+#ifdef __ANDROID__
     VkAndroidSurfaceCreateInfoKHR asci = { VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR };
     asci.window = g.window;
     VKT(vkCreateAndroidSurfaceKHR(g.inst, &asci, NULL, &g.surf), "vkCreateAndroidSurfaceKHR");
+#else
+    if (vt3_platform_vk_create_surface(g.inst, &g.surf) != 0) {
+        VT3_ERROR("vulkan: SDL_Vulkan_CreateSurface failed: %s", SDL_GetError());
+        return -1;
+    }
+#endif
 
     uint32_t ndev = 0;
     vkEnumeratePhysicalDevices(g.inst, &ndev, NULL);
@@ -1576,11 +1617,32 @@ static int vk_init(int logical_w, int logical_h)
     qci.queueFamilyIndex = g.qfam;
     qci.queueCount = 1;
     qci.pQueuePriorities = &prio;
-    const char *dext[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    const char *dext[4] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    uint32_t ndext = 1;
+#ifndef __ANDROID__
+    /* MoltenVK advertises VK_KHR_portability_subset only on devices that need it; enabling it where
+     * it does not exist would make vkCreateDevice fail, so it is enabled when the device lists it. */
+    char subset_name[VK_MAX_EXTENSION_NAME_SIZE];
+    uint32_t n_dev_ext = 0;
+    vkEnumerateDeviceExtensionProperties(g.phys, NULL, &n_dev_ext, NULL);
+    if (n_dev_ext) {
+        VkExtensionProperties *ex = malloc(n_dev_ext * sizeof *ex);
+        if (ex && vkEnumerateDeviceExtensionProperties(g.phys, NULL, &n_dev_ext, ex) == VK_SUCCESS) {
+            for (uint32_t i = 0; i < n_dev_ext; i++) {
+                if (strcmp(ex[i].extensionName, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME) == 0) {
+                    snprintf(subset_name, sizeof subset_name, "%s", ex[i].extensionName);
+                    dext[ndext++] = subset_name;
+                    break;
+                }
+            }
+        }
+        free(ex);
+    }
+#endif
     VkDeviceCreateInfo dci = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
-    dci.enabledExtensionCount = 1;
+    dci.enabledExtensionCount = ndext;
     dci.ppEnabledExtensionNames = dext;
     VKT(vkCreateDevice(g.phys, &dci, NULL, &g.dev), "vkCreateDevice");
     vkGetDeviceQueue(g.dev, g.qfam, 0, &g.queue);
@@ -1846,7 +1908,10 @@ const vt3_gfx_ops vt3_gfx_vk = {
     .glsl_vulkan = 1,
 };
 
+#ifdef __ANDROID__
+/* On Android there is no GL backend and no environment variable: Vulkan is the only renderer. */
 const vt3_gfx_ops *vt3_gfx_default_ops(void)
 {
     return &vt3_gfx_vk;
 }
+#endif

@@ -21,6 +21,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Android")
 else()
     set(VT3_ANDROID OFF)
     find_package(SDL3 REQUIRED CONFIG)
+    # The desktop build carries the Vulkan backend too (MoltenVK on macOS): it is selected at run
+    # time with VT3_RENDERER=vulkan, while GL stays the default.
+    find_package(Vulkan REQUIRED)
 endif()
 
 set(VT3_WARNINGS "")
@@ -50,6 +53,7 @@ if(VT3_ANDROID)
 else()
     set(VT3_CORE_PLATFORM
         src/render/gl33.c
+        src/render/vk.c
         src/audio/audio_sdl.c
         src/input/input_sdl.c
         src/platform/platform_sdl.c
@@ -61,7 +65,7 @@ if(VT3_ANDROID)
     target_link_libraries(vt3core PUBLIC android log aaudio m)
     target_include_directories(vt3core PRIVATE ${ANDROID_NDK}/sources/android/native_app_glue)
 else()
-    target_link_libraries(vt3core PUBLIC SDL3::SDL3)
+    target_link_libraries(vt3core PUBLIC SDL3::SDL3 Vulkan::Vulkan)
 endif()
 target_compile_options(vt3core PRIVATE ${VT3_WARNINGS})
 
