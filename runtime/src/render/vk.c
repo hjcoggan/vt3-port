@@ -52,8 +52,8 @@
 #define MODULE_MAX 1024
 #define PACK_MAX 2048
 #define DESC_SETS_PER_FRAME 8192
-#define VB_RING (16u << 20)            /* per frame */
-#define IB_RING (2u << 20)             /* per frame */
+#define VB_RING (32u << 20)            /* per frame: a busy frame redraws characters for the shadow passes */
+#define IB_RING (16u << 20)            /* per frame: the index ring filled and dropped draws at 2 MB */
 #define UBO_RING (16u << 20)           /* per frame */
 #define VS_BLOCK_BYTES 4416u           /* vsc[256] + vsi[16] + vsb4[4], std140 */
 #define PS_BLOCK_BYTES 4432u           /* psc[256] + psi[16] + psb4[4] + at_func + at_ref */
@@ -1365,7 +1365,15 @@ static VkDescriptorSet alloc_set1(vk_frame *f, uint8_t cube_mask, uint16_t decla
     for (int n = 0; n < VT3_MAX_SAMPLERS; n++) {
         int want_cube = (cube_mask >> n) & 1;
         info[n].sampler = g.samp;
-        info[n].imageView = resolve_view(samplers && ((declared >> n) & 1) ? samplers[n] : 0, want_cube);
+        vt3_tex st = samplers && ((declared >> n) & 1) ? samplers[n] : 0;
+        /* A declared sampler that reads white is a texture the game expects and we do not have. */
+        if ((declared >> n) & 1) {
+            int missing = st == 0 || (st <= VT3_MAX_TEX && !g.tex[st - 1].used);
+            int self = st != 0 && st <= VT3_MAX_TEX && g.tex[st - 1].rt && st == g.tgt;
+            if (missing) VT3_WARN_ONCE("vk: sampler %d has no texture (white), handle %u", n, (unsigned)st);
+            if (self) VT3_WARN_ONCE("vk: sampler %d samples the target it draws into (white), handle %u", n, (unsigned)st);
+        }
+        info[n].imageView = resolve_view(st, want_cube);
         info[n].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         memset(&ws[n], 0, sizeof ws[n]);
         ws[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1600,21 +1608,21 @@ static void vk_draw_program_impl(const vt3_draw *d)
 
     /* Vertices, then indices, in the frame's rings. */
     uint32_t vbytes = (d->vertex_bytes + 15u) & ~15u;
-    if (f->vb_used + vbytes > VB_RING) return;
+    if (f->vb_used + vbytes > VB_RING) { VT3_WARN_ONCE("vk: vertex ring full, draw dropped"); return; }
     uint32_t voff = f->vb_base + f->vb_used;
     memcpy(g.vb_ptr + voff, d->vertices, d->vertex_bytes);
     f->vb_used += vbytes;
     uint32_t ioff = 0;
     if (d->indices) {
         uint32_t ibytes = (d->count * 2u + 15u) & ~15u;
-        if (f->ib_used + ibytes > IB_RING) return;
+        if (f->ib_used + ibytes > IB_RING) { VT3_WARN_ONCE("vk: index ring full, draw dropped"); return; }
         ioff = f->ib_base + f->ib_used;
         memcpy(g.ib_ptr + ioff, d->indices, d->count * 2u);
         f->ib_used += ibytes;
     }
 
     /* The constant blocks, std140 as the translator declares them. */
-    if (f->ubo_used + 2u * UBO_SLOT > UBO_RING) return;
+    if (f->ubo_used + 2u * UBO_SLOT > UBO_RING) { VT3_WARN_ONCE("vk: uniform ring full, draw dropped"); return; }
     uint32_t vs_off = f->ubo_base + f->ubo_used;
     uint32_t ps_off = vs_off + UBO_SLOT;
     f->ubo_used += 2u * UBO_SLOT;
@@ -1641,7 +1649,7 @@ static void vk_draw_program_impl(const vt3_draw *d)
     vk_tex *tgt = rt_of(g.tgt);
     VkPipeline pipe = get_pipeline(d->prog, p->vs, p->ps, d->layout, 0, &d->state,
                                    d->prim == VT3_PRIM_TRIANGLESTRIP, tgt ? (uint32_t)tgt->rpk : RPK_RGBA8);
-    if (!set1 || !pipe) return;
+    if (!set1 || !pipe) { VT3_WARN_ONCE("vk: no descriptor set or pipeline, draw dropped"); return; }
 
     VkCommandBuffer cb = f->cmd;
     VkRect2D sc = current_scissor();

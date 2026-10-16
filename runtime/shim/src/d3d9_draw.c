@@ -667,7 +667,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         vbase = a->up_vertices;
     } else {
         d3d9_buffer *vb = d3d9_buffer_of(d->streams[0][0]);
-        if (!vb || !vb->data) return D3DERR_CHK_INVALIDCALL;
+        if (!vb || !vb->data) { VT3_WARN_ONCE("draw: stream 0 unbound, draw skipped"); return D3DERR_CHK_INVALIDCALL; }
         vbase = vt3_g2h(vb->data + d->streams[0][1]);
         stride = d->streams[0][2];
         if (stride == 0 && d->decl) {
@@ -705,7 +705,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
                 if (!(used & (1u << s))) continue;
                 d3d9_buffer *sb = d3d9_buffer_of(d->streams[s][0]);
                 uint32_t st = d->streams[s][2] ? d->streams[s][2] : dc->stride[s];
-                if (!sb || !sb->data || st == 0) return D3DERR_CHK_INVALIDCALL;
+                if (!sb || !sb->data || st == 0) { VT3_WARN_ONCE("draw: stream %d unbound, draw skipped", s); return D3DERR_CHK_INVALIDCALL; }
                 sptr[s] = vt3_g2h(sb->data + d->streams[s][1]);
                 sstride[s] = st;
                 sbase[s] = off;
@@ -740,7 +740,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
             fmt = a->up_index_format;
         } else {
             d3d9_buffer *ib = d3d9_buffer_of(d->indices);
-            if (!ib || !ib->data) return D3DERR_CHK_INVALIDCALL;
+            if (!ib || !ib->data) { VT3_WARN_ONCE("draw: index buffer unbound, draw skipped"); return D3DERR_CHK_INVALIDCALL; }
             fmt = ib->fvf_or_fmt;
             ibase = vt3_g2h(ib->data);
         }
