@@ -47,5 +47,9 @@ void *vt3_platform_native_window(void);
  * vt3_platform_native_window instead. Passing handles as void* keeps vulkan.h out of this header. */
 const char *const *vt3_platform_vk_instance_extensions(uint32_t *count);
 int vt3_platform_vk_create_surface(void *instance, void *surface);
+/* 1 when the window is a Vulkan surface window. Set by vt3_platform_init. */
+int vt3_platform_is_vulkan(void);
+/* Desktop: 1 when a Vulkan instance can be created here (the loader and an ICD are present). */
+int vt3_vk_probe(void);
 
 #endif /* VT3_PLATFORM_H */

@@ -2368,6 +2368,28 @@ static void vk_blit(vt3_tex dst, vt3_rect dr, vt3_tex src, vt3_rect sr, int near
 
 /* ---- the ops table ------------------------------------------------------------------ */
 
+#ifndef __ANDROID__
+/* Can a Vulkan instance be made here? The window is created before the renderer, so the platform
+ * asks this first: MoltenVK answers on macOS, and a machine with no ICD falls back to OpenGL. */
+int vt3_vk_probe(void)
+{
+    const char *ext[] = { VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME };
+    VkApplicationInfo app = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
+    app.apiVersion = VK_API_VERSION_1_1;
+    VkInstanceCreateInfo ci = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
+    ci.flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    ci.pApplicationInfo = &app;
+    ci.enabledExtensionCount = 1;
+    ci.ppEnabledExtensionNames = ext;
+    VkInstance inst = VK_NULL_HANDLE;
+    if (vkCreateInstance(&ci, NULL, &inst) != VK_SUCCESS) return 0;
+    uint32_t n = 0;
+    VkResult r = vkEnumeratePhysicalDevices(inst, &n, NULL);
+    vkDestroyInstance(inst, NULL);
+    return r == VK_SUCCESS && n > 0;
+}
+#endif
+
 const vt3_gfx_ops vt3_gfx_vk = {
     .name = "Vulkan 1.1",
     .init = vk_init,

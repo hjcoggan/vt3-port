@@ -928,13 +928,11 @@ static void gl_clear_depth(float depth)
     p_glClear(GL_DEPTH_BUFFER_BIT);
 }
 
-/* The backend the shim uses. GL stays the default; VT3_RENDERER=vulkan picks the Vulkan
- * backend, which is part of the desktop build as well (MoltenVK on macOS). */
+/* The backend the shim uses. The platform decides (Vulkan by default, see wants_vulkan in
+ * platform_sdl.c), because the window kind has to match the backend. */
 const vt3_gfx_ops *vt3_gfx_default_ops(void)
 {
-    const char *r = getenv("VT3_RENDERER");
-    if (r && strcmp(r, "vulkan") == 0) return &vt3_gfx_vk;
-    return &vt3_gfx_gl33;
+    return vt3_platform_is_vulkan() ? &vt3_gfx_vk : &vt3_gfx_gl33;
 }
 
 const vt3_gfx_ops vt3_gfx_gl33 = {

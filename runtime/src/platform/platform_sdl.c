@@ -19,8 +19,8 @@ void vt3_input_sdl_open_attached(void);     /* gamepads attached before the pump
 
 static SDL_Window *g_win;
 static SDL_GLContext g_ctx;
-static int g_vk;              /* VT3_RENDERER=vulkan: a surface window, no GL context; the renderers
-                               * decide the backend themselves and read the same variable. */
+static int g_vk;              /* Vulkan: a surface window, no GL context. The renderer reads
+                               * vt3_platform_is_vulkan() to pick its backend. */
 
 void vt3_config_defaults(vt3_config *c)
 {
@@ -38,10 +38,19 @@ void vt3_config_defaults(vt3_config *c)
     c->game_root = NULL;
 }
 
+/* Vulkan is the desktop default when an instance can be made here (MoltenVK on macOS), and OpenGL
+ * is the fallback. VT3_RENDERER=gl forces OpenGL and VT3_RENDERER=vulkan forces Vulkan. */
 static int wants_vulkan(void)
 {
     const char *r = getenv("VT3_RENDERER");
-    return r && strcmp(r, "vulkan") == 0;
+    if (r && strcmp(r, "gl") == 0) return 0;
+    if (r && strcmp(r, "vulkan") == 0) return 1;
+    return vt3_vk_probe();
+}
+
+int vt3_platform_is_vulkan(void)
+{
+    return g_vk;
 }
 
 int vt3_platform_init(const vt3_config *c)
