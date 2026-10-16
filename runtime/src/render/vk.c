@@ -44,7 +44,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <SDL3/SDL.h>
 
 #define NFRAMES 2
 #define VT3_CONST_REGS 256
@@ -1855,22 +1854,23 @@ static int vk_init(int logical_w, int logical_h)
     app.apiVersion = VK_API_VERSION_1_1;
 #ifdef __ANDROID__
     const char *iext[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_ANDROID_SURFACE_EXTENSION_NAME };
+    uint32_t n_ext = 2;
     VkInstanceCreateInfo ici = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
     ici.pApplicationInfo = &app;
-    ici.enabledExtensionCount = 2;
-    ici.ppEnabledExtensionNames = iext;
+    ici.enabledExtensionCount = n_ext;
 #else
     /* SDL names the surface extensions the window needs (VK_KHR_surface + VK_EXT_metal_surface on
      * macOS). MoltenVK's devices are portability devices: without the enumeration opt-in they are
      * hidden and vkEnumeratePhysicalDevices finds nothing. */
     const char *iext[8];
-    uint32_t n_ext = 0;
+    uint32_t n_ext;
     uint32_t n_sdl = 0;
     const char *const *sdl_ext = vt3_platform_vk_instance_extensions(&n_sdl);
     if (!sdl_ext || n_sdl == 0 || n_sdl > 6) {
         VT3_ERROR("vulkan: no window or no surface extensions (SDL_WINDOW_VULKAN missing?)");
         return -1;
     }
+    n_ext = 0;
     for (uint32_t i = 0; i < n_sdl; i++) iext[n_ext++] = sdl_ext[i];
     iext[n_ext++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
     VkInstanceCreateInfo ici = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
@@ -1886,7 +1886,7 @@ static int vk_init(int logical_w, int logical_h)
     VKT(vkCreateAndroidSurfaceKHR(g.inst, &asci, NULL, &g.surf), "vkCreateAndroidSurfaceKHR");
 #else
     if (vt3_platform_vk_create_surface(g.inst, &g.surf) != 0) {
-        VT3_ERROR("vulkan: SDL_Vulkan_CreateSurface failed: %s", SDL_GetError());
+        VT3_ERROR("vulkan: SDL_Vulkan_CreateSurface failed (see the platform layer's log)");
         return -1;
     }
 #endif

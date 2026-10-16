@@ -179,5 +179,9 @@ int vt3_platform_vk_create_surface(void *instance, void *surface)
 {
     if (!g_vk || !g_win) return -1;
     /* SDL owns the CAMetalLayer the surface lives on, so it creates it too. */
-    return SDL_Vulkan_CreateSurface(g_win, (VkInstance)instance, NULL, (VkSurfaceKHR *)surface) ? 0 : -1;
+    if (!SDL_Vulkan_CreateSurface(g_win, (VkInstance)instance, NULL, (VkSurfaceKHR *)surface)) {
+        VT3_ERROR("vk surface: SDL_Vulkan_CreateSurface failed: %s", SDL_GetError());
+        return -1;
+    }
+    return 0;
 }
