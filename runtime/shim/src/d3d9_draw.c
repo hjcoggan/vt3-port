@@ -883,6 +883,41 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         free(idx16);
         return S_OK;
     }
+    {   /* A 20-byte fullscreen quad of POSITION float3 + TEXCOORD float2 (the planar-shadow
+         * blur VS 1b40f853, and any picture quad with the same inputs) can run under the previous
+         * mesh's declaration, which says NORMAL ubyte4 at 12 and TEXCOORD float2 at 16 (stride 24).
+         * TEXCOORD at 16 spills past the 20-byte vertex (16+8 > 20), so the draw samples the next
+         * vertex's position as V: thin scrambled slivers in the blurred shadow mask (streaky court
+         * shadows), or a 90-degree-rotated picture with edge-clamped streaks. The menu-time blur runs
+         * under a different stale declaration whose TEXCOORD happens to sit at 12, so it is unaffected.
+         * When the vertex shader reads POSITION (loc 0) and TEXCOORD0 (loc 5) but not NORMAL (loc 3)
+         * and the layout shows exactly that stale pattern, force the quad's real layout (POSITION at 0,
+         * TEXCOORD at 12); the NORMAL bytes at 12 are really the UV. Both backends share this path, so
+         * one fix reaches GL and Vulkan. */
+        if (vsh && stride == 20 && lay.stride == 20 && (vsh->sm.attr_mask & ((1u << 0) | (1u << 5))) == ((1u << 0) | (1u << 5)) &&
+            !(vsh->sm.attr_mask & (1u << 3))) {
+            int pos0 = 0, tex16 = 0, normal = 0;
+            for (int i = 0; i < lay.count; i++) {
+                if (lay.attr[i].location == 0 && lay.attr[i].offset == 0 && lay.attr[i].components == 3)
+                    pos0 = 1;
+                if (lay.attr[i].location == 5 && lay.attr[i].offset == 16)
+                    tex16 = 1;
+                if (lay.attr[i].location == 3)
+                    normal = 1;
+            }
+            if (pos0 && tex16 && normal) {
+                lay.count = 2;
+                lay.attr[0].location = 0;
+                lay.attr[0].components = 3;
+                lay.attr[0].type = VT3_VT_FLOAT;
+                lay.attr[0].offset = 0;
+                lay.attr[1].location = 5;
+                lay.attr[1].components = 2;
+                lay.attr[1].type = VT3_VT_FLOAT;
+                lay.attr[1].offset = 12;
+            }
+        }
+    }
 
     /* Vertex bytes for the referenced range. Indexed: [first, first + count); plain: the vertices. */
     uint32_t v0 = first_v;

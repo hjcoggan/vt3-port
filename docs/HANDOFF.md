@@ -1,4 +1,4 @@
-# Handoff: Virtua Tennis 3 port (2026-10-17)
+# Handoff: Virtua Tennis 3 port (2026-10-17, evening)
 
 The PC release (NoCD 1.0.1 build) is statically recompiled to C and runs natively on macOS and on
 Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one renderer, Vulkan
@@ -12,6 +12,7 @@ Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one rend
 - **Android:** Vulkan only. Player models, clothes and sideline figures now render correctly on the
   Retroid (confirmed by the owner). The Retroid's primary use is the goal; keep it asleep when idle.
 - Menus, tournament flow, serving, rallies, scoring all work on both. Mac audio is clean.
+- Court shadows are fixed on both backends (below). The .app now bundles the Vulkan loader.
 
 ## Fixed this session (all on `main`)
 
@@ -24,44 +25,42 @@ Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one rend
 | 7cd9a86 | `VT3_VK_DEBUG=1` routes validation-layer messages into the log (desktop). |
 | e8d1a37 | DirectSound: unwritten 256-byte blocks mix as silence instead of replaying old audio, and the mixer thread asks for audio priority. Mac: 13 exact 128 ms repeats per 60 s match before, 0 after. **Not yet confirmed on the Retroid**: if the game's writer is starved there, repeats become gaps. Back out with `git revert e8d1a37`. |
 | db04521 | Shadow debugging aids (below). |
+| *this session* | Planar-shadow blur ran under the previous mesh's declaration (NORMAL at 12, TEXCOORD at 16, stride 24) with a 20-byte pos+uv quad, so TEXCOORD spilled (16+8 > 20) and sampled the next vertex's X as V: scrambled slivers, streaky court, missing player shadows. `d3d9_draw.c` now forces the quad's real layout (POSITION at 0, TEXCOORD at 12) whenever the VS reads loc 0+5 but not loc 3 and the layout shows that stale pattern. Shim-level, so GL and Vulkan are fixed together. Mac GL and Vulkan screenshots confirm: no streaks, player shadows with rackets at the feet on hard and clay. |
+| *this session* | `assets/macos/make_app.sh` bundles the Vulkan loader, SDL3 and MoltenVK into `Contents/Frameworks`, writes a relative-path MoltenVK ICD, copies `shaders.pack` into `Resources`, and ad-hoc signs. The launcher sets `VK_ICD_FILENAMES` and `VT3_SHADER_PACK` at the bundle. A missing ICD at run time still falls back to OpenGL; a missing loader library at launch (dyld failure, no fallback) no longer happens. Verified: bundled .app starts Vulkan on Apple Silicon with the bundled pack (569 programs). |
 
 ## Open issues, with leads
 
-1. **Court shadows are wrong, on both backends.** Streaks on the court, detached from the people who
-   cast them; the player's own shadow near the feet is missing. Findings so far:
+1. **Court shadows: fixed this session, needs a Retroid look.** The in-play blur now uses the quad's
+   real layout (see Fixed table). Mac GL and Vulkan both show clean courts with player shadows at the
+   feet on hard and clay. The old notes are kept for the record:
    - Per frame in play: clear back buffer; mask pass into target `0x20300350` (gl 1, A8R8G8B8
      1024x768; skinned and rigid draws, ONE/ONE, depth off, cull CW); one 4-vertex strip into
      `0x20322810` (gl 2, R5G6B5 1024x768) reading gl 1; two 512x512 shadow-map passes; the scene,
      which samples gl 2 (`s8`) at the same screen position as the pixel it shades.
    - That strip is a plain 2x2 box blur (VS `1b40f853`, PS `c3a461ab`, half-texel offsets, weights
      0.25). The **same shaders blur the 512x512 shadow maps, and those work.**
-   - gl 1 holds clean full-body silhouettes. gl 2 holds thin scrambled slivers that correlate with
-     no rotation, flip or transpose of gl 1, and the court draws exactly gl 2.
-   - `VT3_SHADOW_COPY=1` (GL) replaces the blur with a straight copy of gl 1 into gl 2: the court is
-     clean and the player gets a proper shadow with his racket near his feet. That looks like the
-     intended result.
-   - The blur quad's vertex layout carries a phantom attribute (loc 6, 4 floats at offset 20 in a
-     20-byte vertex): the HUD's declaration is still current. `VT3_DROP_OOB_ATTR=1` drops it. The
-     streaks vanish, but gl 2 then stays all zeros, so there are no shadows, on GL and on Vulkan.
-   - GL reports no error, the framebuffer is complete, the state is ordinary (no blend, depth or
-     cull, RGB write, no alpha test, full viewport), the scissor is off.
-   - Not explained: why a correct fetch gives an empty target. Next: render that draw with a PS that
-     outputs the UV, compare it with the working shadow-map blur draws (what differs: target format
-     R5G6B5 vs G16R16F, source A8R8G8B8, the phantom attribute), and check sampler 0 at that draw.
+   - Root cause found: the in-play blur runs under the previous mesh's declaration (NORMAL at 12,
+     TEXCOORD at 16) with a 20-byte pos+uv quad, so TEXCOORD spills and samples the next vertex.
+     `VT3_SHADOW_COPY=1` (GL) and `VT3_DROP_OOB_ATTR=1` are now just debugging aids; the quirk in
+     `d3d9_draw.c` is the fix.
    - Pitfall: `dump_targets` rebinds texture unit 0. Dump before a draw's textures are bound.
-2. **Court-change screen** is broken on both backends: the picture is rotated 90 degrees with
-   edge-clamped streaks (an old open issue). The NaN fix above has not been tried against it.
+2. **Court-change / result screens** are still broken: the background picture is rotated with
+   edge-clamped streaks (confirmed this session on the RESULT and CONTINUE screens with the shadow
+   fix in place, so it is a different quad/shader, not the blur). The NaN fix has now been tried
+   against it implicitly (it is in this build) and did not help. Next: identify that picture quad's
+   VS, declaration and stride the way issue 1 was done (blurquad-style trace for its shader hash).
 3. **Android audio** needs a listen with e8d1a37 (see above). Android stutter during loading is
    probably CPU load: the game's audio writer is starved. Raising the writer thread's priority is
    the next lever.
-4. **Net texture** missing and **shadows duplicated** were reported on Android before the
-   zero-init fix; re-check on the Retroid.
+4. **Net texture** is present but sparse on the Mac (thin vertical threads); **shadows duplicated**
+   was reported on Android before the zero-init fix. Re-check both on the Retroid with the shadow
+   fix in place.
 5. **Screen shape.** The game should render cleanly at 4:3, 16:10, 16:9, 18:9 and 19.5:9. Letterbox
    is the right default (`runtime/src/render/letterbox.c`; integer mode ignores the display aspect,
    off by default). True widescreen needs a Hor+ change to the game's projection (guest code); size
    it by finding where the game sets its projection matrix. The Retroid is 1280x960, so 4:3 today.
-6. **Packaging:** the Vulkan loader is linked dynamically; the .app must bundle it. A missing
-   loader library is not covered by the OpenGL fallback.
+6. **Packaging: done this session** (see Fixed table). Still to do: test the bundled .app on a Mac
+   without Homebrew's SDL3/Vulkan/MoltenVK to prove it launches there.
 7. Vulkan memory is about 128 MB host-visible (two frames of rings): watch it on the Retroid.
    MoltenVK logs "Metal does not support disabling primitive restart" (harmless).
 8. Frame rate 53-55 fps on the Retroid; the GPU is not the wait (fence wait ~0.01 ms), so stalls are
