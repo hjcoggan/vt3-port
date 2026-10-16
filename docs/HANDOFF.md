@@ -1,140 +1,168 @@
-# Handoff: Virtua Tennis 3 port (2026-10-16)
+# Handoff: Virtua Tennis 3 port (2026-10-17)
 
-The PC release (NoCD 1.0.1 build) is statically recompiled to C and runs natively on macOS
-(SDL3 + OpenGL 3.3) and Android (Vulkan, Retroid Pocket, Snapdragon 8 Gen 2). Game data stays in
+The PC release (NoCD 1.0.1 build) is statically recompiled to C and runs natively on macOS and on
+Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one renderer, Vulkan
+(`runtime/src/render/vk.c`, MoltenVK on the Mac), so a fix in it reaches both. Game data stays in
 `../dump` and is never committed.
 
 ## Where things stand
 
-**Mac (Vulkan through MoltenVK, the default; OpenGL with `VT3_RENDERER=gl`, or when no Vulkan driver is found): a full match plays.** Mac and Android now share `runtime/src/render/vk.c`. Visual parity of the Vulkan match scene with GL is not yet checked by eye.
-
-**Mac (OpenGL reference, still correct):**
-- Players render with bodies and clothing; line judges, ball kids and umpire render.
-- Scene and variance shadow map render through render targets; StretchRect copies work.
-- Viewports and clear rectangles are applied, so cutscene and menu backgrounds (court change,
-  match point, result, CONTINUE?) show their scenes.
-- Menus, tournament flow, serving, rallies, scoring, result screen all work.
-
-**Android (Vulkan): current with `main` as of 2026-10-16 05:23.**
-- APK and `shaders.pack` (569 shaders) rebuilt from `main` and installed on the Retroid.
-- Menus, player select and a match render; players have bodies and clothes.
-- Missing: Vulkan render targets and viewport, so the scene is darker, there are no
-  shadows, and the pause menu sits on black. On Android, ENTER pauses during a match.
+- **Mac:** Vulkan is the default. `VT3_RENDERER=gl` forces OpenGL (`gl33.c`, still the reference);
+  with the variable unset the game falls back to OpenGL when no Vulkan instance can be made.
+- **Android:** Vulkan only. Player models, clothes and sideline figures now render correctly on the
+  Retroid (confirmed by the owner). The Retroid's primary use is the goal; keep it asleep when idle.
+- Menus, tournament flow, serving, rallies, scoring all work on both. Mac audio is clean.
 
 ## Fixed this session (all on `main`)
 
 | Commit | Fix |
 |---|---|
-| f2d1634 | `loop aL, iN` read its bounds from the never-set `vsi` uniform; the shader's own `defi` is now emitted as literals. Skinning ran zero times, so every skinned mesh (players, judges, ball kids) collapsed to a point. |
-| e6fbf5e | Draws read every vertex stream. Player cloth uses two streams (UVs in 0, simulated positions/normals in 1); only stream 0 was read, so shirts and shorts collapsed. |
-| 9ccf085 | Viewports, `SetRenderTarget` viewport reset, clear rectangles; scissor rows on render textures. |
-| 9ceb13f | `gl_target_flipped()` backs every flip decision; trace timing counts from the first draw. |
-| 8f2c032, 96373cb, 90e140d | Test loop: quiet-wait input script, repeating keys, match in about 28 s. |
-| 026c563, b93dfb3, fddee5a, 6bf88d1, b0342a5 | Build/run tools in the repo; debug traces (below). |
+| 5897344 .. 3416541 | Vulkan on the Mac through MoltenVK: render targets, viewports, clear rects and colour mask in `vk.c`; the platform picks Vulkan before the window exists (`vt3_vk_probe`), OpenGL is the fallback. |
+| 1c37b9e | Vulkan's per-frame vertex/index rings were too small and silently dropped draws (2625 index drops in 100 s). Now 32 MB / 16 MB per frame; drops and the white-texture fallback warn once. |
+| 8890cab | x87: rounding a 64-bit mantissa up past all ones was never detected (`1 << 64`). The result was an invalid number the guest read as NaN. It caused the NaN camera, light and bone uploads. 10 NaN uploads per 100 s match before, 0 after. |
+| dce147b | Translator zeroes temporary registers. SPIR-V on Metal/Adreno leaves them undefined, which gave T-posed models and missing torsos on Android. **Every shader hash changes: regenerate `shaders.pack` after any change to `sm2_glsl.c`.** |
+| 7cd9a86 | `VT3_VK_DEBUG=1` routes validation-layer messages into the log (desktop). |
+| e8d1a37 | DirectSound: unwritten 256-byte blocks mix as silence instead of replaying old audio, and the mixer thread asks for audio priority. Mac: 13 exact 128 ms repeats per 60 s match before, 0 after. **Not yet confirmed on the Retroid**: if the game's writer is starved there, repeats become gaps. Back out with `git revert e8d1a37`. |
+| db04521 | Shadow debugging aids (below). |
+
+## Open issues, with leads
+
+1. **Court shadows are wrong, on both backends.** Streaks on the court, detached from the people who
+   cast them; the player's own shadow near the feet is missing. Findings so far:
+   - Per frame in play: clear back buffer; mask pass into target `0x20300350` (gl 1, A8R8G8B8
+     1024x768; skinned and rigid draws, ONE/ONE, depth off, cull CW); one 4-vertex strip into
+     `0x20322810` (gl 2, R5G6B5 1024x768) reading gl 1; two 512x512 shadow-map passes; the scene,
+     which samples gl 2 (`s8`) at the same screen position as the pixel it shades.
+   - That strip is a plain 2x2 box blur (VS `1b40f853`, PS `c3a461ab`, half-texel offsets, weights
+     0.25). The **same shaders blur the 512x512 shadow maps, and those work.**
+   - gl 1 holds clean full-body silhouettes. gl 2 holds thin scrambled slivers that correlate with
+     no rotation, flip or transpose of gl 1, and the court draws exactly gl 2.
+   - `VT3_SHADOW_COPY=1` (GL) replaces the blur with a straight copy of gl 1 into gl 2: the court is
+     clean and the player gets a proper shadow with his racket near his feet. That looks like the
+     intended result.
+   - The blur quad's vertex layout carries a phantom attribute (loc 6, 4 floats at offset 20 in a
+     20-byte vertex): the HUD's declaration is still current. `VT3_DROP_OOB_ATTR=1` drops it. The
+     streaks vanish, but gl 2 then stays all zeros, so there are no shadows, on GL and on Vulkan.
+   - GL reports no error, the framebuffer is complete, the state is ordinary (no blend, depth or
+     cull, RGB write, no alpha test, full viewport), the scissor is off.
+   - Not explained: why a correct fetch gives an empty target. Next: render that draw with a PS that
+     outputs the UV, compare it with the working shadow-map blur draws (what differs: target format
+     R5G6B5 vs G16R16F, source A8R8G8B8, the phantom attribute), and check sampler 0 at that draw.
+   - Pitfall: `dump_targets` rebinds texture unit 0. Dump before a draw's textures are bound.
+2. **Court-change screen** is broken on both backends: the picture is rotated 90 degrees with
+   edge-clamped streaks (an old open issue). The NaN fix above has not been tried against it.
+3. **Android audio** needs a listen with e8d1a37 (see above). Android stutter during loading is
+   probably CPU load: the game's audio writer is starved. Raising the writer thread's priority is
+   the next lever.
+4. **Net texture** missing and **shadows duplicated** were reported on Android before the
+   zero-init fix; re-check on the Retroid.
+5. **Screen shape.** The game should render cleanly at 4:3, 16:10, 16:9, 18:9 and 19.5:9. Letterbox
+   is the right default (`runtime/src/render/letterbox.c`; integer mode ignores the display aspect,
+   off by default). True widescreen needs a Hor+ change to the game's projection (guest code); size
+   it by finding where the game sets its projection matrix. The Retroid is 1280x960, so 4:3 today.
+6. **Packaging:** the Vulkan loader is linked dynamically; the .app must bundle it. A missing
+   loader library is not covered by the OpenGL fallback.
+7. Vulkan memory is about 128 MB host-visible (two frames of rings): watch it on the Retroid.
+   MoltenVK logs "Metal does not support disabling primitive restart" (harmless).
+8. Frame rate 53-55 fps on the Retroid; the GPU is not the wait (fence wait ~0.01 ms), so stalls are
+   CPU-side (loading).
+9. Route flake: the Tournament route sometimes never reaches a match (about 59-62 textures at the
+   last key, no error), more often while a build is using the CPU. Rerun.
 
 ## Build and test
 
 ```bash
+PY="/Users/heath/Virtua Tennis 3/tools/venv/bin/python"     # venv lives outside the repo
 # Mac build (about 3 s; a new OUT dir reuses the translated vt3.c object)
-tools/venv/bin/python tools/recomp/build_native.py ../dump/recomp/vt3_loopfix
-# Build another tree (an agent worktree, an older commit) into its own dir
-tools/venv/bin/python tools/recomp/build_native.py ../dump/recomp/vt3_x --root <tree>
-
-# Run to a match and capture: BIN OUTDIR SECS SHOT_TIMES...
-tools/recomp/run_match.sh ../dump/recomp/vt3_loopfix/vt3_native /tmp/cap 40 36
-PLAY_POINTS=1 tools/recomp/run_match.sh ... 150 40 80 120   # auto-play: points, changeovers, CONTINUE?
+$PY tools/recomp/build_native.py ../dump/recomp/vt3_x
+# Run a match and capture: BIN OUTDIR SECS SHOT_TIMES...   (Vulkan needs the SPIR-V pack)
+VT3_SHADER_PACK=../dump/android/shaders.pack PLAY_POINTS=1 \
+  tools/recomp/run_match.sh ../dump/recomp/vt3_x/vt3_native ../dump/recomp/runs/x 60 45
+# OpenGL for comparison: add VT3_RENDERER=gl
+# Regenerate the pack after any translator change (about a minute)
+$PY tools/formats/shaders/gen_spirv_pack.py ../dump/android/shaders.pack
 ```
-(`tools/venv` is `/Users/heath/Virtua Tennis 3/tools/venv`, outside the repo.)
 
-- The route is Tournament with quiet waits (`wN:KEY` waits until no texture has been created for
-  N s). In play by about 28 s. Federer is always 1P; the tournament and opponent vary per run.
-- Without `PLAY_POINTS` the match waits at the first 1P serve (correct game behaviour).
-- `run_match.sh` warns when the route never reached a match.
-- Logs go to `OUTDIR/err.txt`. Capture tiles: `ffmpeg -i s_%02d.png -filter_complex tile=4x3 sheet.png`.
+- The route is Tournament with quiet waits; in play by about 28 s; the venue and opponent are random
+  each run, so only same-run or same-venue frames compare directly.
+- Validation: `VT3_VK_DEBUG=1 VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
+  VK_LAYER_PATH=/opt/homebrew/opt/vulkan-validationlayers/share/vulkan/explicit_layer.d`.
+- Homebrew: `molten-vk vulkan-loader vulkan-headers vulkan-validationlayers glslang`.
+- Run one game at a time and check `pgrep -x vt3_native`: concurrent runs skew timing and audio.
 
-**Android:**
+**Android** (configure once from the repo root; use a build dir for this tree):
 ```bash
-tools/venv/bin/python tools/formats/shaders/gen_spirv_pack.py ../dump/android/shaders.pack
-cmake --build ../dump/android/cmake-arm64 --target vt3android -j 8
-/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-strip -o ../dump/android/libvt3android-stripped.so ../dump/android/cmake-arm64/libvt3android.so
-tools/venv/bin/python android/build_apk.py game vt3android --so ../dump/android/libvt3android-stripped.so --install c27c2f60
+ANDROID_NDK=/opt/homebrew/share/android-ndk cmake -S runtime -B ../dump/android/cmake-arm64-main \
+  -DCMAKE_TOOLCHAIN_FILE=/opt/homebrew/share/android-ndk/build/cmake/android.toolchain.cmake \
+  -DANDROID_PLATFORM=android-26 -DANDROID_ABI=arm64-v8a -DVT3_GAME_DIR=../dump/recomp/vt3_nocd -G Ninja
+cmake --build ../dump/android/cmake-arm64-main --target vt3android -j 8   # 5-10 min: huge vt3.c
+llvm-strip -o ../dump/android/libvt3android-stripped.so ../dump/android/cmake-arm64-main/libvt3android.so
+$PY android/build_apk.py game vt3android --so ../dump/android/libvt3android-stripped.so --install c27c2f60
 adb -s c27c2f60 push ../dump/android/shaders.pack /sdcard/Android/data/net.vt3port.game/files/shaders.pack
+adb -s c27c2f60 shell monkey -p net.vt3port.game -c android.intent.category.LAUNCHER 1
 ```
-- Regenerate the pack after any translator change (`runtime/src/render/sm2_glsl.c`).
-- Retroid: keep it asleep when not in use. Wake with `input keyevent 224` plus a swipe up
-  (screen 1280x960), sleep with `input keyevent 223`. Screenshots are black while dozing.
+Push the pack **before** launching. Wake the Retroid with `input keyevent 224` and a swipe up, sleep it
+with `keyevent 223`; `adb exec-out screencap -p > shot.png` is black while it dozes.
 
 ## Debug toolbox (env vars, all off by default)
 
-Shaders are named by an FNV-1a hash of their bytecode (handles change every run). The same hash
-over a file in `../dump/recomp/diagnosis/shaders_dump/*.bin` identifies it.
+Shaders are named by an FNV-1a hash of their bytecode. The same 32-bit hash over a file in
+`../dump/runtime/shaders/bin/*.bin` finds it; `../dump/android/tools/vt3sm2 IN.bin OUT.glsl` prints
+the GLSL.
 
 | Variable | What it does |
 |---|---|
-| `VT3_TRACE_DRAW=N`, `VT3_TRACE_AFTER=s`, `VT3_TRACE_MIN=prims`, `VT3_TRACE_HASH=hex` | Per-draw trace: shaders, hashes, state, constants, samplers. `VT3_TRACE_LIGHT`, `_PSC`, `_VSC` add more. |
-| `VT3_SKIN_CHECK=N`, `VT3_SKIN_AFTER=s` | CPU-skins draws and reports NDC/world boxes, weights, palette, and a per-mesh facing-vs-cull count. Rigid meshes too when `VT3_TRACE_HASH` names them. |
-| `VT3_PIXEL="x,y;..."`, `VT3_PIXEL_AFTER=s`, `VT3_PIXEL_TEX=1` | For one frame, logs every draw that changes a watched back-buffer pixel. Names the draw behind any wrong colour. |
-| `VT3_DUMP_TEX=dir` | Every decoded texture upload as TGA, plus D3DX DDS inputs. |
-| `VT3_TRACE_LOCK` | Texture uploads with a guest backtrace. |
-| `VT3_TRACE_NAN` | Vertex-constant uploads containing NaN/Inf, once per guest caller, with backtrace. |
-| `VT3_TRACE_RTSEQ`, `_STRETCH`, `_FRAMES`, `_FPS`, `_VIEWPORT` | Frame structure: target switches, clears, copies, presents, frame rate. |
-| `VT3_SKIP_MESH=hash:prims,...`, `VT3_SKIP_FRAME_DRAWS=lo-hi` | Drop draws. |
-| `VT3_SKIN_NOCULL`, `VT3_SKIN_FLIPCULL`, `VT3_NO_VSM`, `VT3_SHADOW_NOFLIP`, `VT3_NO_ZTEST` | State experiments. |
+| `VT3_TRACE_DRAW=N`, `_AFTER=s`, `_MIN=prims`, `VT3_TRACE_HASH=hex` | Per-draw trace. The hash filter only applies with the draw trace on. |
+| `VT3_TRACE_QUAD=1` | Layout, raw vertices, constants and state of small draws into off-screen targets. |
+| `VT3_DUMP_RT=dir`, `VT3_DUMP_RT_AT=s` (GL) | Write every 8-bit render target to TGA once. |
+| `VT3_DUMP_QUAD=dir` (GL) | The same, just before and after the mask blur draw (`pre_` / `post_` files). |
+| `VT3_SHADOW_COPY=1` (GL) | Replace the mask blur with a copy. |
+| `VT3_DROP_OOB_ATTR=1` | Leave out vertex-declaration elements past the end of the vertex. |
+| `VT3_TRACE_BLUR=1` (GL) | GL error, framebuffer status and scissor after the blur draw. |
+| `VT3_VK_DEBUG=1` | Validation messages into the log (desktop Vulkan). |
+| `VT3_SKIN_CHECK=N`, `VT3_PIXEL=...`, `VT3_DUMP_TEX=dir`, `VT3_TRACE_NAN`, `VT3_TRACE_RTSEQ`, `_STRETCH`, `_FPS` | As before: CPU skinning check, pixel watch, texture dump, NaN uploads, target sequence, copies, frame rate. |
+| `VT3_SKIP_MESH`, `VT3_SKIP_TARGET=WxH`, `VT3_NO_VSM`, `VT3_SKIN_NOCULL`, `VT3_SKIN_FLIPCULL` | State experiments. |
+| `VT3_TRACE_AUDIO`, `VT3_DUMP_AUDIO=file` | Audio trace; raw s16 stereo 48 kHz dump of the mix. |
 | `VT3_INPUT_SCRIPT` | `t:KEY` absolute, `wN[@T]:KEY` quiet wait, `rN:KEY` repeat. |
 
-Shim code can read the guest caller: `vt3s_guest_caller`, `vt3s_guest_esp`, `vt3s_guest_backtrace()`.
+Ruled out this session (do not retry): swapped sin/cos (only `fsin`/`fcos` are lowered), the D3DX
+matrix routines (match the documented formulas), `texldp` (handled), alpha-test scale (same in both
+backends), vertex formats (all supported on MoltenVK), uniform descriptor ranges (exact block sizes
+**black out the 3D scene**; keep `VK_WHOLE_SIZE`), the cull/front-face mapping (swapping it did not
+help), stencil (the shim never enables it), bone palettes (identical on GL and Vulkan).
+
+## Working with models
+
+- **Claude subagents** (read-only Explore agents are cheap) for code reading. Verify what they say.
+- **OpenCode free models:** `/Applications/OpenCode.app/Contents/Resources/opencode-cli run -m
+  opencode/<model> --file <attachment> "<prompt>"`. Models that answered well: `deepseek-v4.1-flash-free`,
+  `glm-5.3-flash-free`, `muse-spark-1.3-contributor-free`, `big-pickle`, `longcat-2.5-preview-free`,
+  `mimo-v2.6-flash-free`. `nemotron-3-ultra-free` timed out (504). They mis-cite line numbers and
+  sometimes propose fixes that contradict the code; use them for hypotheses, then check. Write the
+  run into a script file and start it as a background job: a foreground call that times out kills
+  its children, and the output files come back empty.
+- **Antigravity** (`/Applications/Gemini.app/Contents/Helpers/agy --model gemini-3.8-flash-high
+  --print='<prompt>'`): headless mode cannot read files or run shell commands, and
+  `--dangerously-skip-permissions` is blocked here. Paste code into the prompt for review.
+- Use sibling worktrees (`git worktree add ../vt3-port-x -b x main`) for long agent tasks so the
+  build and capture paths still resolve. Worktrees `vt3-port-vk`, `vt3-port-audio`, `vt3-port-wip`
+  and `.claude/worktrees/agent-*` are left over; delete with `git worktree remove` when done. The
+  earlier uncommitted work is kept as `../wip-antigravity-2026-10-16.patch` (not for merging: races
+  and a stale-object build bug).
+- A stray `dis.py` in the Claude scratchpad shadows Python's `dis`; run helper scripts with `python -I`.
 
 ## Game facts worth knowing
 
-- Frame structure: clear back buffer; planar-shadow mask pass into a 1024x768 target (characters
-  flattened along the light, additive, depth off); two 512x512 variance shadow-map passes; main
-  scene; HUD. In some phases the main scene goes to the 1024x768 target and is copied.
-- Key shaders: body VS `98f59399` (`vs_2322e090`, 4-bone), 2-bone VS `2e3a60a2`, body PS
-  `c62249b4` (`ps_23233000`), collar/cloth PS `6c3b5f94`, cloth VS `3ee6cb60` (rigid, two streams),
-  belly patch `VT3_P_hara` PS `ea052190` (tex×tex, correct as is).
-- Textures come from relocated `.cog`/`.gog` resource packs (DDS loader `FUN_0040ba10`). Materials:
-  apply `FUN_00413270`, texture bind `FUN_00419500`. Outfits are chosen by pack index
-  (`FUN_004094b0`), not tinted.
-- Ghidra decompile: `../dump/recomp/vt3_nocd101_all.c`.
-
-## Open issues, with leads
-
-1. **NaN matrices between points.** `VT3_TRACE_NAN` shows NaN cameras (`c0..c3` from 0x413318,
-   0x417c19, 0x4067c2), light matrices (`c248..c251`), eye position (`c8`, NaN w) and bone palettes.
-   The court-change camera is also rolled exactly 90 degrees. Suspect x87/SSE emulation in
-   `tools/recomp/rt/vt3fpu.c` / `vt3simd.c` (for example `fsincos` stack order), or
-   `runtime/shim/src/d3dx9_math.c`. Unfinished agent worktree: `.claude/worktrees/agent-a3454fdf1375c93b9`.
-2. **Crackle and stutter.** Heard on menu clicks and during level loading, not on the court (the
-   streamed music is clean). Measured on the Mac: the device never underruns, and the game's writes
-   land 70–100 ms ahead of the play cursor on a 128 ms streaming buffer, so the stream is in time.
-   The underrun counter misses fully empty callbacks, so silent gaps are invisible to it. Leading
-   idea, not confirmed: short sound effects start from stale or unwritten data at onset, because
-   `write_cursor` on a stopped buffer adds the 50 ms lead (`runtime/shim/src/dsound_stub.c`). The
-   uncommitted audio work was reviewed and is not merged (data races, see the review notes in
-   `/Users/heath/Virtua Tennis 3/wip-antigravity-2026-10-16.patch`).
-3. **Vulkan render targets, viewport, scissor clears, colour write mask** (`runtime/src/render/vk.c`).
-   Use `gl33.c` as the reference: `gl_target_flipped`, `gl_rect_low`, `gl_rt_*`, `apply_state`.
-   Unfinished worktree: `.claude/worktrees/agent-ad3799b0eac9d84e9`.
-4. **Shadows unverified.** Long, flat player shadows may be correct for a low sun. Needs a
-   reference screenshot of the original game.
-5. **Frame rate.** 30–50 fps was measured with four other game instances running; re-measure alone.
-6. **Quiet-wait route.** The Singles and player-select screens create no textures, so those steps
-   use fixed margins and can occasionally miss under heavy load.
-
-The agent worktrees are on branches `worktree-agent-*`. Review before merging; delete with
-`git worktree remove <path>` when done.
-
-## Done: Vulkan on the Mac through MoltenVK (2026-10-16)
-
-The Mac build now runs the same Vulkan renderer as Android, with OpenGL as the fallback. Commits
-`5897344`..`3416541`. MoltenVK, the Vulkan loader and the validation layers come from Homebrew
-(`molten-vk`, `vulkan-loader`, `vulkan-headers`, `vulkan-validationlayers`). The loader is linked
-dynamically, so the .app must bundle it, and that packaging is still to do. Remaining gaps: visual
-parity with GL by eye, and the Vulkan path with `VT3_TRACE_*` traces.
+- Textures come from relocated `.cog`/`.gog` packs (DDS loader `FUN_0040ba10`); outfits are chosen
+  by pack index (`FUN_004094b0`), not tinted. Ghidra decompile: `../dump/recomp/vt3_nocd101_all.c`.
+- Player cloth uses two vertex streams (UVs in 0, simulated positions and normals in 1).
+- `loop aL, iN` bounds come from the shader's own `defi`; the draw record carries no integer constants.
+- The streaming music buffer is 48 kHz, 6 channels, 16-bit, 128 ms; the game writes 70-100 ms ahead.
+- Key shaders: skinned body VS `98f59399` (4 bones), 2-bone VS `2e3a60a2`, body PS `c62249b4`, cloth
+  VS `3ee6cb60`, mask blur VS `1b40f853` / PS `c3a461ab`.
 
 ## Conventions
 
-- Commits use the noreply identity and end with the Co-Authored-By trailer. Push reviewed progress.
-- Never commit game data. `../dump` holds data, builds and captures.
-- Builds take seconds: build inline. Hand long, self-contained investigations to subagents in
-  worktrees (`build_native.py --root` into their own OUT dir).
+- Commits use the noreply identity (`191880570+hjcoggan@users.noreply.github.com`) and end with the
+  Co-Authored-By trailer the session names. Push reviewed progress. Never commit game data.
+- Builds take seconds: build inline. Long self-contained investigations go to subagents.
