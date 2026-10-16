@@ -6,7 +6,9 @@ The PC release (NoCD 1.0.1 build) is statically recompiled to C and runs nativel
 
 ## Where things stand
 
-**Mac (OpenGL): a full match plays and looks right in normal play.**
+**Mac (Vulkan through MoltenVK, the default; OpenGL with `VT3_RENDERER=gl`, or when no Vulkan driver is found): a full match plays.** Mac and Android now share `runtime/src/render/vk.c`. Visual parity of the Vulkan match scene with GL is not yet checked by eye.
+
+**Mac (OpenGL reference, still correct):**
 - Players render with bodies and clothing; line judges, ball kids and umpire render.
 - Scene and variance shadow map render through render targets; StretchRect copies work.
 - Viewports and clear rectangles are applied, so cutscene and menu backgrounds (court change,
@@ -102,9 +104,14 @@ Shim code can read the guest caller: `vt3s_guest_caller`, `vt3s_guest_esp`, `vt3
    The court-change camera is also rolled exactly 90 degrees. Suspect x87/SSE emulation in
    `tools/recomp/rt/vt3fpu.c` / `vt3simd.c` (for example `fsincos` stack order), or
    `runtime/shim/src/d3dx9_math.c`. Unfinished agent worktree: `.claude/worktrees/agent-a3454fdf1375c93b9`.
-2. **Repeating sound.** Short one-loop repeats of the 128 ms streaming buffer, probably when the
-   game's audio writer stalls. Unfinished, unreviewed fix in `.claude/worktrees/agent-aa3adbcab3bf9d623`
-   (`runtime/shim/src/dsound_stub.c`).
+2. **Crackle and stutter.** Heard on menu clicks and during level loading, not on the court (the
+   streamed music is clean). Measured on the Mac: the device never underruns, and the game's writes
+   land 70–100 ms ahead of the play cursor on a 128 ms streaming buffer, so the stream is in time.
+   The underrun counter misses fully empty callbacks, so silent gaps are invisible to it. Leading
+   idea, not confirmed: short sound effects start from stale or unwritten data at onset, because
+   `write_cursor` on a stopped buffer adds the 50 ms lead (`runtime/shim/src/dsound_stub.c`). The
+   uncommitted audio work was reviewed and is not merged (data races, see the review notes in
+   `/Users/heath/Virtua Tennis 3/wip-antigravity-2026-10-16.patch`).
 3. **Vulkan render targets, viewport, scissor clears, colour write mask** (`runtime/src/render/vk.c`).
    Use `gl33.c` as the reference: `gl_target_flipped`, `gl_rect_low`, `gl_rt_*`, `apply_state`.
    Unfinished worktree: `.claude/worktrees/agent-ad3799b0eac9d84e9`.
@@ -117,13 +124,13 @@ Shim code can read the guest caller: `vt3s_guest_caller`, `vt3s_guest_esp`, `vt3
 The agent worktrees are on branches `worktree-agent-*`. Review before merging; delete with
 `git worktree remove <path>` when done.
 
-## Recommendation: Vulkan on the Mac via MoltenVK
+## Done: Vulkan on the Mac through MoltenVK (2026-10-16)
 
-Worth doing, in stages. Vulkan render targets are needed for Android anyway. Once `vk.c` matches
-`gl33.c`, run it on the Mac through MoltenVK: one backend, and Android-path fixes get tested on the
-Mac in seconds instead of on the device. Keep GL as a reference until the two match. Costs: a
-MoltenVK/Vulkan-loader dependency (Homebrew, not installed yet) bundled into the .app, and runtime
-GLSL-to-SPIR-V on the Mac or reuse of the offline pack.
+The Mac build now runs the same Vulkan renderer as Android, with OpenGL as the fallback. Commits
+`5897344`..`3416541`. MoltenVK, the Vulkan loader and the validation layers come from Homebrew
+(`molten-vk`, `vulkan-loader`, `vulkan-headers`, `vulkan-validationlayers`). The loader is linked
+dynamically, so the .app must bundle it, and that packaging is still to do. Remaining gaps: visual
+parity with GL by eye, and the Vulkan path with `VT3_TRACE_*` traces.
 
 ## Conventions
 
