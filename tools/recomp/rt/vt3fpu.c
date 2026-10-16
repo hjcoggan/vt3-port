@@ -85,8 +85,11 @@ static vt_x80 pack_round(int neg, int32_t E, uint64_t mant, uint64_t extra, int 
     }
     if (up) {
         kept++;
-        if (kept == ((uint64_t)1 << prec)) {   /* carried out of the significand */
-            kept >>= 1;
+        /* Carried out of the significand. At 64 bits the increment wraps to 0, and 1 << 64 is not a valid
+         * shift, so the carry was never seen and the result lost its leading bit: an invalid number that
+         * the guest then read as NaN. */
+        if (prec == 64 ? kept == 0 : kept == ((uint64_t)1 << prec)) {
+            kept = prec == 64 ? ((uint64_t)1 << 63) : kept >> 1;
             E++;
         }
     }
