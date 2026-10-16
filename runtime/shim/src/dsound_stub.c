@@ -33,6 +33,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+#include <sys/resource.h>
+#if defined(__ANDROID__)
+#include <sys/syscall.h>
+#elif defined(__APPLE__)
+#include <pthread/qos.h>
+#endif
 
 #define WFX_BYTES 18u
 #define DSBDESC_BYTES 20u
@@ -54,6 +61,8 @@ typedef struct ds_buffer {
     int looping;
     int32_t volume, pan;
     uint32_t freq;
+    uint32_t lock_off;           /* where the last Lock began: the Unlock writes start here */
+    uint8_t *fresh;              /* one flag per FRESH_BLOCK bytes: set when the game writes it, cleared once played */
 } ds_buffer;
 
 /* ---- output mixer ----------------------------------------------------------
@@ -65,6 +74,7 @@ typedef struct ds_buffer {
 #define MIX_RING_MS 40u
 #define MIX_MAX_FRAMES 960u
 #define MIX_MAX_ACTIVE 64
+#define FRESH_BLOCK 256u
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static ds_buffer *g_active[MIX_MAX_ACTIVE];
@@ -172,6 +182,29 @@ static int32_t pcm_sample(const uint8_t *p, uint32_t bits)
 
 /* Adds the sound of one playing buffer to acc for frames output frames. Output frame j is at
  * time t0 + j, so the source position comes from the same wall-clock model as GetCurrentPosition. */
+/* The game's writes mark the FRESH_BLOCK blocks they cover (Unlock). The mixer plays a block only while it
+ * is marked, and clears the mark once it has moved past it, so each write plays once. A block the game has
+ * not written since the mixer last played it is mixed as silence, not replayed: a late writer then costs a
+ * gap instead of a repeat. Without flags (no memory for them) a buffer plays as before. */
+static void mark_fresh(ds_buffer *b, uint32_t off, uint32_t n)
+{
+    if (!b->fresh || n == 0 || off >= b->bytes) return;
+    uint32_t end = n > b->bytes - off ? b->bytes : off + n;
+    for (uint32_t k = off / FRESH_BLOCK; k * FRESH_BLOCK < end; k++) __atomic_store_n(&b->fresh[k], 1, __ATOMIC_RELEASE);
+}
+
+/* 1 when the block at byte offset off is not fresh. Moving into a new block clears the one left behind. */
+static int stale_block(ds_buffer *b, uint64_t off, uint32_t *last_blk)
+{
+    if (!b->fresh) return 0;
+    uint32_t blk = (uint32_t)(off / FRESH_BLOCK);
+    if (blk != *last_blk) {
+        if (*last_blk != UINT32_MAX) __atomic_store_n(&b->fresh[*last_blk], 0, __ATOMIC_RELAXED);
+        *last_blk = blk;
+    }
+    return !__atomic_load_n(&b->fresh[blk], __ATOMIC_ACQUIRE);
+}
+
 static void mix_buffer_locked(ds_buffer *b, int32_t *acc, uint32_t frames, uint64_t t0)
 {
     uint32_t nch = fmt16(b->fmt, 2), bits = fmt16(b->fmt, 14), align = fmt16(b->fmt, 12);
@@ -183,6 +216,7 @@ static void mix_buffer_locked(ds_buffer *b, int32_t *acc, uint32_t frames, uint6
     uint32_t bps = avg_bytes_per_sec(b);
     double gain = b->volume <= -10000 ? 0.0 : pow(10.0, b->volume / 2000.0);   /* hundredths of dB */
     uint32_t bytes_per_sample = bits / 8;
+    uint32_t last_blk = UINT32_MAX;
     for (uint32_t j = 0; j < frames; j++) {
         uint64_t t = t0 + (uint64_t)j * 1000000000u / MIX_RATE;
         double moved = t > b->play_ns ? (double)(t - b->play_ns) * bps / 1e9 : 0.0;
@@ -197,7 +231,9 @@ static void mix_buffer_locked(ds_buffer *b, int32_t *acc, uint32_t frames, uint6
         uint64_t f = ((uint64_t)pos / align) % src_frames;
         const uint8_t *fr = data + f * align;
         int32_t l, r;
-        if (nch == 1) {
+        if (stale_block(b, f * align, &last_blk)) {
+            l = r = 0;                           /* not written since it was last played: silence, not a replay */
+        } else if (nch == 1) {
             l = r = pcm_sample(fr, bits);
         } else if (nch == 2) {
             l = pcm_sample(fr, bits);
@@ -219,9 +255,21 @@ static void mix_buffer_locked(ds_buffer *b, int32_t *acc, uint32_t frames, uint6
     }
 }
 
+/* The mixer wakes every 4 ms and must not be late: a late tick lets the device ring run short. On
+ * Android the audio class of nice keeps it ahead of the loading threads; a failed call is harmless. */
+static void raise_mixer_priority(void)
+{
+#if defined(__ANDROID__)
+    setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), -16);   /* THREAD_PRIORITY_AUDIO */
+#elif defined(__APPLE__)
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
+}
+
 static void *mix_thread(void *arg)
 {
     (void)arg;
+    raise_mixer_priority();
     static int32_t acc[MIX_MAX_FRAMES * MIX_CH];
     static int16_t out[MIX_MAX_FRAMES * MIX_CH];
     /* VT3_TRACE_AUDIO=1 logs once a second: buffers playing, peak level, device underruns. */
@@ -320,12 +368,14 @@ static GPTR buffer_new(GPTR parent, uint32_t bytes, const uint8_t *fmt)
         return 0;
     }
     b->bytes = bytes;
+    b->fresh = calloc((bytes + FRESH_BLOCK - 1) / FRESH_BLOCK, 1);   /* NULL: the buffer plays without flags */
     memcpy(b->fmt, fmt, WFX_BYTES);
     b->freq = rd32(fmt, 4);
     b->volume = DSBVOLUME_MAX;
     GPTR obj = d3d9_obj_new(D3D9_KIND_DSBUFFER, b, parent);
     if (!obj) {
         HeapFree(GetProcessHeap(), 0, b->storage);
+        free(b->fresh);
         free(b);
     }
     return obj;
@@ -339,6 +389,7 @@ void dsound_free(uint32_t kind, void *data)
         active_remove_locked(b);
         pthread_mutex_unlock(&g_mu);
         if (b->storage) HeapFree(GetProcessHeap(), 0, b->storage);
+        free(b->fresh);
     }
     free(data);
 }
@@ -608,6 +659,7 @@ HRESULT WINAPI IDirectSoundBuffer_Lock(GPTR This, DWORD dwOffset, DWORD dwBytes,
                  (unsigned)n, (unsigned)dwFlags, (unsigned)play_cursor(b),
                  (unsigned long long)(now_ns() / 1000000u % 100000u), (unsigned long long)((uintptr_t)pthread_self() % 1000u));
     if (!b->bytes || off >= b->bytes || n > b->bytes) return DSERR_INVALIDPARAM;
+    b->lock_off = off;
     uint32_t n1 = n, n2 = 0;
     if (off + n > b->bytes) {                     /* the region wraps past the end of the buffer */
         n1 = b->bytes - off;
@@ -718,6 +770,11 @@ HRESULT WINAPI IDirectSoundBuffer_Stop(GPTR This)
 HRESULT WINAPI IDirectSoundBuffer_Unlock(GPTR This, GPTR pvAudioPtr1, DWORD dwAudioBytes1, GPTR pvAudioPtr2,
                                          DWORD dwAudioBytes2)
 {
+    ds_buffer *fb = buf_of(This);
+    if (fb) {                                    /* the game's writes: the first segment at the lock, the second at 0 */
+        mark_fresh(fb, fb->lock_off, dwAudioBytes1);
+        mark_fresh(fb, 0, dwAudioBytes2);
+    }
     if (dsound_trace() && buf_of(This)) {
         /* Hash of what the game wrote, so repeated chunks show up in the trace. */
         uint64_t h = 1469598103934665603ull;
