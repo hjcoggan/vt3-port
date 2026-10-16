@@ -1844,6 +1844,19 @@ static int create_buffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer *
     return 0;
 }
 
+#ifndef __ANDROID__
+/* VT3_VK_DEBUG: validation messages (with VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation) go to the log. */
+static VKAPI_ATTR VkBool32 VKAPI_CALL dbg_cb(VkDebugUtilsMessageSeverityFlagBitsEXT sev, VkDebugUtilsMessageTypeFlagsEXT type,
+                                             const VkDebugUtilsMessengerCallbackDataEXT *d, void *user)
+{
+    (void)sev;
+    (void)type;
+    (void)user;
+    VT3_WARN("vk validation: %s", d->pMessage);
+    return VK_FALSE;
+}
+#endif
+
 static int vk_init(int logical_w, int logical_h)
 {
     g.logical_w = logical_w;
@@ -1881,6 +1894,7 @@ static int vk_init(int logical_w, int logical_h)
     n_ext = 0;
     for (uint32_t i = 0; i < n_sdl; i++) iext[n_ext++] = sdl_ext[i];
     iext[n_ext++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+    if (getenv("VT3_VK_DEBUG")) iext[n_ext++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     VkInstanceCreateInfo ici = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
     ici.flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
 #endif
@@ -1896,6 +1910,17 @@ static int vk_init(int logical_w, int logical_h)
     if (vt3_platform_vk_create_surface(g.inst, &g.surf) != 0) {
         VT3_ERROR("vulkan: SDL_Vulkan_CreateSurface failed (see the platform layer's log)");
         return -1;
+    }
+    if (getenv("VT3_VK_DEBUG")) {   /* route the validation layer's messages into the log */
+        PFN_vkCreateDebugUtilsMessengerEXT mk =
+            (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(g.inst, "vkCreateDebugUtilsMessengerEXT");
+        VkDebugUtilsMessengerCreateInfoEXT mi = { VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
+        mi.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        mi.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                         VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        mi.pfnUserCallback = dbg_cb;
+        VkDebugUtilsMessengerEXT m;
+        if (mk) mk(g.inst, &mi, NULL, &m);
     }
 #endif
 
