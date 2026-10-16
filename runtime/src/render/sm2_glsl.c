@@ -742,6 +742,11 @@ static void emit_header(ctx *c, sb *h)
               "}\n");
     sb_add(h, "\nvoid main() {\n");
     sb_add(h, "  a0 = ivec4(0);\n  aL = ivec4(0);\n");
+    /* A D3D shader may read a temporary before it writes it, such as a skinning accumulator. Apple's GL
+     * zeroes globals; SPIR-V on Metal and Adreno leaves them undefined, so zero them here. */
+    for (int i = 0; i < VT3_SM2_MAX_TEMP; i++) {
+        if (c->temps_used & (1u << i)) sb_add(h, "  r%d = vec4(0.0);\n", i);
+    }
     if (vs) {
         /* Every vertex output is written, so the GL linker keeps it even when the shader does not write it. */
         sb_add(h, "  vs_pos = vec4(0.0, 0.0, 0.0, 1.0);\n  vo_D0 = vec4(0.0);\n  vo_D1 = vec4(0.0);\n");
