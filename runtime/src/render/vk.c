@@ -1560,12 +1560,13 @@ static int vk_init(int logical_w, int logical_h)
      * hidden and vkEnumeratePhysicalDevices finds nothing. */
     const char *iext[8];
     uint32_t n_ext = 0;
-    const char *const *sdl_ext = vt3_platform_vk_instance_extensions(&n_ext);
-    if (!sdl_ext) {
+    uint32_t n_sdl = 0;
+    const char *const *sdl_ext = vt3_platform_vk_instance_extensions(&n_sdl);
+    if (!sdl_ext || n_sdl == 0 || n_sdl > 6) {
         VT3_ERROR("vulkan: no window or no surface extensions (SDL_WINDOW_VULKAN missing?)");
         return -1;
     }
-    for (uint32_t i = 0; i < n_ext && n_ext < 7; i++) iext[n_ext++] = sdl_ext[i];
+    for (uint32_t i = 0; i < n_sdl; i++) iext[n_ext++] = sdl_ext[i];
     iext[n_ext++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
     VkInstanceCreateInfo ici = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
     ici.flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
