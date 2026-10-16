@@ -130,6 +130,15 @@ static int layout_from_decl(const d3d9_decl *dc, vt3_vlayout *lay, uint32_t stri
             g_bad_usage = usage;
             return -1;
         }
+        /* VT3_DROP_OOB_ATTR=1 (experiment, off by default): leave out an element that lies past the end of the
+         * vertex. The planar-shadow blur quad has 20-byte vertices under the HUD's declaration, which has a float4
+         * at offset 20, so binding it fetches beyond the buffer. Dropping it removes the scrambled shadow streaks
+         * but the shadows then vanish altogether (the blurred target stays empty), so the cause is not settled:
+         * see docs/HANDOFF.md, open issue 1. */
+        static int drop_oob = -1;
+        if (drop_oob < 0) drop_oob = getenv("VT3_DROP_OOB_ATTR") != NULL;
+        int esize = a->components * (a->type == VT3_VT_FLOAT ? 4 : (a->type == VT3_VT_SHORT || a->type == VT3_VT_SHORT_NORM) ? 2 : 1);
+        if (drop_oob && (uint32_t)a->offset + (uint32_t)esize > stride) k--;
     }
     lay->count = k;
     return 0;
@@ -144,6 +153,7 @@ static void copy_vertices(uint8_t *dst, const uint8_t *src, uint32_t n, uint32_t
         const uint8_t *e = dc->el[i];
         if ((e[0] | (e[1] << 8)) != 0 || e[4] != DT_D3DCOLOR) continue;
         uint32_t off = e[2] | (e[3] << 8);
+        if (off + 4 > stride) continue;     /* past the end of the vertex: nothing to swap */
         for (uint32_t v = 0; v < n; v++) {
             uint8_t *p = dst + (size_t)v * stride + off;
             uint8_t t = p[0];
@@ -961,6 +971,34 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     if (vsh->skinned && getenv("VT3_SKIN_NOCULL")) dd.state.cull = 1;   /* debug: skinned meshes drawn two-sided */
     if (vsh->skinned && getenv("VT3_SKIN_FLIPCULL") && (dd.state.cull == 2 || dd.state.cull == 3))
         dd.state.cull = 5 - dd.state.cull;                              /* debug: skinned meshes, culling reversed */
+    {   /* VT3_TRACE_QUAD=1 (debug): the layout and raw floats of the first few small draws, such as full-screen quads */
+        static int quad_on = -1, quad_shown;
+        if (quad_on < 0) quad_on = getenv("VT3_TRACE_QUAD") != NULL;
+        d3d9_surface *qs = d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
+        if (quad_on && nverts <= 6 && quad_shown < 10 && qs && !qs->backbuffer) {
+            quad_shown++;
+            VT3_INFO("quad %d: %u verts, stride %d, %d attrs, prim %d, target %ux%u%s", quad_shown, (unsigned)nverts, lay.stride,
+                     lay.count, (int)dd.prim, qs ? (unsigned)qs->w : 0u, qs ? (unsigned)qs->h : 0u, qs && qs->backbuffer ? " (back buffer)" : "");
+            for (int i = 0; i < lay.count; i++)
+                VT3_INFO("  attr loc %d comps %d type %d offset %d", lay.attr[i].location, lay.attr[i].components, (int)lay.attr[i].type,
+                         lay.attr[i].offset);
+            int nf = lay.stride / 4 < 8 ? lay.stride / 4 : 8;
+            for (uint32_t v = 0; v < nverts; v++) {
+                char line[160];
+                int n = 0;
+                const float *f = (const float *)((const uint8_t *)vcopy + (size_t)v * (uint32_t)lay.stride);
+                for (int k = 0; k < nf; k++) n += snprintf(line + n, sizeof line - (size_t)n, " %g", f[k]);
+                VT3_INFO("  v%u:%s", v, line);
+            }
+            VT3_INFO("  state: blend %d src %d dst %d op %d | z test %d write %d func %d | cull %d | colour write 0x%x | alpha test %d func %d ref %d",
+                     dd.state.alpha_blend, dd.state.src_blend, dd.state.dst_blend, dd.state.blend_op, dd.state.depth_test,
+                     dd.state.depth_write, dd.state.depth_func, dd.state.cull, dd.state.color_write, dd.state.alpha_test,
+                     dd.state.alpha_func, dd.state.alpha_ref);
+            for (int k = 0; k < 4; k++)
+                VT3_INFO("  vsc c%d: %g %g %g %g   psc c%d: %g %g %g %g", k, vsc_copy[k * 4], vsc_copy[k * 4 + 1], vsc_copy[k * 4 + 2],
+                         vsc_copy[k * 4 + 3], k, psc_copy[k * 4], psc_copy[k * 4 + 1], psc_copy[k * 4 + 2], psc_copy[k * 4 + 3]);
+        }
+    }
     trace_draw(d, a, nverts);
     vt3_gfx_draw_program(&dd);
     pixel_watch(d, a, vsh, psh);

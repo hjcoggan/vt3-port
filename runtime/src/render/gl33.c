@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* One X-macro list drives the typedefs, the pointers, and the loader. */
 #define VT3_GL_FUNCS(X)                                                                   \
@@ -38,6 +39,7 @@
     X(void, glBindTexture, (GLenum, GLuint))                                              \
     X(void, glTexImage2D, (GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *)) \
     X(void, glTexSubImage2D, (GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void *)) \
+    X(void, glGetTexImage, (GLenum, GLint, GLenum, GLenum, void *))                      \
     X(void, glTexParameteri, (GLenum, GLenum, GLint))                                     \
     X(void, glTexParameteriv, (GLenum, GLenum, const GLint *))                            \
     X(void, glGenBuffers, (GLsizei, GLuint *))                                            \
@@ -635,8 +637,57 @@ static void gl_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_te
     p_glDrawArrays(prim == VT3_PRIM_TRIANGLESTRIP ? GL_TRIANGLE_STRIP : GL_TRIANGLES, 0, (GLsizei)count);
 }
 
+/* VT3_DUMP_RT=dir: once, VT3_DUMP_RT_AT seconds after the first present (default 50), every 8-bit render
+ * target of 256 pixels or more is written to dir as rt_<handle>_<w>x<h>.tga, top row first. A debug aid for
+ * looking at the intermediate images of a frame, such as the planar shadow mask. */
+static const char *g_dump_tag = "x";   /* part of each file name: which dump of the run this is */
+static int g_dump_pending, g_dump_state = -1;
+static struct timespec g_dump_t0;
+
+static void dump_targets(const char *dir)
+{
+    for (int i = 0; i < VT3_MAX_TEX; i++) {
+        gl_tex *t = &g.tex[i];
+        if (!t->used || !t->rt || t->fmt == VT3_TEXFMT_RGBA16F || t->w < 256) continue;
+        uint8_t *px = malloc((size_t)t->w * (size_t)t->h * 4u);
+        if (!px) return;
+        p_glBindTexture(GL_TEXTURE_2D, t->id);
+        p_glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, px);
+        char path[512];
+        snprintf(path, sizeof path, "%s/%s_rt_%d_%dx%d.tga", dir, g_dump_tag, i + 1, t->w, t->h);
+        FILE *f = fopen(path, "wb");
+        if (f) {
+            uint8_t hdr[18] = { 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                (uint8_t)(t->w & 255), (uint8_t)(t->w >> 8), (uint8_t)(t->h & 255), (uint8_t)(t->h >> 8), 32, 0x28 };
+            fwrite(hdr, 1, sizeof hdr, f);
+            fwrite(px, 1, (size_t)t->w * (size_t)t->h * 4u, f);
+            fclose(f);
+        }
+        free(px);
+    }
+}
+
+static void maybe_dump_targets(void)
+{
+    static int state = -1;      /* -1 unread, 0 waiting, 1 done or off */
+    static struct timespec t0;
+    if (state < 0) {
+        state = getenv("VT3_DUMP_RT") ? 0 : 1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+    }
+    if (state != 0) return;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    const char *at = getenv("VT3_DUMP_RT_AT");
+    double due = at ? atof(at) : 50.0;
+    if ((double)(now.tv_sec - t0.tv_sec) + (double)(now.tv_nsec - t0.tv_nsec) * 1e-9 < due) return;
+    dump_targets(getenv("VT3_DUMP_RT"));
+    state = 1;
+}
+
 static void gl_present(const vt3_rect *dst, int nearest, int drawable_w, int drawable_h)
 {
+    maybe_dump_targets();
     /* The scissor belongs to the logical buffer; it must not clip the bars or the blit. */
     p_glDisable(GL_SCISSOR_TEST);
     /* Clear the whole drawable to black first, so the bars are black. */
@@ -829,6 +880,37 @@ static void gl_prog_destroy(vt3_prog h)
 
 static void gl_draw_program(const vt3_draw *d)
 {
+    {   /* VT3_DUMP_QUAD=dir (debug): the render targets just before the first 4-vertex strip that reads target 1
+         * and draws into target 2 (the mask blur) once VT3_DUMP_RT_AT seconds have passed, and again just after
+         * it (end of this function). Done before any of this draw's textures are bound, because dumping
+         * rebinds texture unit 0. */
+        if (g_dump_state < 0) {
+            g_dump_state = getenv("VT3_DUMP_QUAD") ? 0 : 1;
+            clock_gettime(CLOCK_MONOTONIC, &g_dump_t0);
+        }
+        if (g_dump_state == 0 && !d->indices && d->count == 4 && d->prim == VT3_PRIM_TRIANGLESTRIP && g.tgt == 2 &&
+            d->samplers[0] == 1) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            const char *at = getenv("VT3_DUMP_RT_AT");
+            if ((double)(now.tv_sec - g_dump_t0.tv_sec) + (double)(now.tv_nsec - g_dump_t0.tv_nsec) * 1e-9 >= (at ? atof(at) : 50.0)) {
+                g_dump_tag = "pre";
+                dump_targets(getenv("VT3_DUMP_QUAD"));
+                g_dump_pending = 1;
+            }
+        }
+    }
+    {   /* VT3_SHADOW_COPY=1 (debug): replace the mask blur (a 4-vertex strip reading target 1 into target 2) with a
+         * straight copy, to see whether the shadows the court draws follow from the mask */
+        static int copy_on = -1;
+        if (copy_on < 0) copy_on = getenv("VT3_SHADOW_COPY") != NULL;
+        if (copy_on && !d->indices && d->count == 4 && d->prim == VT3_PRIM_TRIANGLESTRIP && g.tgt == 2 &&
+            d->samplers[0] == 1) {
+            vt3_rect all = { 0, 0, g.tex[1].w, g.tex[1].h };
+            gl_blit(2, all, 1, all, 0);
+            return;
+        }
+    }
     gl_prog *p = prog_get(d->prog);
     if (!p || !d->layout) return;
     gl_bind_logical_fbo();
@@ -898,6 +980,24 @@ static void gl_draw_program(const vt3_draw *d)
                          (GLsizei)d->count, GL_UNSIGNED_SHORT, NULL);
     } else {
         p_glDrawArrays(d->prim == VT3_PRIM_TRIANGLESTRIP ? GL_TRIANGLE_STRIP : GL_TRIANGLES, 0, (GLsizei)d->count);
+    }
+    {   /* VT3_TRACE_BLUR=1 (debug): GL's verdict on the mask blur draw */
+        static int chk_on = -1, chk_n;
+        if (chk_on < 0) chk_on = getenv("VT3_TRACE_BLUR") != NULL;
+        if (chk_on && !d->indices && d->count == 4 && d->prim == VT3_PRIM_TRIANGLESTRIP && g.tgt == 2 &&
+            d->samplers[0] == 1 && chk_n++ % 100 == 0 && chk_n < 1200) {
+            GLenum err = p_glGetError();
+            GLenum st = p_glCheckFramebufferStatus(GL_FRAMEBUFFER);
+            VT3_INFO("blur draw #%d result: glGetError 0x%x, framebuffer 0x%x (complete 0x8cd5), colour write 0x%x, scissor %s %d,%d %dx%d",
+                     chk_n, (unsigned)err, (unsigned)st, d->state.color_write, g.scissor_on ? "ON" : "off", g.scissor.x, g.scissor.y,
+                     g.scissor.w, g.scissor.h);
+        }
+    }
+    if (g_dump_pending) {
+        g_dump_tag = "post";
+        dump_targets(getenv("VT3_DUMP_QUAD"));
+        g_dump_pending = 0;
+        g_dump_state = 1;
     }
 }
 
