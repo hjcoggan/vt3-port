@@ -14,6 +14,43 @@ Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one rend
 - Menus, tournament flow, serving, rallies, scoring all work on both. Mac audio is clean.
 - Court shadows are fixed on both backends (below). The .app now bundles the Vulkan loader.
 
+## Performance (session of 2026-10-18)
+
+In-match frame rate, measured with `VT3_FPS_CAP=0` so nothing caps it, averaged over the last 40
+samples of a full rally:
+
+| | Mac | Retroid |
+|---|---|---|
+| before | 79.3 fps (12.60 ms) | 35 fps |
+| after | 102.3 fps (9.78 ms) | 62.9 fps (15.89 ms), min 46.3 |
+
+Everything is host CPU; the GPU is ~3.5 ms a frame on the Retroid, so it is nowhere near the limit.
+Three things got it there, all on `main`:
+
+- **`9e95268`** the guest's x87 work runs in the host double unit instead of the bit-by-bit soft
+  float, guarded so it only fires for the control word this game runs in. ~1.2x on its own.
+- **`1ffabb4`** typed stores instead of `memcpy` in `wr16/32/64`, so the guest memory base is not
+  reloaded after every store.
+- **`4669aea`** a direct-mapped cache for `vt_icall` (which binary searched 572 import addresses on
+  every host call, 9.6% of CPU) and the per-draw constant copies: the shim copied the device's 4 KB
+  vertex and pixel arrays, the renderer copied them again, on top of clearing whole uniform blocks.
+  The device arrays now go straight through.
+- **`909f94f`** `0.0` used to fail the fast-path guard and fall into the soft path, which is most of
+  why `pack_round` was 4.7% of CPU.
+
+**Measurements on the Retroid must be checked against a screenshot.** Navigating with
+`keyevent 54` (Z) after a match ends walks the menus instead of keeping a rally going, and a menu
+runs at ~118 fps. Capture a frame at the start and the end of the window and confirm both show the
+match, or the number means nothing.
+
+`VT3_FPS_CAP` defaults to 60, which is what the game was written for and is even on a 120 Hz panel
+(each frame shown twice). The Retroid now has just enough headroom to hold it. Running at the full
+120 would need the remaining ~1.9x, and the two things that could supply it are the x87 register
+file being held as host doubles rather than x80 (x87 is 27% of CPU; generated code touches the
+register file only through `FPUSH`/`FPOP`/`FST`, so it needs no recompilation of `vt3.c`), and
+`rep movs` translating to `memmove` instead of a dword loop (`fn_00421e90` is 20.7%, and its
+64-byte struct copies are scalar).
+
 ## Fixed this session (all on `main`)
 
 | Commit | Fix |
