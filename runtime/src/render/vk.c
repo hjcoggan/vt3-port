@@ -1820,7 +1820,21 @@ static void frame_limit(void)
     static uint64_t last_ns;
     if (period_ns < 0) {
         const char *cap = getenv("VT3_FPS_CAP");
-        int hz = cap ? atoi(cap) : 60;
+        /* The default follows what the machine can actually do. The Mac's display is 60 Hz, and
+         * pacing the present there is free. The Retroid's panel is 120 Hz, and a sleep-based cap
+         * below the frame's own cost is actively counterproductive there: with the frame taking
+         * 15.9 ms and a 60 Hz budget of 16.7 ms, the wait is only 0.8 ms, but that idle is enough
+         * for the big cores to drop from 2.0 to 0.85 GHz, and the next frame then takes 24 ms
+         * instead of 16. Measured in-match, capped at 60 the game ran at 40.9 fps and uncapped at
+         * 62.9 - the cap cost a third of the frame rate it was meant to impose. At 120 the budget
+         * is 8.3 ms, below the frame's cost, so nothing sleeps and the game runs flat out; if it
+         * ever gets fast enough to reach 120, the same code starts pacing it properly. */
+        int hz = cap ? atoi(cap)
+#ifdef __ANDROID__
+                     : 120;
+#else
+                     : 60;
+#endif
         period_ns = hz > 0 ? 1000000000ll / hz : 0;
     }
     if (!period_ns) return;

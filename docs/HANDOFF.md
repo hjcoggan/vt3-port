@@ -43,13 +43,20 @@ Three things got it there, all on `main`:
 runs at ~118 fps. Capture a frame at the start and the end of the window and confirm both show the
 match, or the number means nothing.
 
-`VT3_FPS_CAP` defaults to 60, which is what the game was written for and is even on a 120 Hz panel
-(each frame shown twice). The Retroid now has just enough headroom to hold it. Running at the full
-120 would need the remaining ~1.9x, and the two things that could supply it are the x87 register
-file being held as host doubles rather than x80 (x87 is 27% of CPU; generated code touches the
-register file only through `FPUSH`/`FPOP`/`FST`, so it needs no recompilation of `vt3.c`), and
-`rep movs` translating to `memmove` instead of a dword loop (`fn_00421e90` is 20.7%, and its
-64-byte struct copies are scalar).
+`VT3_FPS_CAP` defaults to the display's refresh rate rather than a flat 60, because a sleep-based
+cap that is *close* to the frame's own cost is worse than no cap at all. On the Retroid a frame
+costs 15.9 ms and a 60 Hz budget is 16.7 ms, so the wait is only 0.8 ms - but that idle is enough
+for the big cores to fall from 2.0 to 0.85 GHz, and the next frame then takes 24 ms instead of 16.
+Measured in-match, capped at 60 the game ran at **40.9 fps** and uncapped at **62.9**: the cap cost
+a third of the rate it was meant to impose. At 120 the budget is 8.3 ms, below the frame's cost, so
+nothing sleeps and the game runs flat out, and if it ever gets fast enough to reach 120 the same
+code begins pacing it properly. `VT3_FPS_CAP=0` still turns the limit off entirely.
+
+Running at a true, steady 120 would need the remaining ~1.9x, and the two things that could supply
+it are the x87 register file being held as host doubles rather than x80 (x87 is 27% of CPU;
+generated code touches the register file only through `FPUSH`/`FPOP`/`FST`, so it needs no
+recompilation of `vt3.c`), and `rep movs` translating to `memmove` instead of a dword loop
+(`fn_00421e90` is 20.7%, and its 64-byte struct copies are scalar).
 
 ## Fixed this session (all on `main`)
 
