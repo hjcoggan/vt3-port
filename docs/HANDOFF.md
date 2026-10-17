@@ -26,7 +26,7 @@ Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one rend
 | ee0d643 | Renderer now carries per-draw min/mag texture-filter state and creates point/linear/anisotropic samplers. **This did not fix the missing net**; the net root cause was sampler address mode (see `04d62fa` below). |
 | bd01b0f | **Xbox 360 gamepad layout (macOS & Android).** Verified against `VT3.exe`'s `FUN_004018c0`, `FUN_00476300`, `FUN_004763c0`, and `0x0085603c` (`[12,13,14,15,2,0,3,1,4,7]`): DI button 0 (`A`) is Top Spin / Menu Select, DI button 2 (`B` and `X`) is Slice / Drop Shot / Menu Cancel, DI button 3 (`Y`) is Lob / World Tour Home, DI button 4 (`LB`/`RB`/`LT`/`RT`) is Instruct COM Partner / Incoming Mail, DI button 7 (`Start`) is Pause, `Back` asserts `DIK_V` (`0x2F`) for Change Camera, and `RB`/`RT` assert `DIK_LMENU` (`0x38`) for World Tour Tour Calendar without triggering DI button 1's match pause (`0x10`). Added `debug.vt3.swap_ab_xy` on Android and `VT3_GAMEPAD_USE_LABELS` on SDL3. |
 | 04d62fa | **Missing net mesh fixed.** The net's UVs span 30×4 texture tiles, while D3D9 sampler address U/V are `WRAP` (value 1). Both backends hardcoded `CLAMP_TO_EDGE`, so only UVs within the first tile rendered the net grid; the remainder sampled a transparent edge. Per-draw address modes are now carried from `SetSamplerState` into Vulkan sampler selection and GL texture wrap state. Verified on the Retroid: the grid now covers the full net. |
-| *this session* | **Net mipmap pyramid & trilinear filtering.** Although `.gog` DDS files contain 8 mip levels (`128×128` down to `1×1`), the game's loader (`FUN_004195f0` -> `FUN_0040bd10` -> `FUN_0040ba10`) passes `max_levels = 1` to `IDirect3DDevice9::CreateTexture`. Both Vulkan (`vk.c`) and OpenGL (`gl33.c`) now allocate a full mip chain for 2D textures and generate the pyramid on level-0 upload (`vkCmdBlitImage` chain with `VK_IMAGE_USAGE_TRANSFER_SRC_BIT` and proper `TRANSFER_SRC_OPTIMAL` -> `SHADER_READ_ONLY_OPTIMAL` barriers in Vulkan; `glGenerateMipmap` + `GL_LINEAR_MIPMAP_LINEAR` in GL). |
+| *this session* | **Net mipmap pyramid: attempted, reverted.** Tried allocating a full 2D mip chain and generating it on level-0 upload (`vkCmdBlitImage` / `glGenerateMipmap`) to stop the net's single-mip grid shimmering at distance. On the Retroid this produced a **black screen** (the game still ran at ~50 fps with no Vulkan errors), so the mip generation was removed and textures stay at one level. The net now renders fully (address-mode fix above) but still shimmers at distance and costs some performance, especially on grass. |
 | 7cd9a86 | `VT3_VK_DEBUG=1` routes validation-layer messages into the log (desktop). |
 | e8d1a37 | DirectSound: unwritten 256-byte blocks mix as silence instead of replaying old audio, and the mixer thread asks for audio priority. Mac: 13 exact 128 ms repeats per 60 s match before, 0 after. **Not yet confirmed on the Retroid**: if the game's writer is starved there, repeats become gaps. Back out with `git revert e8d1a37`. |
 | db04521 | Shadow debugging aids (below). |
@@ -68,10 +68,10 @@ Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one rend
 3. **Android audio** needs a listen with e8d1a37 (see above). Android stutter during loading is
    probably CPU load: the game's audio writer is starved. Raising the writer thread's priority is
    the next lever.
-4. **Net coverage & mipmaps: fixed this session** (see Fixed table). `04d62fa` fixed the missing U/V
-   `WRAP` address mode so the 30×4 tiled net mesh renders across the full court, and the follow-up
-   generates full 2D mip pyramids on upload in both Vulkan and GL with trilinear + anisotropic
-   filtering so the fine wire grid no longer shimmers or stalls texture cache at distance. **Shadows
+4. **Net coverage: fixed this session** (see Fixed table). `04d62fa` fixed the missing U/V
+   `WRAP` address mode so the 30×4 tiled net mesh renders across the full court. Remaining:
+   the single-mip wire grid shimmers at distance and costs some performance, especially on grass;
+   a mip-chain attempt black-screened the device and was reverted (see Fixed table). **Shadows
    duplicated** was reported on Android before the zero-init fix; re-check with the current build.
 5. **Screen shape.** The game should render cleanly at 4:3, 16:10, 16:9, 18:9 and 19.5:9. Letterbox
    is the right default (`runtime/src/render/letterbox.c`; integer mode ignores the display aspect,
