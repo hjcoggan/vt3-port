@@ -22,6 +22,7 @@ Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one rend
 | 1c37b9e | Vulkan's per-frame vertex/index rings were too small and silently dropped draws (2625 index drops in 100 s). Now 32 MB / 16 MB per frame; drops and the white-texture fallback warn once. |
 | 8890cab | x87: rounding a 64-bit mantissa up past all ones was never detected (`1 << 64`). The result was an invalid number the guest read as NaN. It caused the NaN camera, light and bone uploads. 10 NaN uploads per 100 s match before, 0 after. |
 | dce147b | Translator zeroes temporary registers. SPIR-V on Metal/Adreno leaves them undefined, which gave T-posed models and missing torsos on Android. **Every shader hash changes: regenerate `shaders.pack` after any change to `sm2_glsl.c`.** |
+| 286a448 | **Adreno T-pose root cause (the real fix).** Adreno 740 reads the skinning shader's blend-indices vertex element (`UBYTE4`, bound as `R8G8B8A8_USCALED`) as zero, so the bone index `a0.x` collapsed to 0 and every skinned mesh rendered as a rigid bind/T-pose (this is separate from the `dce147b` zero-init). `d3d9_draw.c` now expands the four index bytes into a `float4` in the shim's per-draw vertex copy (stride + 12, following attribute offsets + 12). No game data or shader changed. |
 | 7cd9a86 | `VT3_VK_DEBUG=1` routes validation-layer messages into the log (desktop). |
 | e8d1a37 | DirectSound: unwritten 256-byte blocks mix as silence instead of replaying old audio, and the mixer thread asks for audio priority. Mac: 13 exact 128 ms repeats per 60 s match before, 0 after. **Not yet confirmed on the Retroid**: if the game's writer is starved there, repeats become gaps. Back out with `git revert e8d1a37`. |
 | db04521 | Shadow debugging aids (below). |
@@ -104,15 +105,22 @@ $PY tools/formats/shaders/gen_spirv_pack.py ../dump/android/shaders.pack
 ```bash
 ANDROID_NDK=/opt/homebrew/share/android-ndk cmake -S runtime -B ../dump/android/cmake-arm64-main \
   -DCMAKE_TOOLCHAIN_FILE=/opt/homebrew/share/android-ndk/build/cmake/android.toolchain.cmake \
-  -DANDROID_PLATFORM=android-26 -DANDROID_ABI=arm64-v8a -DVT3_GAME_DIR=../dump/recomp/vt3_nocd -G Ninja
+  -DANDROID_PLATFORM=android-26 -DANDROID_ABI=arm64-v8a \
+  -DVT3_GAME_DIR="/Users/heath/Virtua Tennis 3/dump/recomp/vt3_nocd" -G Ninja
 cmake --build ../dump/android/cmake-arm64-main --target vt3android -j 8   # 5-10 min: huge vt3.c
-llvm-strip -o ../dump/android/libvt3android-stripped.so ../dump/android/cmake-arm64-main/libvt3android.so
+/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-strip \
+  -o ../dump/android/libvt3android-stripped.so ../dump/android/cmake-arm64-main/libvt3android.so
 $PY android/build_apk.py game vt3android --so ../dump/android/libvt3android-stripped.so --install c27c2f60
 adb -s c27c2f60 push ../dump/android/shaders.pack /sdcard/Android/data/net.vt3port.game/files/shaders.pack
+adb -s c27c2f60 push ../dump/android/vt3.env /sdcard/Android/data/net.vt3port.game/files/vt3.env
+adb -s c27c2f60 shell am force-stop net.vt3port.game   # avoid a monkey relaunch racing a live game
 adb -s c27c2f60 shell monkey -p net.vt3port.game -c android.intent.category.LAUNCHER 1
 ```
-Push the pack **before** launching. Wake the Retroid with `input keyevent 224` and a swipe up, sleep it
-with `keyevent 223`; `adb exec-out screencap -p > shot.png` is black while it dozes.
+Push the pack **before** launching. `VT3_GAME_DIR` must be absolute (CMake resolves a relative one
+under the build dir and cannot find `../dump/recomp/vt3_nocd/vt3.c`). Bare `llvm-strip` is not on
+`PATH`; use the NDK's. The game reads `VT3_*` switches from `vt3.env` (KEY=VALUE) on the device, since
+there is no shell to set the environment. Wake the Retroid with `input keyevent 224` and a swipe up,
+sleep it with `keyevent 223`; `adb exec-out screencap -p > shot.png` is black while it dozes.
 
 ## Debug toolbox (env vars, all off by default)
 

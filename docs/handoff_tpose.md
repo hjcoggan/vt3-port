@@ -43,10 +43,12 @@ user's verbal descriptions plus draw/palette logs, not from reading pixels. That
 conclusions are marked *inferred* and some experiments were inconclusive. A multimodal model will
 resolve them in minutes.
 
-## Background (read these)
-- `docs/HANDOFF_BEAM.md` — original device evidence, build/deploy commands, device facts.
-- `docs/handoff_muse.md` — the failed 256-case-switch experiment, already reverted; the restore
-  recipe that works.
+## Background (archived)
+The two prior session handoffs are archived under `docs/archive/` (they describe the now-resolved
+investigation and the failed 256-case-switch experiment):
+- `docs/archive/HANDOFF_BEAM.md` — original device evidence, build/deploy commands, device facts.
+- `docs/archive/handoff_muse.md` — the failed 256-case-switch experiment, already reverted.
+The canonical build/deploy recipe now lives in `docs/HANDOFF.md`.
 
 ## What we know so far
 
@@ -139,13 +141,13 @@ Options, least-to-most invasive:
   3. CPU-skin the affected draws in the shim (bulletproof, but must also reproduce the shader's
      normal/tangent/shadow-UV/variance outputs, so it is the most work).
 
-## How to reproduce / build (unchanged from handoff_muse.md)
-Pack regeneration is env-sensitive while the debug knobs exist. Clean pack:
+## How to reproduce / build
+Clean pack:
 ```
 "/Users/heath/Virtua Tennis 3/tools/venv/bin/python" tools/formats/shaders/gen_spirv_pack.py ../dump/android/shaders.pack
 ```
 (with no `VT3_*` set → md5 `fd742109e9caa519ce777fee09d25173`).
-Build + deploy: see `docs/handoff_muse.md` (absolute `VT3_GAME_DIR`, NDK `llvm-strip`, F1 quick-play,
+Build + deploy: see `docs/HANDOFF.md` (absolute `VT3_GAME_DIR`, NDK `llvm-strip`, F1 quick-play,
 `adb shell am force-stop` first). Device `c27c2f60`.
 
 ## Current state of things (do not trust blindly)
