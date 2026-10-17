@@ -207,50 +207,16 @@ void vt_icall(vt3_cpu *c, uint32_t target)
     if (msg_kind == 1 && c->eax) vt_trace_msg("returned", msg_arg);
 }
 
-/* ---- x87 ----------------------------------------------------------------- */
-
-double vt_ldf32(uint32_t a)
-{
-    float f;
-    memcpy(&f, vt_mem + a, 4);
-    return f;
-}
-
-double vt_ldf64(uint32_t a)
-{
-    double d;
-    memcpy(&d, vt_mem + a, 8);
-    return d;
-}
-
-
-void vt_stf32(uint32_t a, double v)
-{
-    float f = (float)v;
-    memcpy(vt_mem + a, &f, 4);
-}
-
-void vt_stf64(uint32_t a, double v)
-{
-    memcpy(vt_mem + a, &v, 8);
-}
-
-
-
+/* ---- x87 ----------------------------------------------------------------- *
+ *
+ * The one-memory-access helpers (vt_ldf32/vt_stf64/...) are static inline in vt3rt.h; see the
+ * comment there. What is left here is the one that needs a rounding mode. */
 
 uint32_t vt_cvt_i32(double v, int tr)
 {
     double r = tr ? trunc(v) : nearbyint(v);
     if (!(r >= -2147483648.0 && r < 2147483648.0)) return 0x80000000u;
     return (uint32_t)(int32_t)r;
-}
-
-uint32_t vt_fcmp_d(double a, double b)
-{
-    if (isnan(a) || isnan(b)) return 0x7u;
-    if (a < b) return 0x1u;
-    if (a == b) return 0x2u;
-    return 0x0u;
 }
 
 vt_xmm vt_ldx(uint32_t a)

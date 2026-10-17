@@ -134,34 +134,40 @@ static double round_to32(double x, uint32_t rc)
  * value seen in a full match run is 0x0C3F, single precision toward zero, from a library
  * control87 path: there is no constant 0xC3F in the translated code and only four FPU
  * env save/restore sites, so it is not game math, and double is at least as accurate as
- * single either way. */
-static void check_cw(uint32_t cw)
+ * single either way. Called from vt_fadd's inline fast path, which has already tested. */
+void vt_fbadcw(uint32_t cw)
 {
     static int said = 0;
-    if (cw != 0x37Fu && !said) {
+    if (!said) {
         said = 1;
         fprintf(stderr, "vt3fpu: control word %04X is not 0x037F; the double register file "
                         "ignores its precision control\n", cw);
     }
 }
 
-/* ---- arithmetic -------------------------------------------------------------- */
+/* ---- rounding stores: the directed modes only ------------------------------- *
+ *
+ * vt_fst32 and vt_fst64 are inline in vt3fpu.h and take the round-to-nearest case, which is
+ * every store this game makes, themselves. These two are what they fall through to for a
+ * control word that asks for toward-zero, toward +inf or toward -inf. */
 
-double vt_fadd(double a, double b, uint32_t cw) { check_cw(cw); return a + b; }
-double vt_fsub(double a, double b, uint32_t cw) { check_cw(cw); return a - b; }
-double vt_fmul(double a, double b, uint32_t cw) { (void)cw; return a * b; }
-double vt_fdiv(double a, double b, uint32_t cw) { (void)cw; return a / b; }
-double vt_fsqrt(double a, uint32_t cw) { (void)cw; return sqrt(a); }
-double vt_fneg(double a) { return -a; }
-double vt_fabs(double a) { return fabs(a); }
+void vt_fst32_rc(uint32_t a, double x, uint32_t cw)
+{
+    float f = (float)round_to32(x, (cw >> 10) & 3u);
+    memcpy(vt_mem + a, &f, 4);
+}
+
+void vt_fst64_rc(uint32_t a, double x, uint32_t cw)
+{
+    double d = round_by_rc(x, (cw >> 10) & 3u);
+    memcpy(vt_mem + a, &d, 8);
+}
 
 double vt_frndint(double a, uint32_t cw)
 {
     if (!isfinite(a)) return a;                    /* zero and infinity are already integers */
     return round_by_rc(a, (cw >> 10) & 3u);
 }
-
-double vt_fild(int64_t v) { return (double)v; }
 
 int64_t vt_fint(double a, uint32_t rc, int bits)
 {
@@ -179,16 +185,7 @@ int64_t vt_fint(double a, uint32_t rc, int bits)
     return (int64_t)r;
 }
 
-/* ---- classification and comparison ------------------------------------------- */
-
-/* Compare: the x87 status bits for less (CF), equal (ZF), unordered (PF). */
-uint32_t vt_fcmp(double a, double b)
-{
-    if (isnan(a) || isnan(b)) return 0x7u;
-    if (a < b) return 0x1u;
-    if (a == b) return 0x2u;
-    return 0x0u;
-}
+/* ---- classification ----------------------------------------------------------- */
 
 uint32_t vt_fxam(double a)
 {
@@ -207,19 +204,8 @@ uint32_t vt_fxam(double a)
 
 /* ---- memory forms ------------------------------------------------------------ */
 
-double vt_fld32(uint32_t a)
-{
-    float f;
-    memcpy(&f, vt_mem + a, 4);
-    return (double)f;                       /* a float32 widens to double exactly */
-}
-
-double vt_fld64(uint32_t a)
-{
-    double d;
-    memcpy(&d, vt_mem + a, 8);
-    return d;
-}
+/* vt_fld32 / vt_fld64 are inline in vt3fpu.h: a widening load, one access. Only the 80-bit
+ * form is out here, because it is the one that decodes. */
 
 double vt_fld80(uint32_t a)
 {
@@ -229,39 +215,15 @@ double vt_fld80(uint32_t a)
     return x80_to_d(x);
 }
 
-void vt_fst32(uint32_t a, double x, uint32_t cw)
-{
-    float f = (float)round_to32(x, (cw >> 10) & 3u);
-    memcpy(vt_mem + a, &f, 4);
-}
-
-void vt_fst64(uint32_t a, double x, uint32_t cw)
-{
-    double d = round_by_rc(x, (cw >> 10) & 3u);
-    memcpy(vt_mem + a, &d, 8);
-}
+/* vt_fst32 / vt_fst64 are inline in vt3fpu.h: the round-to-nearest store is one conversion and
+ * one access, and every store this game makes takes that path. The _rc versions above are the
+ * ones they fall through to for a directed rounding mode. */
 
 void vt_fst80(uint32_t a, double x)
 {
     x80mem r = d_to_x80(x);
     memcpy(vt_mem + a, &r.m, 8);
     memcpy(vt_mem + a + 8, &r.se, 2);
-}
-
-/* ---- constants --------------------------------------------------------------- */
-
-double vt_fconst(int which)
-{
-    switch (which) {
-    case VT_FC_1:   return 1.0;
-    case VT_FC_ZERO: return 0.0;
-    case VT_FC_PI:  return 3.14159265358979323846;
-    case VT_FC_L2E: return 1.44269504088896340736;   /* log2 e */
-    case VT_FC_LN2: return 0.69314718055994530942;
-    case VT_FC_LG2: return 0.30102999566398119521;   /* log10 2 */
-    case VT_FC_L2T: return 3.32192809488736234787;   /* log2 10 */
-    default: return 0.0;
-    }
 }
 
 /* ---- transcendental functions ------------------------------------------------ */

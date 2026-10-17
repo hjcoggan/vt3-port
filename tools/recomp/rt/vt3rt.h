@@ -118,14 +118,47 @@ void vt_unsupported_at(uint32_t addr, const char *text) __attribute__((noreturn)
 extern int vt_trace_serve;
 void vt_serve_point(vt3_cpu *c, uint32_t addr);
 
-/* x87 support. Double precision internally. */
-double vt_ldf32(uint32_t a);
-double vt_ldf64(uint32_t a);
-void vt_stf32(uint32_t a, double v);
-void vt_stf64(uint32_t a, double v);
+/* x87 and SSE bridges. Double precision internally.
+ *
+ * These are header inlines, and that is a speed choice: they are one memory access each, and
+ * vt3.c is translated code that calls them at ~24,000 sites. Defined in a .c file they are
+ * never inlined and never devirtualised - each is an out-of-line call plus a PLT hop on
+ * Android, which profiled at 4.7% of Retroid CPU for three of them alone (vt_ldf32, vt_fst32,
+ * vt_fld32) and fed the 3.1% spent in @plt. Inlined, the float form is one load and the
+ * double form one store.
+ *
+ * The rounding modes stay out in vt3fpu.c / vt3rt.c: only the round-to-nearest store - the one
+ * this game always uses - is here, and anything else still falls through to the full path. */
+static inline double vt_ldf32(uint32_t a)
+{
+    float f;
+    memcpy(&f, vt_mem + a, 4);
+    return (double)f;
+}
+static inline double vt_ldf64(uint32_t a)
+{
+    double d;
+    memcpy(&d, vt_mem + a, 8);
+    return d;
+}
+static inline void vt_stf32(uint32_t a, double v)
+{
+    float f = (float)v;
+    memcpy(vt_mem + a, &f, 4);
+}
+static inline void vt_stf64(uint32_t a, double v)
+{
+    memcpy(vt_mem + a, &v, 8);
+}
 /* Round by rc (0 nearest, 1 down, 2 up, 3 truncate), then convert. */
 uint32_t vt_cvt_i32(double v, int trunc);            /* CVT(T)SS/SD2SI */
-uint32_t vt_fcmp_d(double a, double b);              /* SSE COMISD/UCOMISD: bit0 CF, bit1 ZF, bit2 PF */
+static inline uint32_t vt_fcmp_d(double a, double b)  /* SSE COMISD/UCOMISD: bit0 CF, bit1 ZF, bit2 PF */
+{
+    if (isnan(a) || isnan(b)) return 0x7u;
+    if (a < b) return 0x1u;
+    if (a == b) return 0x2u;
+    return 0x0u;
+}
 
 /* 128-bit memory access for SSE moves. */
 vt_xmm vt_ldx(uint32_t a);
