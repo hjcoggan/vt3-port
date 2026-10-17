@@ -1763,23 +1763,24 @@ static void vk_draw_program_impl(const vt3_draw *d)
     uint32_t ps_off = vs_off + UBO_SLOT;
     f->ubo_used += 2u * UBO_SLOT;
     uint8_t *vsb = g.ubo_ptr + vs_off, *psb = g.ubo_ptr + ps_off;
-    memset(vsb, 0, VS_BLOCK_BYTES);
-    memset(psb, 0, PS_BLOCK_BYTES);
+    /* The 256 constants are the head of each block and are always written, so only the tail -
+     * vsi/vsb4, psi/psb4 and the alpha test, 336 bytes - needs clearing first. Zeroing the whole
+     * 4416 and 4432 per draw was 1.8 MB of memset a frame for bytes the memcpy overwrote. */
     if (d->vsc) memcpy(vsb, d->vsc, VT3_CONST_REGS * 16u);
-    /* vsb4[i >> 2][i & 3] (ivec4 vsb4[4]) lives after vsi[16], at offset 4096 + 256. */
-    for (int i = 0; i < 16; i++) {
-        int32_t v = d->vsb[i] != 0;
-        memcpy(vsb + 4096u + 256u + 4u * (uint32_t)i, &v, 4);
-    }
+    else memset(vsb, 0, VT3_CONST_REGS * 16u);
+    memset(vsb + VT3_CONST_REGS * 16u, 0, VS_BLOCK_BYTES - VT3_CONST_REGS * 16u);
     if (d->psc) memcpy(psb, d->psc, VT3_CONST_REGS * 16u);
-    for (int i = 0; i < 16; i++) {
-        int32_t v = d->psb[i] != 0;
-        memcpy(psb + 4096u + 256u + 4u * (uint32_t)i, &v, 4);
-    }
-    int32_t at_func = d->state.alpha_test ? d->state.alpha_func : 0;
-    float at_ref = (float)d->state.alpha_ref;
-    memcpy(psb + 4416u, &at_func, 4);
-    memcpy(psb + 4420u, &at_ref, 4);
+    else memset(psb, 0, VT3_CONST_REGS * 16u);
+    memset(psb + VT3_CONST_REGS * 16u, 0, PS_BLOCK_BYTES - VT3_CONST_REGS * 16u);
+    /* vsi[i] holds the bool constants b0..b15 as ints, and vsb4[i >> 2][i & 3] (ivec4 vsb4[4])
+     * lives after vsi[16], at offset 4096 + 256; the two runs are the same 16 values. Stores,
+     * not the 32 four-byte memcpys this used to be. */
+    int32_t *vsi = (int32_t *)(vsb + 4096u), *vsb4 = (int32_t *)(vsb + 4096u + 256u);
+    for (int i = 0; i < 16; i++) { int32_t v = d->vsb[i] != 0; vsi[i] = v; vsb4[i] = v; }
+    int32_t *psi = (int32_t *)(psb + 4096u), *psb4 = (int32_t *)(psb + 4096u + 256u);
+    for (int i = 0; i < 16; i++) { int32_t v = d->psb[i] != 0; psi[i] = v; psb4[i] = v; }
+    *(int32_t *)(psb + 4416u) = d->state.alpha_test ? d->state.alpha_func : 0;
+    *(float *)(psb + 4420u) = (float)d->state.alpha_ref;
 
     VkDescriptorSet set1 = alloc_set1(f, p->cube_mask, p->sampler_mask, d->samplers,
                                      d->samp_min, d->samp_mag, d->samp_addr_u, d->samp_addr_v, d->samp_addr_w);

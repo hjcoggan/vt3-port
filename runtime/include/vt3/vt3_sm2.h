@@ -51,6 +51,8 @@ typedef struct vt3_sm2_shader {
 
     float    cdef[VT3_SM2_MAX_CONST][4];    /* def c#: defaults, valid where cdef_set */
     uint8_t  cdef_set[VT3_SM2_MAX_CONST];
+    uint8_t  cdef_n;                        /* entries in cdef_idx; 0 for most shaders */
+    uint16_t cdef_idx[VT3_SM2_MAX_CONST];   /* the c# that have a def, so a draw need not scan 256 */
     int32_t  idef[VT3_SM2_MAX_INT][4];      /* defi i#: defaults, valid where idef_set */
     uint8_t  idef_set[VT3_SM2_MAX_INT];
 } vt3_sm2_shader;

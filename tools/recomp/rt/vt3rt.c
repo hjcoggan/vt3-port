@@ -137,18 +137,32 @@ static int icent_cmp(const void *a, const void *b)
 
 void vt_icall(vt3_cpu *c, uint32_t target)
 {
-    size_t lo = 0, hi = nitab;
-    while (lo < hi) {
-        size_t mid = lo + (hi - lo) / 2;
-        if (itab[mid].addr < target) lo = mid + 1;
-        else hi = mid;
+    /* Every call the game makes into a host import comes through here - D3D9 methods, the Win32
+     * calls, thousands a frame - and the entry was found by binary searching 572 sorted addresses,
+     * about nine compares each. The same handful of targets accounts for almost all of it, so a
+     * direct-mapped cache of the last target each slot saw turns the common case into one load and
+     * one compare. Profiled at 9.6% of CPU on the Retroid before this. The store below is a plain
+     * one on purpose: a racing guest thread can only ever install a valid entry, and the address
+     * check makes a torn or stale slot a miss rather than a wrong call. */
+    enum { ICACHE = 1024 };
+    static icent *icache[ICACHE];
+    uint32_t slot = (target >> 2) & (ICACHE - 1u);
+    icent *e = icache[slot];
+    if (!e || e->addr != target) {
+        size_t lo = 0, hi = nitab;
+        while (lo < hi) {
+            size_t mid = lo + (hi - lo) / 2;
+            if (itab[mid].addr < target) lo = mid + 1;
+            else hi = mid;
+        }
+        if (lo >= nitab || itab[lo].addr != target) {
+            fflush(stdout);
+            fprintf(stderr, "vt3: indirect transfer to unknown guest address %08x\n", target);
+            exit(97);
+        }
+        e = &itab[lo];
+        icache[slot] = e;
     }
-    if (lo >= nitab || itab[lo].addr != target) {
-        fflush(stdout);
-        fprintf(stderr, "vt3: indirect transfer to unknown guest address %08x\n", target);
-        exit(97);
-    }
-    icent *e = &itab[lo];
     if (((skip_mode == 2 && !skip_pressed) || skip_trace) && e->name && !strcmp(e->name, "PeekMessageA") &&
         vt3s_current_tid() == 1)
         skip_intro_hook(c);

@@ -928,35 +928,53 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
             }
         }
     }
-    /* Plain draws reference vertices 0..nverts-1 of the copy. */
+    /* The device's own constant arrays go straight to the renderer, which copies them into the
+     * frame's uniform ring within the same call, so they need no shadow copy here. Only a draw
+     * that has to patch something - a shader's `def` constants, or a debug hook below - pays for
+     * one first. With 210 draws a frame the unconditional copies were 1.7 MB per frame. */
     static float vsc_copy[256 * 4];
     static float psc_copy[256 * 4];
-    memcpy(vsc_copy, d->vsc, sizeof vsc_copy);
+    const float *vsc = &d->vsc[0][0], *psc = &d->psc[0][0];
     {   /* debug: VT3_SHADOW_MVP=1 makes shadow-map draws (512x512 targets) use the scene's light matrix c248..c251 */
         static int shadow_mvp = -1;
         if (shadow_mvp < 0) shadow_mvp = getenv("VT3_SHADOW_MVP") != NULL;
         d3d9_surface *ts = d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
-        if (shadow_mvp && ts && !ts->backbuffer && ts->w == 512 && ts->h == 512)
+        if (shadow_mvp && ts && !ts->backbuffer && ts->w == 512 && ts->h == 512) {
+            memcpy(vsc_copy, vsc, sizeof vsc_copy);
             memcpy(vsc_copy, &d->vsc[248][0], 4 * 4 * sizeof(float)), memcpy(&vsc_copy[0], &d->vsc[248][0], 16 * sizeof(float));
+            vsc = vsc_copy;
+        }
     }
-    memset(psc_copy, 0, sizeof psc_copy);
-    memcpy(psc_copy, d->psc, sizeof d->psc);
     /* A shader's def constants are its own values. A direct read is translated to the literal, but a
      * relative read (c[aL + n], as the skinning loop does) reads the uniform, which never holds them. Copy
-     * them in so both read the same value. */
-    if (vsh)
-        for (int r = 0; r < VT3_SM2_MAX_CONST && r < 256; r++)
-            if (vsh->sm.cdef_set[r]) memcpy(&vsc_copy[4 * r], vsh->sm.cdef[r], 4 * sizeof(float));
-    if (psh)
-        for (int r = 0; r < VT3_SM2_MAX_CONST && r < 256; r++)
-            if (psh->sm.cdef_set[r]) memcpy(&psc_copy[4 * r], psh->sm.cdef[r], 4 * sizeof(float));
+     * them in so both read the same value. cdef_idx lists the few registers that have one; most shaders
+     * have none, and that is the common case at the top. */
+    if (vsh && vsh->sm.cdef_n) {
+        memcpy(vsc_copy, vsc, sizeof vsc_copy);
+        for (int i = 0; i < vsh->sm.cdef_n; i++) {
+            int r = vsh->sm.cdef_idx[i];
+            memcpy(&vsc_copy[4 * r], vsh->sm.cdef[r], 4 * sizeof(float));
+        }
+        vsc = vsc_copy;
+    }
+    if (psh && psh->sm.cdef_n) {
+        memcpy(psc_copy, psc, sizeof psc_copy);
+        for (int i = 0; i < psh->sm.cdef_n; i++) {
+            int r = psh->sm.cdef_idx[i];
+            memcpy(&psc_copy[4 * r], psh->sm.cdef[r], 4 * sizeof(float));
+        }
+        psc = psc_copy;
+    }
 
     {   /* VT3_NO_VSM=1 (debug): skinned draws outside the shadow pass get a huge variance floor
          * (c10.x), so the variance shadow factor of the player shaders reads 1 (fully lit). */
         static int no_vsm = -1;
         if (no_vsm < 0) no_vsm = getenv("VT3_NO_VSM") != NULL;
         d3d9_surface *ns = no_vsm && d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
-        if (no_vsm && vsh->skinned && !(ns && ns->w == 512 && ns->h == 512)) psc_copy[10 * 4 + 0] = 1.0e6f;
+        if (no_vsm && vsh->skinned && !(ns && ns->w == 512 && ns->h == 512)) {
+            if (psc != psc_copy) { memcpy(psc_copy, psc, sizeof psc_copy); psc = psc_copy; }
+            psc_copy[10 * 4 + 0] = 1.0e6f;
+        }
     }
 
     /* Adreno (740) reads a UBYTE4 blend-indices element (R8G8B8A8_USCALED) as zero, which collapses
@@ -1001,8 +1019,8 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     dd.indices = use_idx ? idx16 : NULL;
     dd.count = use_idx ? nidx : nverts;
     dd.prim = prim_list == PRIM_TRIANGLESTRIP ? VT3_PRIM_TRIANGLESTRIP : VT3_PRIM_TRIANGLELIST;
-    dd.vsc = vsc_copy;
-    dd.psc = psc_copy;
+    dd.vsc = vsc;
+    dd.psc = psc;
     memcpy(dd.vsb, d->vsb, sizeof dd.vsb);
     memcpy(dd.psb, d->psb, sizeof dd.psb);
     fill_textures(d, dd.samplers);
@@ -1042,8 +1060,8 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
                      dd.state.depth_write, dd.state.depth_func, dd.state.cull, dd.state.color_write, dd.state.alpha_test,
                      dd.state.alpha_func, dd.state.alpha_ref);
             for (int k = 0; k < 4; k++)
-                VT3_INFO("  vsc c%d: %g %g %g %g   psc c%d: %g %g %g %g", k, vsc_copy[k * 4], vsc_copy[k * 4 + 1], vsc_copy[k * 4 + 2],
-                         vsc_copy[k * 4 + 3], k, psc_copy[k * 4], psc_copy[k * 4 + 1], psc_copy[k * 4 + 2], psc_copy[k * 4 + 3]);
+                VT3_INFO("  vsc c%d: %g %g %g %g   psc c%d: %g %g %g %g", k, vsc[k * 4], vsc[k * 4 + 1], vsc[k * 4 + 2],
+                         vsc[k * 4 + 3], k, psc[k * 4], psc[k * 4 + 1], psc[k * 4 + 2], psc[k * 4 + 3]);
         }
     }
     {   /* VT3_TRACE_QUAD_BB=1 (debug): small back-buffer draws, deduplicated by shader and layout
@@ -1102,7 +1120,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
             uv_shown++;
             VT3_INFO("uv %d: vs %08x ps %08x, %u verts, c14 %g %g %g %g", uv_shown,
                      vsh ? shader_hash(vsh) : 0u, psh ? shader_hash(psh) : 0u, (unsigned)nverts,
-                     vsc_copy[14 * 4], vsc_copy[14 * 4 + 1], vsc_copy[14 * 4 + 2], vsc_copy[14 * 4 + 3]);
+                     vsc[14 * 4], vsc[14 * 4 + 1], vsc[14 * 4 + 2], vsc[14 * 4 + 3]);
             for (int k = 0; k < lay.count; k++) {
                 if (lay.attr[k].type != VT3_VT_FLOAT) continue;
                 float mn[4], mx[4];
@@ -1118,8 +1136,8 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
                 VT3_INFO("  attr loc %d comps %d off %d raw x %g..%g y %g..%g | *c14 x %g..%g y %g..%g",
                          lay.attr[k].location, lay.attr[k].components, lay.attr[k].offset,
                          mn[0], mx[0], mn[1], mx[1],
-                         mn[0] * vsc_copy[14 * 4], mx[0] * vsc_copy[14 * 4],
-                         mn[1] * vsc_copy[14 * 4 + 1], mx[1] * vsc_copy[14 * 4 + 1]);
+                         mn[0] * vsc[14 * 4], mx[0] * vsc[14 * 4],
+                         mn[1] * vsc[14 * 4 + 1], mx[1] * vsc[14 * 4 + 1]);
             }
         }
     }

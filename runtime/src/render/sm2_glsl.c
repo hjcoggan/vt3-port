@@ -449,6 +449,7 @@ static void do_def(ctx *c, uint32_t op, uint32_t dst_tok, const uint32_t *vals)
             cv.u = vals[i];
             c->out->cdef[idx][i] = cv.f;
         }
+        if (!c->out->cdef_set[idx]) c->out->cdef_idx[c->out->cdef_n++] = (uint16_t)idx;
         c->out->cdef_set[idx] = 1;
         if ((int)idx + 1 > c->out->const_max) c->out->const_max = (int)idx + 1;
     } else {
