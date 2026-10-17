@@ -1,11 +1,9 @@
 /*
  * SDL3 events -> game input.
  *
- * The button tables below are a STUB. The default layout is the usual
- * Xbox-style one, chosen only so the runtime is usable for testing. Before
- * the game code is recovered, the real mapping should come from what
- * VT3.exe asks DirectInput8 for: the button offsets it reads and its own
- * defaults in the options screen.
+ * Maps SDL3 gamepad buttons (positional: SOUTH=A, EAST=B, WEST=X, NORTH=Y) and keyboard
+ * keys onto vt3_input.h's Xbox 360-style button and axis state. The DirectInput8 shim
+ * (shim/src/dinput8.c) translates that state into the DIJOYSTATE and DIK offsets VT3.exe reads.
  */
 #include "vt3/vt3_input.h"
 #include "vt3/vt3_log.h"
@@ -25,12 +23,11 @@ typedef struct pad_button_map {
 } pad_button_map;
 
 static const pad_button_map k_pad_map[] = {
-    /* TODO(verify): confirm against VT3.exe's DirectInput usage. */
     { SDL_GAMEPAD_BUTTON_DPAD_UP,       VT3_BTN_UP },
     { SDL_GAMEPAD_BUTTON_DPAD_DOWN,     VT3_BTN_DOWN },
     { SDL_GAMEPAD_BUTTON_DPAD_LEFT,     VT3_BTN_LEFT },
     { SDL_GAMEPAD_BUTTON_DPAD_RIGHT,    VT3_BTN_RIGHT },
-    { SDL_GAMEPAD_BUTTON_SOUTH,         VT3_BTN_A },       /* TODO(verify): A/B may be swapped */
+    { SDL_GAMEPAD_BUTTON_SOUTH,         VT3_BTN_A },
     { SDL_GAMEPAD_BUTTON_EAST,          VT3_BTN_B },
     { SDL_GAMEPAD_BUTTON_WEST,          VT3_BTN_X },
     { SDL_GAMEPAD_BUTTON_NORTH,         VT3_BTN_Y },
@@ -48,17 +45,22 @@ typedef struct key_button_map {
     uint32_t vt3;
 } key_button_map;
 
-/* Keyboard fallback. Escape is not mapped: it does not quit (see platform_sdl.c). */
+/* Keyboard fallback (matches VT3.exe's default keyboard layout at 0x00856000).
+ * Escape is not mapped: it does not quit (see platform_sdl.c). */
 static const key_button_map k_key_map[] = {
-    /* TODO(verify): keyboard layout is a placeholder. */
     { SDL_SCANCODE_UP,     VT3_BTN_UP },
     { SDL_SCANCODE_DOWN,   VT3_BTN_DOWN },
     { SDL_SCANCODE_LEFT,   VT3_BTN_LEFT },
     { SDL_SCANCODE_RIGHT,  VT3_BTN_RIGHT },
+    { SDL_SCANCODE_W,      VT3_BTN_UP },
+    { SDL_SCANCODE_S,      VT3_BTN_DOWN },
+    { SDL_SCANCODE_A,      VT3_BTN_LEFT },
+    { SDL_SCANCODE_D,      VT3_BTN_RIGHT },
     { SDL_SCANCODE_Z,      VT3_BTN_A },
     { SDL_SCANCODE_X,      VT3_BTN_B },
-    { SDL_SCANCODE_A,      VT3_BTN_X },
-    { SDL_SCANCODE_S,      VT3_BTN_Y },
+    { SDL_SCANCODE_C,      VT3_BTN_Y },
+    { SDL_SCANCODE_LSHIFT, VT3_BTN_LB },
+    { SDL_SCANCODE_V,      VT3_BTN_BACK },
     { SDL_SCANCODE_RETURN, VT3_BTN_START },
     { SDL_SCANCODE_BACKSPACE, VT3_BTN_BACK },
 };
@@ -195,12 +197,24 @@ static int script_lookup(const char *name, int *is_pad, int *code)
         { "RETURN", 0, SDL_SCANCODE_RETURN },
         { "ESCAPE", 0, SDL_SCANCODE_ESCAPE },
         { "F1", 0, SDL_SCANCODE_F1 },            /* Quick Play on the menus */
-        { "Z", 0, SDL_SCANCODE_Z },              /* A button, as in k_key_map */
-        { "X", 0, SDL_SCANCODE_X },              /* B */
-        { "A", 0, SDL_SCANCODE_A },              /* X */
-        { "S", 0, SDL_SCANCODE_S },              /* Y */
+        { "Z", 0, SDL_SCANCODE_Z },              /* Top Spin / Select (A) */
+        { "X", 0, SDL_SCANCODE_X },              /* Slice / Cancel (B/X) */
+        { "C", 0, SDL_SCANCODE_C },              /* Lob (Y) */
+        { "V", 0, SDL_SCANCODE_V },              /* Change camera (BACK) */
+        { "LSHIFT", 0, SDL_SCANCODE_LSHIFT },    /* Instruct COM partner (LB/RB) */
+        { "A", 0, SDL_SCANCODE_A },              /* Move Left (WASD) */
+        { "S", 0, SDL_SCANCODE_S },              /* Move Down (WASD) */
+        { "W", 0, SDL_SCANCODE_W },              /* Move Up (WASD) */
+        { "D", 0, SDL_SCANCODE_D },              /* Move Right (WASD) */
         { "BACKSPACE", 0, SDL_SCANCODE_BACKSPACE }, /* BACK */
         { "START", 1, SDL_GAMEPAD_BUTTON_START },
+        { "BACK", 1, SDL_GAMEPAD_BUTTON_BACK },
+        { "PAD_A", 1, SDL_GAMEPAD_BUTTON_SOUTH },
+        { "PAD_B", 1, SDL_GAMEPAD_BUTTON_EAST },
+        { "PAD_X", 1, SDL_GAMEPAD_BUTTON_WEST },
+        { "PAD_Y", 1, SDL_GAMEPAD_BUTTON_NORTH },
+        { "LB", 1, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER },
+        { "RB", 1, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER },
     };
     for (size_t i = 0; i < sizeof k / sizeof k[0]; i++) {
         if (strcmp(name, k[i].name) == 0) {

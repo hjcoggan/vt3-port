@@ -17,8 +17,10 @@
 #include "vt3/vt3_adx.h"
 #include "vt3/vt3_audio.h"
 #include "vt3/vt3_guest.h"
+#include "vt3/vt3_input.h"
 #include "vt3/vt3_renderer.h"
 #include "vt3shim/shim.h"
+#include "win32/dinput.h"
 #include "win32/kernel32.h"
 
 #include <errno.h>
@@ -398,6 +400,199 @@ static void test_coefs(void)
     printf("PASS adx coefficients (48 kHz, 500 Hz): %d %d\n", c[0], c[1]);
 }
 
+/* ---- DirectInput8 Xbox 360 layout --------------------------------------- */
+
+static uint32_t g_load32(GPTR p)
+{
+    uint32_t v;
+    memcpy(&v, vt3_g2h(p), 4);
+    return v;
+}
+
+static void g_store32(GPTR p, uint32_t v)
+{
+    memcpy(vt3_g2h(p), &v, 4);
+}
+
+static void test_dinput8_xbox360_controls(void)
+{
+    HANDLE ph = GetProcessHeap();
+    GPTR iid_di8  = HeapAlloc(ph, HEAP_ZERO_MEMORY, 16);
+    GPTR guid_kb  = HeapAlloc(ph, HEAP_ZERO_MEMORY, 16);
+    GPTR guid_pad = HeapAlloc(ph, HEAP_ZERO_MEMORY, 16);
+    GPTR out_ptr  = HeapAlloc(ph, HEAP_ZERO_MEMORY, 4);
+    GPTR df_kb    = HeapAlloc(ph, HEAP_ZERO_MEMORY, 24);
+    GPTR odf_kb   = HeapAlloc(ph, HEAP_ZERO_MEMORY, 256 * 16);
+    GPTR df_pad   = HeapAlloc(ph, HEAP_ZERO_MEMORY, 24);
+    GPTR odf_pad  = HeapAlloc(ph, HEAP_ZERO_MEMORY, 20 * 16);
+    GPTR prop_rng = HeapAlloc(ph, HEAP_ZERO_MEMORY, 24);
+    GPTR state_kb = HeapAlloc(ph, HEAP_ZERO_MEMORY, 256);
+    GPTR state_pad= HeapAlloc(ph, HEAP_ZERO_MEMORY, 80);
+
+    static const uint8_t k_iid_di8[16]  = { 0x30,0x80,0x79,0xBF, 0x3A,0x48, 0xA2,0x4D, 0xAA,0x99,0x5D,0x64,0xED,0x36,0x97,0x00 };
+    static const uint8_t k_guid_kb[16]  = { 0x61,0x2B,0x1D,0x6F, 0xA0,0xD5, 0xCF,0x11, 0xBF,0xC7,0x44,0x45,0x53,0x54,0x00,0x00 };
+    static const uint8_t k_guid_pad[16] = { 0x70,0x2B,0x1D,0x6F, 0xA0,0xD5, 0xCF,0x11, 0xBF,0xC7,0x44,0x45,0x53,0x54,0x00,0x00 };
+    memcpy(vt3_g2h(iid_di8),  k_iid_di8,  16);
+    memcpy(vt3_g2h(guid_kb),  k_guid_kb,  16);
+    memcpy(vt3_g2h(guid_pad), k_guid_pad, 16);
+
+    CHECK(DirectInput8Create(0, 0x0800, iid_di8, out_ptr, 0) == 0, "DirectInput8Create failed");
+    GPTR di = g_load32(out_ptr);
+    CHECK(di != 0, "DirectInput8Create returned null");
+
+    CHECK(IDirectInput8A_CreateDevice(di, guid_kb, out_ptr, 0) == 0, "CreateDevice(Keyboard) failed");
+    GPTR dev_kb = g_load32(out_ptr);
+    CHECK(IDirectInput8A_CreateDevice(di, guid_pad, out_ptr, 0) == 0, "CreateDevice(Gamepad) failed");
+    GPTR dev_pad = g_load32(out_ptr);
+
+    /* Configure c_dfDIKeyboard (256 buttons at offsets 0..255). */
+    g_store32(df_kb + 0, 24);
+    g_store32(df_kb + 4, 16);
+    g_store32(df_kb + 8, 2);
+    g_store32(df_kb + 12, 256);
+    g_store32(df_kb + 16, 256);
+    g_store32(df_kb + 20, odf_kb);
+    for (uint32_t i = 0; i < 256; i++) {
+        g_store32(odf_kb + i * 16 + 4, i);
+        g_store32(odf_kb + i * 16 + 8, 0x0000000Cu); /* DIDFT_BUTTON */
+    }
+    CHECK(IDirectInputDevice8A_SetDataFormat(dev_kb, df_kb) == 0, "SetDataFormat(kb)");
+    CHECK(IDirectInputDevice8A_Acquire(dev_kb) == 0, "Acquire(kb)");
+
+    /* Configure DIJOYSTATE: 8 axes (0..28), 1 POV (32), 11 buttons (48..58). */
+    g_store32(df_pad + 0, 24);
+    g_store32(df_pad + 4, 16);
+    g_store32(df_pad + 8, 1);
+    g_store32(df_pad + 12, 80);
+    g_store32(df_pad + 16, 20);
+    g_store32(df_pad + 20, odf_pad);
+    for (uint32_t i = 0; i < 8; i++) {
+        g_store32(odf_pad + i * 16 + 4, i * 4);
+        g_store32(odf_pad + i * 16 + 8, 0x00000003u); /* DIDFT_AXIS */
+    }
+    g_store32(odf_pad + 8 * 16 + 4, 32);
+    g_store32(odf_pad + 8 * 16 + 8, 0x00000010u);     /* DIDFT_POV */
+    for (uint32_t i = 0; i < 11; i++) {
+        g_store32(odf_pad + (9 + i) * 16 + 4, 48 + i);
+        g_store32(odf_pad + (9 + i) * 16 + 8, 0x0000000Cu); /* DIDFT_BUTTON */
+    }
+    CHECK(IDirectInputDevice8A_SetDataFormat(dev_pad, df_pad) == 0, "SetDataFormat(pad)");
+    /* Set DIPROP_RANGE to -32767..32767, as VT3.exe's EnumObjects callback (0x00401180) does. */
+    g_store32(prop_rng + 0, 24);
+    g_store32(prop_rng + 4, 16);
+    g_store32(prop_rng + 16, (uint32_t)(-32767));
+    g_store32(prop_rng + 20, 32767);
+    CHECK(IDirectInputDevice8A_SetProperty(dev_pad, 4, prop_rng) == 0, "SetProperty(DIPROP_RANGE)");
+    CHECK(IDirectInputDevice8A_Acquire(dev_pad) == 0, "Acquire(pad)");
+
+    const uint8_t *pad_buf = vt3_g2h(state_pad);
+    const uint8_t *kb_buf  = vt3_g2h(state_kb);
+
+    /* Verify VT3.exe's FUN_004018c0 & FUN_00476300/FUN_004763c0 with default pad table [12,13,14,15,2,0,3,1,4,7]
+     * against the official Xbox 360 controls:
+     *   A (VT3_BTN_A) -> Button 0 (offset 48, slot 5 = 0x85605a -> raw 0x40000): Top Spin / Menu Select / World Tour Open
+     *   B (VT3_BTN_B) -> Button 2 (offset 50, slot 4 = 0x856058 -> raw 0x100000): Slice / Drop Shot / Menu Cancel
+     *   X (VT3_BTN_X) -> Button 2 (offset 50, slot 4 = 0x856058 -> raw 0x100000): Slice / Drop Shot / Menu Cancel
+     *   Y (VT3_BTN_Y) -> Button 3 (offset 51, slot 6 = 0x85605c -> raw 0x200000): Lob / World Tour Return Home
+     *   LB/RB/LT/RT   -> Button 4 (offset 52, slot 8 = 0x856060 -> raw 0x20000000): Instruct COM Partner / Incoming Mail
+     *   RB/RT         -> DIK_LMENU (0x38 -> raw 0x800 -> action 0x400000): World Tour Tour Calendar
+     *   Start         -> Button 7 (offset 55, slot 9 = 0x856062 -> raw 0x20): Pause / Open Main Menu
+     *   Back          -> Button 6 (offset 54) AND DIK_V (0x2F -> raw 0x2000): Change Camera View
+     *   Button 1 (offset 49, slot 7 = 0x85605e -> raw 0x10 = Pause match) must remain 0 for all face/shoulder buttons.
+     */
+    vt3_input_init();
+
+    vt3_input_set_pad_button(VT3_BTN_A, 1);
+    IDirectInputDevice8A_GetDeviceState(dev_pad, 80, state_pad);
+    CHECK(pad_buf[48 + 0] == 0x80 && pad_buf[48 + 1] == 0 && pad_buf[48 + 2] == 0 && pad_buf[48 + 3] == 0,
+          "Xbox 360 A must map to DI button 0 (Top Spin / Select)");
+    vt3_input_set_pad_button(VT3_BTN_A, 0);
+
+    vt3_input_set_pad_button(VT3_BTN_B, 1);
+    IDirectInputDevice8A_GetDeviceState(dev_pad, 80, state_pad);
+    CHECK(pad_buf[48 + 2] == 0x80 && pad_buf[48 + 0] == 0 && pad_buf[48 + 1] == 0,
+          "Xbox 360 B must map to DI button 2 (Slice / Cancel)");
+    vt3_input_set_pad_button(VT3_BTN_B, 0);
+
+    vt3_input_set_pad_button(VT3_BTN_X, 1);
+    IDirectInputDevice8A_GetDeviceState(dev_pad, 80, state_pad);
+    CHECK(pad_buf[48 + 2] == 0x80 && pad_buf[48 + 0] == 0 && pad_buf[48 + 1] == 0,
+          "Xbox 360 X must map to DI button 2 (Slice / Cancel)");
+    vt3_input_set_pad_button(VT3_BTN_X, 0);
+
+    vt3_input_set_pad_button(VT3_BTN_Y, 1);
+    IDirectInputDevice8A_GetDeviceState(dev_pad, 80, state_pad);
+    CHECK(pad_buf[48 + 3] == 0x80 && pad_buf[48 + 0] == 0 && pad_buf[48 + 1] == 0 && pad_buf[48 + 2] == 0,
+          "Xbox 360 Y must map to DI button 3 (Lob / World Tour Home)");
+    vt3_input_set_pad_button(VT3_BTN_Y, 0);
+
+    /* LB, RB, LT, RT all activate DI button 4 (Instruct COM partner / Incoming Mail),
+     * and RB/RT also assert DIK_LMENU (0x38, World Tour Tour Calendar). */
+    vt3_input_set_pad_button(VT3_BTN_LB, 1);
+    IDirectInputDevice8A_GetDeviceState(dev_pad, 80, state_pad);
+    CHECK(pad_buf[48 + 4] == 0x80 && pad_buf[48 + 1] == 0,
+          "Xbox 360 LB must map to DI button 4 (COM partner / Incoming Mail)");
+    vt3_input_set_pad_button(VT3_BTN_LB, 0);
+
+    vt3_input_set_pad_button(VT3_BTN_RB, 1);
+    IDirectInputDevice8A_GetDeviceState(dev_pad, 80, state_pad);
+    IDirectInputDevice8A_GetDeviceState(dev_kb, 256, state_kb);
+    CHECK(pad_buf[48 + 4] == 0x80 && pad_buf[48 + 5] == 0x80 && pad_buf[48 + 1] == 0 && kb_buf[0x38] == 0x80,
+          "Xbox 360 RB must map to DI button 4, button 5, and DIK_LMENU (Tour Calendar)");
+    vt3_input_set_pad_button(VT3_BTN_RB, 0);
+
+    vt3_input_set_axis(VT3_AXIS_LT, 0.8f);
+    IDirectInputDevice8A_GetDeviceState(dev_pad, 80, state_pad);
+    CHECK(pad_buf[48 + 4] == 0x80 && pad_buf[48 + 1] == 0,
+          "Xbox 360 LT must activate DI button 4 (COM partner / Incoming Mail)");
+    vt3_input_set_axis(VT3_AXIS_LT, 0.0f);
+
+    vt3_input_set_axis(VT3_AXIS_RT, 0.8f);
+    IDirectInputDevice8A_GetDeviceState(dev_pad, 80, state_pad);
+    IDirectInputDevice8A_GetDeviceState(dev_kb, 256, state_kb);
+    CHECK(pad_buf[48 + 4] == 0x80 && pad_buf[48 + 1] == 0 && kb_buf[0x38] == 0x80,
+          "Xbox 360 RT must activate DI button 4 (COM partner) and DIK_LMENU (Tour Calendar)");
+    vt3_input_set_axis(VT3_AXIS_RT, 0.0f);
+
+    /* Start -> DI button 7 (Pause / Open Main Menu). */
+    vt3_input_set_pad_button(VT3_BTN_START, 1);
+    IDirectInputDevice8A_GetDeviceState(dev_pad, 80, state_pad);
+    CHECK(pad_buf[48 + 7] == 0x80, "Xbox 360 Start must map to DI button 7 (Pause)");
+    vt3_input_set_pad_button(VT3_BTN_START, 0);
+
+    /* Back -> DI button 6 AND keyboard DIK_V (0x2F, Change camera). */
+    vt3_input_set_pad_button(VT3_BTN_BACK, 1);
+    IDirectInputDevice8A_GetDeviceState(dev_pad, 80, state_pad);
+    IDirectInputDevice8A_GetDeviceState(dev_kb, 256, state_kb);
+    CHECK(pad_buf[48 + 6] == 0x80 && kb_buf[0x2F] == 0x80,
+          "Xbox 360 Back must map to DI button 6 and DIK_V (0x2F, Change camera)");
+    vt3_input_set_pad_button(VT3_BTN_BACK, 0);
+
+    /* D-pad -> POV hat centidegrees; Left stick -> X (0), Y (8) as read by FUN_004018c0. */
+    vt3_input_set_pad_button(VT3_BTN_UP | VT3_BTN_RIGHT, 1);
+    IDirectInputDevice8A_GetDeviceState(dev_pad, 80, state_pad);
+    CHECK(g_load32(state_pad + 32) == 4500u, "D-pad UP+RIGHT POV = 4500");
+    vt3_input_set_pad_button(VT3_BTN_UP | VT3_BTN_RIGHT, 0);
+
+    IDirectInputDevice8A_Release(dev_kb);
+    IDirectInputDevice8A_Release(dev_pad);
+    IDirectInput8A_Release(di);
+
+    HeapFree(ph, 0, state_pad);
+    HeapFree(ph, 0, state_kb);
+    HeapFree(ph, 0, prop_rng);
+    HeapFree(ph, 0, odf_pad);
+    HeapFree(ph, 0, df_pad);
+    HeapFree(ph, 0, odf_kb);
+    HeapFree(ph, 0, df_kb);
+    HeapFree(ph, 0, out_ptr);
+    HeapFree(ph, 0, guid_pad);
+    HeapFree(ph, 0, guid_kb);
+    HeapFree(ph, 0, iid_di8);
+
+    printf("PASS dinput8 xbox360 controls\n");
+}
+
 /* ---- entry -------------------------------------------------------------- */
 
 int vt3_selftest_run(const char *adx_path)
@@ -414,6 +609,7 @@ int vt3_selftest_run(const char *adx_path)
     test_dxt_colour();
     test_heap();
     test_file_mapping();
+    test_dinput8_xbox360_controls();
 
     int adx_ran = 0;
     if (adx_path) adx_ran = test_adx(adx_path);

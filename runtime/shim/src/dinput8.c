@@ -17,11 +17,23 @@
  *             offsets 32..44 are POV (DWORD, hundredths of a degree, -1 when centred);
  *             offsets 48 on are rgbButtons (BYTE, 0x80 while down).
  *
- * Gamepad layout, ASSUMED (verify against the game's own defaults):
- *   X, Y: left stick. Rx, Ry: right stick. Z, Rz: centred.
- *   slider0, slider1: left and right trigger. POV: D-pad.
- *   buttons 0..10: A, B, X, Y, LB, RB, Back, Start, LS, RS, Guide.
- *   Axes report 0..65535 with the centre at the middle. DIPROP_RANGE changes that range.
+ * Gamepad layout (verified against VT3.exe's FUN_004018c0, FUN_00476300, FUN_004763c0, and 0x0085603c):
+ *   X, Y (offsets 0, 4): left stick. Rx, Ry (offsets 12, 16): right stick.
+ *   Z, Rz (offsets 8, 20): left and right trigger (also read by FUN_004018c0 at offsets 24, 28).
+ *   slider0, slider1 (offsets 24, 28): left and right trigger. POV (offset 32): D-pad.
+ *   buttons 0..10 (offsets 48..58) match VT3's default gamepad mapping [12,13,14,15,2,0,3,1,4,7]
+ *   to the Xbox 360 layout:
+ *     0: A (Top Spin / Menu Select / World Tour Open)   [slot 5 = 0x85605a -> raw 0x40000]
+ *     1: (unmapped: slot 7 = 0x85605e sets raw 0x10 which pauses matches)
+ *     2: B / X (Slice / Drop Shot / Menu Cancel)        [slot 4 = 0x856058 -> raw 0x100000]
+ *     3: Y (Lob / World Tour Return Home)               [slot 6 = 0x85605c -> raw 0x200000]
+ *     4: LB / RB / LT / RT (Instruct COM Partner / World Tour Incoming Mail) [slot 8 = 0x856060 -> raw 0x20000000]
+ *     5: RB             6: Back (also asserts DIK_V = 0x2F for Change Camera)
+ *     7: Start (Pause / Open Main Menu)                 [slot 9 = 0x856062 -> raw 0x20]
+ *     8: LS             9: RS             10: Guide
+ *   RB / RT also assert DIK_LMENU (0x38) on the keyboard device so World Tour Tour Calendar
+ *   (FUN_00475a80, action bit 0x400000) opens with RB/RT without triggering match pause (0x10).
+ *   Axes report -32767..32767 after the game's EnumObjects callback sets DIPROP_RANGE.
  *
  * EnumObjects lists the gamepad's axes, POV and buttons (the keyboard and mouse list none).
  * Not implemented: force-feedback effects, action maps, SetEventNotification. GetDeviceData
@@ -255,9 +267,17 @@ static int call_enum(GPTR fn, GPTR pvref, int kind)
 
 /* ---- device state ----------------------------------------------------------- */
 
-/* DIJOYSTATE button index -> enum vt3_button bit. */
+/* DIJOYSTATE button index -> enum vt3_button bitmask.
+ * VT3.exe's FUN_004018c0 and FUN_00476300/FUN_004763c0 with default pad table [12,13,14,15,2,0,3,1,4,7]:
+ *   Button 0 (slot 5 = 0x85605a -> raw 0x40000)    : Top Spin (shot 0) + Menu Select / World Tour Open => A
+ *   Button 1 (slot 7 = 0x85605e -> raw 0x10)       : Pause match (unmapped; Start already uses Button 7)
+ *   Button 2 (slot 4 = 0x856058 -> raw 0x100000)   : Slice (shot 1) + Menu Cancel / Return             => B | X
+ *   Button 3 (slot 6 = 0x85605c -> raw 0x200000)   : Lob (shot 2) + World Tour Return Home             => Y
+ *   Button 4 (slot 8 = 0x856060 -> raw 0x20000000) : Instruct COM Partner + World Tour Incoming Mail   => LB | RB
+ *   Button 7 (slot 9 = 0x856062 -> raw 0x20)       : Pause / Open Main Menu                            => Start
+ */
 static const uint32_t k_pad_button[11] = {
-    VT3_BTN_A, VT3_BTN_B, VT3_BTN_X, VT3_BTN_Y, VT3_BTN_LB, VT3_BTN_RB,
+    VT3_BTN_A, 0, VT3_BTN_B | VT3_BTN_X, VT3_BTN_Y, VT3_BTN_LB | VT3_BTN_RB, VT3_BTN_RB,
     VT3_BTN_BACK, VT3_BTN_START, VT3_BTN_LSTICK, VT3_BTN_RSTICK, VT3_BTN_GUIDE,
 };
 
@@ -293,11 +313,24 @@ static int32_t scale_axis(float a, int32_t lo, int32_t hi, int trigger, uint32_t
 
 static void fill_keyboard(const di_device *d, uint8_t *buf, uint32_t cb)
 {
+    const vt3_input_state *in = vt3_input_get();
+    uint32_t pad_btn = vt3_input_pad_buttons();
+    int rt_down = (pad_btn & VT3_BTN_RB) || in->axis[VT3_AXIS_RT] > 0.5f;
     for (uint32_t i = 0; i < d->nobj; i++) {
         const di_obj *o = &d->obj[i];
         if (!(o->type & DIDFT_BUTTON) || o->ofs >= cb || o->ofs >= 256) continue;
         uint32_t usage = g_usage_of_dik[o->ofs];
-        buf[o->ofs] = (usage && vt3_input_key_down(usage)) ? 0x80 : 0;
+        int down = usage && vt3_input_key_down(usage);
+        /* The PC port has no gamepad slot for Change Camera (Xbox 360 BACK button) and only
+         * checks the keyboard's Camera key (default DIK_V = 0x2F). Map gamepad BACK to DIK_V
+         * so the Back/Select button toggles the camera viewpoint as on Xbox 360. */
+        if (o->ofs == 0x2Fu && (pad_btn & VT3_BTN_BACK)) down = 1;
+        /* In World Tour, Tour Calendar is opened by action bits 0x200000|0x400000 (FUN_00475a60 /
+         * FUN_00475a80). On gamepad, 0x200000 is tied to slot 7 (Button 1) which also sets 0x10
+         * (Pause match). Asserting DIK_LMENU (0x38 -> raw 0x800 -> action 0x400000) when RB or RT
+         * is pressed opens Tour Calendar on the World Tour map without pausing matches. */
+        if (o->ofs == 0x38u && rt_down) down = 1;
+        buf[o->ofs] = down ? 0x80 : 0;
     }
 }
 
@@ -305,14 +338,15 @@ static void fill_pad(const di_device *d, uint8_t *buf, uint32_t cb)
 {
     const vt3_input_state *in = vt3_input_get();
     uint32_t btn = vt3_input_pad_buttons();
-    int32_t centre = scale_axis(0.0f, d->lo, d->hi, 0, 0);
+    if (in->axis[VT3_AXIS_LT] > 0.5f || in->axis[VT3_AXIS_RT] > 0.5f)
+        btn |= VT3_BTN_LB;                            /* LT/RT also instruct COM partner on Xbox 360 */
     int32_t axis[8];                                  /* by offset / 4: X Y Z Rx Ry Rz s0 s1 */
     axis[0] = scale_axis(in->axis[VT3_AXIS_LX], d->lo, d->hi, 0, d->deadzone);
     axis[1] = scale_axis(in->axis[VT3_AXIS_LY], d->lo, d->hi, 0, d->deadzone);
-    axis[2] = centre;
+    axis[2] = scale_axis(in->axis[VT3_AXIS_LT], d->lo, d->hi, 1, 0);
     axis[3] = scale_axis(in->axis[VT3_AXIS_RX], d->lo, d->hi, 0, d->deadzone);
     axis[4] = scale_axis(in->axis[VT3_AXIS_RY], d->lo, d->hi, 0, d->deadzone);
-    axis[5] = centre;
+    axis[5] = scale_axis(in->axis[VT3_AXIS_RT], d->lo, d->hi, 1, 0);
     axis[6] = scale_axis(in->axis[VT3_AXIS_LT], d->lo, d->hi, 1, 0);
     axis[7] = scale_axis(in->axis[VT3_AXIS_RT], d->lo, d->hi, 1, 0);
     uint32_t pov = pov_centidegrees(btn & 0xFu);

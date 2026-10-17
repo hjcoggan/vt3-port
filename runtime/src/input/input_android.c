@@ -43,12 +43,17 @@ static uint32_t button_for_hid(uint32_t hid)
     case 0x51: return VT3_BTN_DOWN;
     case 0x50: return VT3_BTN_LEFT;
     case 0x4F: return VT3_BTN_RIGHT;
-    case 0x1D: return VT3_BTN_A;        /* Z */
-    case 0x1B: return VT3_BTN_B;        /* X */
-    case 0x04: return VT3_BTN_X;        /* A */
-    case 0x16: return VT3_BTN_Y;        /* S */
-    case 0x28: return VT3_BTN_START;    /* return */
-    case 0x2A: return VT3_BTN_BACK;     /* backspace */
+    case 0x1A: return VT3_BTN_UP;       /* W */
+    case 0x16: return VT3_BTN_DOWN;     /* S */
+    case 0x04: return VT3_BTN_LEFT;     /* A */
+    case 0x07: return VT3_BTN_RIGHT;    /* D */
+    case 0x1D: return VT3_BTN_A;        /* Z: Top Spin */
+    case 0x1B: return VT3_BTN_B;        /* X: Slice */
+    case 0x06: return VT3_BTN_Y;        /* C: Lob */
+    case 0xE1: return VT3_BTN_LB;       /* Left Shift: Instruct COM partner */
+    case 0x19: return VT3_BTN_BACK;     /* V: Change camera */
+    case 0x28: return VT3_BTN_START;    /* Return: Pause */
+    case 0x2A: return VT3_BTN_BACK;     /* Backspace */
     default:   return 0;
     }
 }
@@ -67,8 +72,10 @@ static uint32_t pad_button_for_keycode(int32_t code)
     case AKEYCODE_BUTTON_Y:     return VT3_BTN_Y;
     case AKEYCODE_BUTTON_START: return VT3_BTN_START;
     case AKEYCODE_BUTTON_SELECT: return VT3_BTN_BACK;
-    case AKEYCODE_BUTTON_L1:    return VT3_BTN_LB;
-    case AKEYCODE_BUTTON_R1:    return VT3_BTN_RB;
+    case AKEYCODE_BUTTON_L1:
+    case AKEYCODE_BUTTON_L2:    return VT3_BTN_LB;
+    case AKEYCODE_BUTTON_R1:
+    case AKEYCODE_BUTTON_R2:    return VT3_BTN_RB;
     case AKEYCODE_BUTTON_THUMBL: return VT3_BTN_LSTICK;
     case AKEYCODE_BUTTON_THUMBR: return VT3_BTN_RSTICK;
     case AKEYCODE_BUTTON_MODE:  return VT3_BTN_GUIDE;
