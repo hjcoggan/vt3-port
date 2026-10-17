@@ -454,6 +454,7 @@ HRESULT WINAPI IDirect3DDevice9_SetFVF(GPTR This, DWORD FVF)
     d3d9_device *d = DEV(This);
     if (!d) return D3DERR_CHK_INVALIDCALL;
     d->fvf = FVF;
+    d->decl = 0;       /* an FVF and a vertex declaration are mutually exclusive in D3D9 */
     return S_OK;
 }
 
@@ -692,6 +693,7 @@ HRESULT WINAPI IDirect3DDevice9_SetVertexDeclaration(GPTR This, GPTR pDecl)
     d3d9_device *d = DEV(This);
     if (!d) return D3DERR_CHK_INVALIDCALL;
     d->decl = pDecl;
+    d->fvf = 0;        /* an FVF and a vertex declaration are mutually exclusive in D3D9 */
     return S_OK;
 }
 

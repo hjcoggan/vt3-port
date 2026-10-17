@@ -25,7 +25,8 @@ Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one rend
 | 7cd9a86 | `VT3_VK_DEBUG=1` routes validation-layer messages into the log (desktop). |
 | e8d1a37 | DirectSound: unwritten 256-byte blocks mix as silence instead of replaying old audio, and the mixer thread asks for audio priority. Mac: 13 exact 128 ms repeats per 60 s match before, 0 after. **Not yet confirmed on the Retroid**: if the game's writer is starved there, repeats become gaps. Back out with `git revert e8d1a37`. |
 | db04521 | Shadow debugging aids (below). |
-| *this session* | Planar-shadow blur ran under the previous mesh's declaration (NORMAL at 12, TEXCOORD at 16, stride 24) with a 20-byte pos+uv quad, so TEXCOORD spilled (16+8 > 20) and sampled the next vertex's X as V: scrambled slivers, streaky court, missing player shadows. `d3d9_draw.c` now forces the quad's real layout (POSITION at 0, TEXCOORD at 12) whenever the VS reads loc 0+5 but not loc 3 and the layout shows that stale pattern. Shim-level, so GL and Vulkan are fixed together. Mac GL and Vulkan screenshots confirm: no streaks, player shadows with rackets at the feet on hard and clay. |
+| *this session* | Planar-shadow blur ran under the previous mesh's declaration (NORMAL at 12, TEXCOORD at 16, stride 24) with a 20-byte pos+uv quad, so TEXCOORD spilled (16+8 > 20) and sampled the next vertex's X as V: scrambled slivers, streaky court, missing player shadows. **Root cause:** the game draws the quad with `SetFVF(0x102)`, but the shim kept the declaration the previous mesh left set. `d3d9_device.c` now enforces D3D9's rule that an FVF and a vertex declaration are mutually exclusive (`SetFVF` clears the declaration, `SetVertexDeclaration` clears the FVF), so the quad's layout is derived from its FVF. Shim-level, so GL and Vulkan are fixed together. |
+| *this session* | **Court-change / result / CONTINUE backgrounds** were the same root cause on the picture quads (also FVF `0x102`): they drew right after mesh passes, so the stale mesh declaration made the picture's position/UV read the wrong bytes — rotated ~90° with edge-clamped streaks. The `SetFVF` fix above corrects them; the previous session's heuristic in `d3d9_draw.c` (which only recognised the one stale layout) is removed. Traced the quad (`VT3_TRACE_QUAD_BB`) and compared before/after captures: result and CONTINUE backgrounds now upright and clean on GL, and the same two-attribute layout on Vulkan (verified with a Vulkan sanity run). |
 | *this session* | `assets/macos/make_app.sh` bundles the Vulkan loader, SDL3 and MoltenVK into `Contents/Frameworks`, writes a relative-path MoltenVK ICD, copies `shaders.pack` into `Resources`, and ad-hoc signs. The launcher sets `VK_ICD_FILENAMES` and `VT3_SHADER_PACK` at the bundle. A missing ICD at run time still falls back to OpenGL; a missing loader library at launch (dyld failure, no fallback) no longer happens. Verified: bundled .app starts Vulkan on Apple Silicon with the bundled pack (569 programs). |
 
 ## Open issues, with leads
@@ -41,14 +42,24 @@ Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one rend
      0.25). The **same shaders blur the 512x512 shadow maps, and those work.**
    - Root cause found: the in-play blur runs under the previous mesh's declaration (NORMAL at 12,
      TEXCOORD at 16) with a 20-byte pos+uv quad, so TEXCOORD spills and samples the next vertex.
-     `VT3_SHADOW_COPY=1` (GL) and `VT3_DROP_OOB_ATTR=1` are now just debugging aids; the quirk in
-     `d3d9_draw.c` is the fix.
+     `VT3_SHADOW_COPY=1` (GL) and `VT3_DROP_OOB_ATTR=1` are now just debugging aids; the FVF /
+     declaration rule below is the real fix (the earlier `d3d9_draw.c` layout quirk was a workaround,
+     since removed).
    - Pitfall: `dump_targets` rebinds texture unit 0. Dump before a draw's textures are bound.
-2. **Court-change / result screens** are still broken: the background picture is rotated with
-   edge-clamped streaks (confirmed this session on the RESULT and CONTINUE screens with the shadow
-   fix in place, so it is a different quad/shader, not the blur). The NaN fix has now been tried
-   against it implicitly (it is in this build) and did not help. Next: identify that picture quad's
-   VS, declaration and stride the way issue 1 was done (blurquad-style trace for its shader hash).
+2. **Court-change / result screens: fixed this session.** Same root cause as the shadow blur on the same
+   quad family: the game sets `SetFVF(0x102)` for its picture quads, but the shim left the previous
+   mesh's vertex declaration set, so position/UV read the wrong bytes and the picture came out rotated
+   with edge-clamped streaks. `d3d9_device.c` now makes `SetFVF` and `SetVertexDeclaration` mutually
+   exclusive (as D3D9 requires), which fixes every such quad in one place. Traced with
+   `VT3_TRACE_QUAD_BB` (VS/PS hash, FVF, stride, declaration): the picture quads now derive exactly two
+   attributes (POSITION at 0, TEXCOORD at 12) from FVF `0x102` on both GL and Vulkan. GL before/after
+   captures show the result and CONTINUE backgrounds upright, and a Vulkan sanity run renders the same
+   changeover screen identically to GL (same layout, same scaling). The earlier heuristic that only
+   recognised the blur's one stale layout is gone. Old notes for the record:
+   - Reproduced on the RESULT and CONTINUE screens with the shadow fix in place, so it was a different
+     quad/shader than the in-play blur (VSes `dce123fc`, `4a2fc5d6`, `cd2adbf0`, `80d94c77`: all
+     `vs_pos = vi0; vo_T0.xy = vi1.xy; gl_Position = (x, -y, z, w)`, i.e. FVF `0x102`).
+   - The NaN fix did not help (it is in the build).
 3. **Android audio** needs a listen with e8d1a37 (see above). Android stutter during loading is
    probably CPU load: the game's audio writer is starved. Raising the writer thread's priority is
    the next lever.
@@ -113,6 +124,7 @@ the GLSL.
 |---|---|
 | `VT3_TRACE_DRAW=N`, `_AFTER=s`, `_MIN=prims`, `VT3_TRACE_HASH=hex` | Per-draw trace. The hash filter only applies with the draw trace on. |
 | `VT3_TRACE_QUAD=1` | Layout, raw vertices, constants and state of small draws into off-screen targets. |
+| `VT3_TRACE_QUAD_BB=s` | The same for small draws into the back buffer (screen pictures such as the changeover / result background), deduplicated by shader and layout; waits `s` seconds first, `0` for the whole run. |
 | `VT3_DUMP_RT=dir`, `VT3_DUMP_RT_AT=s` (GL) | Write every 8-bit render target to TGA once. |
 | `VT3_DUMP_QUAD=dir` (GL) | The same, just before and after the mask blur draw (`pre_` / `post_` files). |
 | `VT3_SHADOW_COPY=1` (GL) | Replace the mask blur with a copy. |

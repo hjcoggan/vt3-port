@@ -883,41 +883,11 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         free(idx16);
         return S_OK;
     }
-    {   /* A 20-byte fullscreen quad of POSITION float3 + TEXCOORD float2 (the planar-shadow
-         * blur VS 1b40f853, and any picture quad with the same inputs) can run under the previous
-         * mesh's declaration, which says NORMAL ubyte4 at 12 and TEXCOORD float2 at 16 (stride 24).
-         * TEXCOORD at 16 spills past the 20-byte vertex (16+8 > 20), so the draw samples the next
-         * vertex's position as V: thin scrambled slivers in the blurred shadow mask (streaky court
-         * shadows), or a 90-degree-rotated picture with edge-clamped streaks. The menu-time blur runs
-         * under a different stale declaration whose TEXCOORD happens to sit at 12, so it is unaffected.
-         * When the vertex shader reads POSITION (loc 0) and TEXCOORD0 (loc 5) but not NORMAL (loc 3)
-         * and the layout shows exactly that stale pattern, force the quad's real layout (POSITION at 0,
-         * TEXCOORD at 12); the NORMAL bytes at 12 are really the UV. Both backends share this path, so
-         * one fix reaches GL and Vulkan. */
-        if (vsh && stride == 20 && lay.stride == 20 && (vsh->sm.attr_mask & ((1u << 0) | (1u << 5))) == ((1u << 0) | (1u << 5)) &&
-            !(vsh->sm.attr_mask & (1u << 3))) {
-            int pos0 = 0, tex16 = 0, normal = 0;
-            for (int i = 0; i < lay.count; i++) {
-                if (lay.attr[i].location == 0 && lay.attr[i].offset == 0 && lay.attr[i].components == 3)
-                    pos0 = 1;
-                if (lay.attr[i].location == 5 && lay.attr[i].offset == 16)
-                    tex16 = 1;
-                if (lay.attr[i].location == 3)
-                    normal = 1;
-            }
-            if (pos0 && tex16 && normal) {
-                lay.count = 2;
-                lay.attr[0].location = 0;
-                lay.attr[0].components = 3;
-                lay.attr[0].type = VT3_VT_FLOAT;
-                lay.attr[0].offset = 0;
-                lay.attr[1].location = 5;
-                lay.attr[1].components = 2;
-                lay.attr[1].type = VT3_VT_FLOAT;
-                lay.attr[1].offset = 12;
-            }
-        }
-    }
+    /* The game's picture and blur quads (FVF 0x102, POSITION float3 + TEXCOORD float2) draw after
+     * meshes that set a vertex declaration. D3D9 keeps the FVF and the declaration mutually
+     * exclusive, so d3d9_device.c clears one when the other is set; otherwise the quad's layout
+     * would come from the previous mesh's declaration and its UV would sample the wrong bytes.
+     * The FVF-derived layout above is the quad's real one. */
 
     /* Vertex bytes for the referenced range. Indexed: [first, first + count); plain: the vertices. */
     uint32_t v0 = first_v;
@@ -1012,8 +982,9 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         d3d9_surface *qs = d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
         if (quad_on && nverts <= 6 && quad_shown < 10 && qs && !qs->backbuffer) {
             quad_shown++;
-            VT3_INFO("quad %d: %u verts, stride %d, %d attrs, prim %d, target %ux%u%s", quad_shown, (unsigned)nverts, lay.stride,
-                     lay.count, (int)dd.prim, qs ? (unsigned)qs->w : 0u, qs ? (unsigned)qs->h : 0u, qs && qs->backbuffer ? " (back buffer)" : "");
+            VT3_INFO("quad %d: %u verts, stride %d, %d attrs, prim %d, target %ux%u fvf 0x%x%s", quad_shown, (unsigned)nverts, lay.stride,
+                     lay.count, (int)dd.prim, qs ? (unsigned)qs->w : 0u, qs ? (unsigned)qs->h : 0u, (unsigned)d->fvf,
+                     qs && qs->backbuffer ? " (back buffer)" : "");
             for (int i = 0; i < lay.count; i++)
                 VT3_INFO("  attr loc %d comps %d type %d offset %d", lay.attr[i].location, lay.attr[i].components, (int)lay.attr[i].type,
                          lay.attr[i].offset);
@@ -1032,6 +1003,52 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
             for (int k = 0; k < 4; k++)
                 VT3_INFO("  vsc c%d: %g %g %g %g   psc c%d: %g %g %g %g", k, vsc_copy[k * 4], vsc_copy[k * 4 + 1], vsc_copy[k * 4 + 2],
                          vsc_copy[k * 4 + 3], k, psc_copy[k * 4], psc_copy[k * 4 + 1], psc_copy[k * 4 + 2], psc_copy[k * 4 + 3]);
+        }
+    }
+    {   /* VT3_TRACE_QUAD_BB=1 (debug): small back-buffer draws, deduplicated by shader and layout
+         * because a screen repeats its picture quad every frame. Names the changeover / result
+         * background quads and their vertex declaration. */
+        static int bb_on = -1;
+        static double bb_start;
+        static struct { uint32_t vs, ps; int stride, nattr; uint32_t fvf; } seen[128];
+        static int shown;
+        if (bb_on < 0) {
+            const char *e = getenv("VT3_TRACE_QUAD_BB");
+            bb_on = e != NULL;
+            bb_start = e ? atof(e) : 0.0;   /* seconds to wait before tracing: catch a later screen */
+        }
+        d3d9_surface *qs = d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
+        if (bb_on && nverts <= 6 && qs && qs->backbuffer) {
+            static double bb_first = -1.0;
+            struct timespec bts;
+            clock_gettime(CLOCK_MONOTONIC, &bts);
+            double bnow = (double)bts.tv_sec + bts.tv_nsec * 1e-9;
+            if (bb_first < 0.0) bb_first = bnow;
+            if (bnow - bb_first >= bb_start) {
+                uint32_t vh = shader_hash(vsh), ph = psh ? shader_hash(psh) : 0u;
+                int dup = 0;
+                for (int i = 0; i < shown; i++)
+                    if (seen[i].vs == vh && seen[i].ps == ph && seen[i].stride == lay.stride &&
+                        seen[i].nattr == lay.count && seen[i].fvf == d->fvf) dup = 1;
+                if (!dup && shown < 128) {
+                    seen[shown].vs = vh; seen[shown].ps = ph; seen[shown].stride = lay.stride;
+                    seen[shown].nattr = lay.count; seen[shown].fvf = d->fvf;
+                    shown++;
+                    VT3_INFO("bbquad %d: %.1fs, %u verts, stride %d, %d attrs, prim %d, vs %08x ps %08x fvf 0x%x",
+                             shown, bnow - bb_first, (unsigned)nverts, lay.stride, lay.count, (int)dd.prim, vh, ph, (unsigned)d->fvf);
+                    for (int i = 0; i < lay.count; i++)
+                        VT3_INFO("  attr loc %d comps %d type %d offset %d", lay.attr[i].location, lay.attr[i].components,
+                                 (int)lay.attr[i].type, lay.attr[i].offset);
+                    int nf = lay.stride / 4 < 8 ? lay.stride / 4 : 8;
+                    for (uint32_t v = 0; v < nverts; v++) {
+                        char line[160];
+                        int n = 0;
+                        const float *f = (const float *)((const uint8_t *)vcopy + (size_t)v * (uint32_t)lay.stride);
+                        for (int k = 0; k < nf; k++) n += snprintf(line + n, sizeof line - (size_t)n, " %g", f[k]);
+                        VT3_INFO("  v%u:%s", v, line);
+                    }
+                }
+            }
         }
     }
     trace_draw(d, a, nverts);
