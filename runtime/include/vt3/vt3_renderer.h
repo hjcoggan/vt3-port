@@ -119,6 +119,9 @@ typedef struct vt3_draw {
     vt3_tex samplers[VT3_MAX_SAMPLERS];
     uint8_t samp_min[VT3_MAX_SAMPLERS];  /* D3DTEXF_* min filter (1 POINT, 2 LINEAR, 3 ANISOTROPIC) */
     uint8_t samp_mag[VT3_MAX_SAMPLERS];  /* D3DTEXF_* mag filter */
+    uint8_t samp_addr_u[VT3_MAX_SAMPLERS]; /* D3DTADDRESS_* */
+    uint8_t samp_addr_v[VT3_MAX_SAMPLERS];
+    uint8_t samp_addr_w[VT3_MAX_SAMPLERS];
     vt3_rstate state;
 } vt3_draw;
 

@@ -131,6 +131,12 @@ typedef struct vk_pack_entry {
     uint32_t offset, size;         /* into the pack file buffer */
 } vk_pack_entry;
 
+#define SAMPLER_CACHE 128
+typedef struct vk_sampler_entry {
+    uint8_t minf, magf, u, v, w;
+    VkSampler sampler;
+} vk_sampler_entry;
+
 /* A resource to free once the frame that used it has finished. */
 typedef struct vk_dead {
     int is_image;                  /* 0: a buffer and its memory; 1: an image, its view and its memory */
@@ -199,8 +205,11 @@ static struct {
     uint32_t cur;
     VkDescriptorSetLayout dsl0, dsl1;
     VkPipelineLayout pl;
-    VkSampler samp, samp_point, samp_aniso;   /* linear (default), nearest, anisotropic */
+    VkSampler samp;                /* default clamp/linear sampler, also used by TL */
+    vk_sampler_entry samplers[SAMPLER_CACHE];
+    uint32_t nsamplers;
     float max_aniso;
+    int aniso_enabled;
     VkBuffer ubo, vb, ib;
     VkDeviceMemory ubo_mem, vb_mem, ib_mem;
     uint8_t *ubo_ptr, *vb_ptr, *ib_ptr;
@@ -1351,10 +1360,57 @@ static VkImageView resolve_view(vt3_tex t, int want_cube)
     return g.tex[idx].view;
 }
 
+/* D3DTADDRESS_*: wrap, mirror, clamp, border, mirror-once. */
+static VkSamplerAddressMode sampler_address(uint8_t mode)
+{
+    switch (mode) {
+    case 1: return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    case 2: return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+    case 4: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    case 5: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; /* mirror-once is optional in Vulkan */
+    case 3:
+    default: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    }
+}
+
+static VkSampler sampler_for(uint8_t minf, uint8_t magf, uint8_t u, uint8_t v, uint8_t w)
+{
+    /* The non-programmable TL path passes NULL state and keeps its historical clamp/linear sampler. */
+    if (minf == 0 && magf == 0 && u == 0 && v == 0 && w == 0) return g.samp;
+    for (uint32_t i = 0; i < g.nsamplers; i++) {
+        vk_sampler_entry *e = &g.samplers[i];
+        if (e->minf == minf && e->magf == magf && e->u == u && e->v == v && e->w == w)
+            return e->sampler;
+    }
+    if (g.nsamplers >= SAMPLER_CACHE) return g.samp;
+
+    VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+    sci.magFilter = magf == 1 ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+    sci.minFilter = minf == 1 ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+    sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sci.addressModeU = sampler_address(u);
+    sci.addressModeV = sampler_address(v);
+    sci.addressModeW = sampler_address(w);
+    sci.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+    if (minf == 3 && g.aniso_enabled) {
+        sci.anisotropyEnable = VK_TRUE;
+        sci.maxAnisotropy = g.max_aniso;
+    }
+    VkSampler sampler = VK_NULL_HANDLE;
+    if (vkCreateSampler(g.dev, &sci, NULL, &sampler) != VK_SUCCESS) {
+        VT3_WARN_ONCE("vulkan: custom sampler creation failed; using clamp/linear fallback");
+        return g.samp;
+    }
+    vk_sampler_entry *e = &g.samplers[g.nsamplers++];
+    e->minf = minf; e->magf = magf; e->u = u; e->v = v; e->w = w; e->sampler = sampler;
+    return sampler;
+}
+
 /* Samplers the program does not declare get the white texel: the game leaves stale textures bound on
  * stages a shader never reads, and those should neither cost a layout change nor be read. */
 static VkDescriptorSet alloc_set1(vk_frame *f, uint8_t cube_mask, uint16_t declared, const vt3_tex *samplers,
-                                  const uint8_t *minf)
+                                  const uint8_t *minf, const uint8_t *magf, const uint8_t *addr_u,
+                                  const uint8_t *addr_v, const uint8_t *addr_w)
 {
     VkDescriptorSetAllocateInfo sai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
     sai.descriptorPool = f->pool;
@@ -1366,8 +1422,12 @@ static VkDescriptorSet alloc_set1(vk_frame *f, uint8_t cube_mask, uint16_t decla
     VkWriteDescriptorSet ws[VT3_MAX_SAMPLERS];
     for (int n = 0; n < VT3_MAX_SAMPLERS; n++) {
         int want_cube = (cube_mask >> n) & 1;
-        uint8_t f = minf ? minf[n] : 2u;
-        info[n].sampler = f == 1u ? g.samp_point : f == 3u ? g.samp_aniso : g.samp;
+        uint8_t mn = minf ? minf[n] : 0u;
+        uint8_t mg = magf ? magf[n] : 0u;
+        uint8_t au = addr_u ? addr_u[n] : 0u;
+        uint8_t av = addr_v ? addr_v[n] : 0u;
+        uint8_t aw = addr_w ? addr_w[n] : 0u;
+        info[n].sampler = sampler_for(mn, mg, au, av, aw);
         vt3_tex st = samplers && ((declared >> n) & 1) ? samplers[n] : 0;
         /* A declared sampler that reads white is a texture the game expects and we do not have. */
         if ((declared >> n) & 1) {
@@ -1566,7 +1626,7 @@ static void vk_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_te
     VkDescriptorSet set1 = VK_NULL_HANDLE;
     vt3_tex samplers[VT3_MAX_SAMPLERS] = {0};
     samplers[0] = tex;
-    set1 = alloc_set1(f, 0, 1u, samplers, NULL);
+    set1 = alloc_set1(f, 0, 1u, samplers, NULL, NULL, NULL, NULL, NULL);
     if (!pipe || !set1) return;
 
     /* The push constants carry the bound target's size: pixel coordinates map to its whole area. */
@@ -1648,7 +1708,8 @@ static void vk_draw_program_impl(const vt3_draw *d)
     memcpy(psb + 4416u, &at_func, 4);
     memcpy(psb + 4420u, &at_ref, 4);
 
-    VkDescriptorSet set1 = alloc_set1(f, p->cube_mask, p->sampler_mask, d->samplers, d->samp_min);
+    VkDescriptorSet set1 = alloc_set1(f, p->cube_mask, p->sampler_mask, d->samplers,
+                                     d->samp_min, d->samp_mag, d->samp_addr_u, d->samp_addr_v, d->samp_addr_w);
     vk_tex *tgt = rt_of(g.tgt);
     VkPipeline pipe = get_pipeline(d->prog, p->vs, p->ps, d->layout, 0, &d->state,
                                    d->prim == VT3_PRIM_TRIANGLESTRIP, tgt ? (uint32_t)tgt->rpk : RPK_RGBA8);
@@ -1986,13 +2047,19 @@ static int vk_init(int logical_w, int logical_h)
     dci.pQueueCreateInfos = &qci;
     dci.enabledExtensionCount = ndext;
     dci.ppEnabledExtensionNames = dext;
+    VkPhysicalDeviceFeatures supported_features, enabled_features;
+    memset(&enabled_features, 0, sizeof enabled_features);
+    vkGetPhysicalDeviceFeatures(g.phys, &supported_features);
+    g.aniso_enabled = supported_features.samplerAnisotropy == VK_TRUE;
+    enabled_features.samplerAnisotropy = g.aniso_enabled ? VK_TRUE : VK_FALSE;
+    dci.pEnabledFeatures = &enabled_features;
     VKT(vkCreateDevice(g.phys, &dci, NULL, &g.dev), "vkCreateDevice");
     vkGetDeviceQueue(g.dev, g.qfam, 0, &g.queue);
 
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(g.phys, &props);
     VkPhysicalDeviceLimits lim = props.limits;
-    g.max_aniso = lim.maxSamplerAnisotropy > 0.0f ? lim.maxSamplerAnisotropy : 1.0f;
+    g.max_aniso = g.aniso_enabled && lim.maxSamplerAnisotropy > 0.0f ? lim.maxSamplerAnisotropy : 1.0f;
     if (lim.minUniformBufferOffsetAlignment > 256) {
         VT3_ERROR("vulkan: uniform buffer alignment %llu is larger than the 256 bytes assumed",
                   (unsigned long long)lim.minUniformBufferOffsetAlignment);
@@ -2099,14 +2166,6 @@ static int vk_init(int logical_w, int logical_h)
     sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     VKT(vkCreateSampler(g.dev, &sci, NULL, &g.samp), "sampler");
-    sci.magFilter = VK_FILTER_NEAREST;
-    sci.minFilter = VK_FILTER_NEAREST;
-    VKT(vkCreateSampler(g.dev, &sci, NULL, &g.samp_point), "point sampler");
-    sci.magFilter = VK_FILTER_LINEAR;
-    sci.minFilter = VK_FILTER_LINEAR;
-    sci.anisotropyEnable = VK_TRUE;
-    sci.maxAnisotropy = g.max_aniso;
-    VKT(vkCreateSampler(g.dev, &sci, NULL, &g.samp_aniso), "anisotropic sampler");
 
     /* Initial layouts for the offscreen target, then the dummy textures every sampler can fall back to. */
     if (once_submit(one_time_clear, NULL) != 0) return -1;
@@ -2181,8 +2240,8 @@ static void vk_shutdown(void)
     if (g.dsl0) vkDestroyDescriptorSetLayout(g.dev, g.dsl0, NULL);
     if (g.dsl1) vkDestroyDescriptorSetLayout(g.dev, g.dsl1, NULL);
     if (g.samp) vkDestroySampler(g.dev, g.samp, NULL);
-    if (g.samp_point) vkDestroySampler(g.dev, g.samp_point, NULL);
-    if (g.samp_aniso) vkDestroySampler(g.dev, g.samp_aniso, NULL);
+    for (uint32_t i = 0; i < g.nsamplers; i++)
+        if (g.samplers[i].sampler) vkDestroySampler(g.dev, g.samplers[i].sampler, NULL);
     if (g.ubo) vkDestroyBuffer(g.dev, g.ubo, NULL);
     if (g.vb) vkDestroyBuffer(g.dev, g.vb, NULL);
     if (g.ib) vkDestroyBuffer(g.dev, g.ib, NULL);

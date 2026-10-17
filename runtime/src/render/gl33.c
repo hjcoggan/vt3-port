@@ -971,10 +971,20 @@ static void gl_draw_program(const vt3_draw *d)
         p_glBindTexture(GL_TEXTURE_CUBE_MAP, tidc);
         GLint mf = d->samp_min[n] == 1 ? GL_NEAREST : GL_LINEAR;   /* anisotropic -> linear here */
         GLint gf = d->samp_mag[n] == 1 ? GL_NEAREST : GL_LINEAR;
+        GLint au = d->samp_addr_u[n] == 1 ? GL_REPEAT : d->samp_addr_u[n] == 2 ? GL_MIRRORED_REPEAT :
+                   d->samp_addr_u[n] == 4 ? GL_CLAMP_TO_BORDER : GL_CLAMP_TO_EDGE;
+        GLint av = d->samp_addr_v[n] == 1 ? GL_REPEAT : d->samp_addr_v[n] == 2 ? GL_MIRRORED_REPEAT :
+                   d->samp_addr_v[n] == 4 ? GL_CLAMP_TO_BORDER : GL_CLAMP_TO_EDGE;
         p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, mf);
         p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, gf);
+        p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, au);
+        p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, av);
         p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, mf);
         p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, gf);
+        p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, au);
+        p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, av);
+        p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, d->samp_addr_w[n] == 1 ? GL_REPEAT :
+                          d->samp_addr_w[n] == 2 ? GL_MIRRORED_REPEAT : d->samp_addr_w[n] == 4 ? GL_CLAMP_TO_BORDER : GL_CLAMP_TO_EDGE);
         p_glUniform1i(p->loc_samp[n], n);
     }
     p_glActiveTexture(GL_TEXTURE0);

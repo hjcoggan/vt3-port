@@ -926,7 +926,6 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
             }
         }
     }
-
     /* Plain draws reference vertices 0..nverts-1 of the copy. */
     static float vsc_copy[256 * 4];
     static float psc_copy[256 * 4];
@@ -1008,6 +1007,9 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     for (int s = 0; s < VT3_MAX_SAMPLERS; s++) {
         dd.samp_min[s] = (uint8_t)d->samp[s][6];   /* D3DSAMP_MINFILTER */
         dd.samp_mag[s] = (uint8_t)d->samp[s][5];   /* D3DSAMP_MAGFILTER */
+        dd.samp_addr_u[s] = (uint8_t)d->samp[s][1];
+        dd.samp_addr_v[s] = (uint8_t)d->samp[s][2];
+        dd.samp_addr_w[s] = (uint8_t)d->samp[s][3];
     }
     fill_rstate(d, &dd.state);
     if (vsh->skinned && getenv("VT3_SKIN_NOCULL")) dd.state.cull = 1;   /* debug: skinned meshes drawn two-sided */
