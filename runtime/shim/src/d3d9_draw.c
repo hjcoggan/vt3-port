@@ -958,12 +958,45 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         if (no_vsm && vsh->skinned && !(ns && ns->w == 512 && ns->h == 512)) psc_copy[10 * 4 + 0] = 1.0e6f;
     }
 
+    /* Adreno (740) reads a UBYTE4 blend-indices element (R8G8B8A8_USCALED) as zero, which collapses
+     * the skinning shader's bone index to 0 and leaves every skinned mesh in bind/T-pose. The bytes
+     * are present and correct (the CPU skinning verifier reads them fine), so expand the 4 index
+     * bytes into a float4 in this per-draw copy and lengthen the stride by 12; the shader then gets
+     * its bone indices on every driver. */
+    int idx_k = -1;
+    for (int k = 0; k < lay.count; k++)
+        if (lay.attr[k].location == 2 && lay.attr[k].type == VT3_VT_UBYTE && lay.attr[k].components == 4)
+            idx_k = k;
+    uint8_t *repacked = NULL;
+    vt3_vlayout rlay = lay;
+    uint32_t rstride = (uint32_t)lay.stride;
+    if (idx_k >= 0) {
+        int ioff = lay.attr[idx_k].offset;
+        rstride = (uint32_t)lay.stride + 12u;
+        repacked = malloc((size_t)nv * rstride);
+        if (repacked) {
+            for (uint32_t v = 0; v < nv; v++) {
+                const uint8_t *src = vcopy + (size_t)v * (uint32_t)lay.stride;
+                uint8_t *dst = repacked + (size_t)v * rstride;
+                memcpy(dst, src, (size_t)ioff);
+                const uint8_t *ix = src + ioff;
+                float *f = (float *)(dst + ioff);
+                f[0] = (float)ix[0]; f[1] = (float)ix[1]; f[2] = (float)ix[2]; f[3] = (float)ix[3];
+                memcpy(dst + ioff + 16, src + ioff + 4, (size_t)lay.stride - (size_t)ioff - 4u);
+            }
+            rlay.attr[idx_k].type = VT3_VT_FLOAT;
+            for (int k = 0; k < rlay.count; k++)
+                if (rlay.attr[k].offset > ioff) rlay.attr[k].offset += 12;
+            rlay.stride = (int)rstride;
+        }
+    }
+
     vt3_draw dd;
     memset(&dd, 0, sizeof dd);
     dd.prog = prog;
-    dd.layout = &lay;
-    dd.vertices = vcopy;
-    dd.vertex_bytes = (uint32_t)bytes;
+    dd.layout = repacked ? &rlay : &lay;
+    dd.vertices = repacked ? repacked : vcopy;
+    dd.vertex_bytes = repacked ? (uint32_t)nv * rstride : (uint32_t)bytes;
     dd.indices = use_idx ? idx16 : NULL;
     dd.count = use_idx ? nidx : nverts;
     dd.prim = prim_list == PRIM_TRIANGLESTRIP ? VT3_PRIM_TRIANGLESTRIP : VT3_PRIM_TRIANGLELIST;
@@ -1055,6 +1088,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     vt3_gfx_draw_program(&dd);
     pixel_watch(d, a, vsh, psh);
 
+    free(repacked);
     free(vcopy);
     free(idx16);
     return S_OK;
