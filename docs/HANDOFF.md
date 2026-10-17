@@ -23,6 +23,7 @@ Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one rend
 | 8890cab | x87: rounding a 64-bit mantissa up past all ones was never detected (`1 << 64`). The result was an invalid number the guest read as NaN. It caused the NaN camera, light and bone uploads. 10 NaN uploads per 100 s match before, 0 after. |
 | dce147b | Translator zeroes temporary registers. SPIR-V on Metal/Adreno leaves them undefined, which gave T-posed models and missing torsos on Android. **Every shader hash changes: regenerate `shaders.pack` after any change to `sm2_glsl.c`.** |
 | 286a448 | **Adreno T-pose root cause (the real fix).** Adreno 740 reads the skinning shader's blend-indices vertex element (`UBYTE4`, bound as `R8G8B8A8_USCALED`) as zero, so the bone index `a0.x` collapsed to 0 and every skinned mesh rendered as a rigid bind/T-pose (this is separate from the `dce147b` zero-init). `d3d9_draw.c` now expands the four index bytes into a `float4` in the shim's per-draw vertex copy (stride + 12, following attribute offsets + 12). No game data or shader changed. |
+| ee0d643 | **Sparse/thin net fixed.** The port sampled every texture with one LINEAR (non-mipmapped) sampler and ignored `D3DSAMP_MINFILTER/MAGFILTER`. The game sets the court scene's samplers to `D3DTEXF_ANISOTROPIC`; the net (a fine grid viewed at distance) smeared into thin threads under isotropic linear filtering. The renderer now honours each draw's min/mag filter with point/linear/anisotropic samplers (anisotropy clamped to the device limit). Verified on the Retroid: the net is dense and crisp. |
 | 7cd9a86 | `VT3_VK_DEBUG=1` routes validation-layer messages into the log (desktop). |
 | e8d1a37 | DirectSound: unwritten 256-byte blocks mix as silence instead of replaying old audio, and the mixer thread asks for audio priority. Mac: 13 exact 128 ms repeats per 60 s match before, 0 after. **Not yet confirmed on the Retroid**: if the game's writer is starved there, repeats become gaps. Back out with `git revert e8d1a37`. |
 | db04521 | Shadow debugging aids (below). |
@@ -64,9 +65,9 @@ Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one rend
 3. **Android audio** needs a listen with e8d1a37 (see above). Android stutter during loading is
    probably CPU load: the game's audio writer is starved. Raising the writer thread's priority is
    the next lever.
-4. **Net texture** is present but sparse on the Mac (thin vertical threads); **shadows duplicated**
-   was reported on Android before the zero-init fix. Re-check both on the Retroid with the shadow
-   fix in place.
+4. **Net texture: fixed this session** (see Fixed table, `ee0d643`). It was the missing anisotropic sampler:
+   the net now renders dense and crisp on the Retroid. **Shadows duplicated** was reported on Android
+   before the zero-init fix; re-check with the current build.
 5. **Screen shape.** The game should render cleanly at 4:3, 16:10, 16:9, 18:9 and 19.5:9. Letterbox
    is the right default (`runtime/src/render/letterbox.c`; integer mode ignores the display aspect,
    off by default). True widescreen needs a Hor+ change to the game's projection (guest code); size
