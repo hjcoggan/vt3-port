@@ -29,10 +29,14 @@ launch draws a new opponent and venue and the work varies with them, so the two 
 rather than trend it.
 
 Everything is host CPU; the GPU is ~3.5 ms a frame on the Retroid, so it is nowhere near the limit.
-Four things got it there, all on `main`:
+Five things got it there, all on `main`:
 
 - **`9e95268`** the guest's x87 work runs in the host double unit instead of the bit-by-bit soft
   float, guarded so it only fires for the control word this game runs in. ~1.2x on its own.
+- **`839f335`** the x87 *register file* is held as host doubles, so the guard and the conversion at
+  both ends of every operation go too and an add is an add. `vt_x80` is now a typedef for `double`,
+  which is what lets the translated code stand unchanged - it declares `vt_x80 t = vt_fld32(...)` at
+  ~22,000 sites and never touches a field. Mac, uncapped: 117.1 fps against 102.3.
 - **`1ffabb4`** typed stores instead of `memcpy` in `wr16/32/64`, so the guest memory base is not
   reloaded after every store.
 - **`4669aea`** a direct-mapped cache for `vt_icall` (which binary searched 572 import addresses on
@@ -41,6 +45,17 @@ Four things got it there, all on `main`:
   The device arrays now go straight through.
 - **`909f94f`** `0.0` used to fail the fast-path guard and fall into the soft path, which is most of
   why `pack_round` was 4.7% of CPU.
+
+**`build_native.py` keys the translated object's cache on the runtime headers as well as `vt3.c`.**
+The translated code includes `vt3rt.h` and declares `vt3_cpu`, so an object built against an older
+copy of the header links happily and is then wrong at run time - the struct's layout had changed
+under it. The check used to compare mtimes against `vt3.c` alone.
+
+**The double register file has no precision control.** `vt_fadd` warns once if it ever sees a
+control word other than 0x037F, and a full match run produces exactly one such warning: 0x0C3F,
+single precision toward zero, from a library `control87` path. There is no constant 0xC3F in the
+translated code and only four FPU env save/restore sites in the whole game, so it is not game math.
+The rounding mode is still honoured by every store and integer conversion.
 
 **Measurements on the Retroid must be checked against a screenshot.** Navigating with
 `keyevent 54` (Z) after a match ends walks the menus instead of keeping a rally going, and a menu
