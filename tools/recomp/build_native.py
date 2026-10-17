@@ -136,7 +136,7 @@ def main():
             if os.path.exists(obj) and os.path.getmtime(obj) >= os.path.getmtime(src):
                 objs.append(obj)
                 continue
-        level = ['-O1'] + flags[1:] if src == translated else flags   # same level as the first build
+        level = ['-O1'] + flags[1:] if src == translated else flags   # same level as the first build; -O2 measured no gain
         run([CC] + level + incs + ['-c', src, '-o', obj])
         objs.append(obj)
 
