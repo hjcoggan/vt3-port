@@ -16,16 +16,20 @@ Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one rend
 
 ## Performance (session of 2026-10-18)
 
-In-match frame rate, measured with `VT3_FPS_CAP=0` so nothing caps it, averaged over the last 40
-samples of a full rally:
+In-match frame rate, averaged over a full rally. The Mac figures come from one fixed scripted match
+and compare directly against each other; the Retroid's do not, for the reason under the table:
 
 | | Mac | Retroid |
 |---|---|---|
 | before | 79.3 fps (12.60 ms) | 35 fps |
-| after | 102.3 fps (9.78 ms) | 62.9 fps (15.89 ms), min 46.3 |
+| after | 102.3 fps (9.78 ms) | 49.6-62.9 fps depending on the match |
+
+The Mac figures are from one fixed scripted match and compare directly. The Retroid's do not: each
+launch draws a new opponent and venue and the work varies with them, so the two numbers bracket it
+rather than trend it.
 
 Everything is host CPU; the GPU is ~3.5 ms a frame on the Retroid, so it is nowhere near the limit.
-Three things got it there, all on `main`:
+Four things got it there, all on `main`:
 
 - **`9e95268`** the guest's x87 work runs in the host double unit instead of the bit-by-bit soft
   float, guarded so it only fires for the control word this game runs in. ~1.2x on its own.
@@ -43,16 +47,19 @@ Three things got it there, all on `main`:
 runs at ~118 fps. Capture a frame at the start and the end of the window and confirm both show the
 match, or the number means nothing.
 
-`VT3_FPS_CAP` defaults to the display's refresh rate rather than a flat 60, because a sleep-based
-cap that is *close* to the frame's own cost is worse than no cap at all. On the Retroid a frame
-costs 15.9 ms and a 60 Hz budget is 16.7 ms, so the wait is only 0.8 ms - but that idle is enough
-for the big cores to fall from 2.0 to 0.85 GHz, and the next frame then takes 24 ms instead of 16.
-Measured in-match, capped at 60 the game ran at **40.9 fps** and uncapped at **62.9**: the cap cost
-a third of the rate it was meant to impose. At 120 the budget is 8.3 ms, below the frame's cost, so
-nothing sleeps and the game runs flat out, and if it ever gets fast enough to reach 120 the same
-code begins pacing it properly. `VT3_FPS_CAP=0` still turns the limit off entirely.
+`VT3_FPS_CAP` defaults to the display's rate: 60 on the Mac, 120 on the Retroid. The Mac's pacing is
+free at 60. On the Retroid, holding the game to 60 would show each frame twice over while the frame
+times still land unevenly - judder. At 120 the budget is 8.3 ms, below what a frame costs today, so
+nothing sleeps and the game runs flat out, and if it ever reaches 120 the same code holds it there.
+`VT3_FPS_CAP=0` still turns the limit off entirely.
 
-Running at a true, steady 120 would need the remaining ~1.9x, and the two things that could supply
+**In-match rates only compare within one run.** Every launch picks a different opponent and venue,
+and the load varies with them - measured uncapped, one match ran at 62.9 fps and another at 49.6.
+Screenshots were taken at both ends of every window below, because Z walks the menus once a match
+ends and a menu runs at ~118 fps. Do not attribute a difference between two runs to a change you
+made until you have seen the same scene.
+
+Running at a true, steady 120 would need roughly 1.9x more, and the two things that could supply
 it are the x87 register file being held as host doubles rather than x80 (x87 is 27% of CPU;
 generated code touches the register file only through `FPUSH`/`FPOP`/`FST`, so it needs no
 recompilation of `vt3.c`), and `rep movs` translating to `memmove` instead of a dword loop
