@@ -74,15 +74,25 @@ extern uint8_t *vt_mem;
 /* Load image_path into guest memory and run the entry. Returns process status. */
 int vt3_run(const vt3_module *m, const char *image_path);
 
-/* Guest memory access. Addresses are guest (32-bit). Little-endian host. */
+/* Guest memory access. Addresses are guest (32-bit). Little-endian host.
+ *
+ * The multi-byte writes go through a pointer cast, not memcpy, and that is a speed choice, not
+ * a style one. Guest addresses are unaligned by design (the guest is x86), so the cast is what
+ * asks for an unaligned scalar access - fine on x86 and on arm64, which leaves SCTLR.A clear.
+ * More importantly, memcpy - and the byte store in wr8 - may touch any object, the vt_mem
+ * pointer global included, so after every store the compiler has to reload the base. A
+ * 16/32/64-bit typed access cannot alias a pointer variable, so the base stays in a register.
+ * Profiled on the Retroid, the hottest thing in the port was a translated rep movs whose loop
+ * body spent three of its ten instructions reloading vt_mem after each dword written; the casts
+ * take those three out. wr8 stays a byte store, so a loop that writes bytes still reloads. */
 static inline uint32_t rd8(uint32_t a) { return vt_mem[a]; }
 static inline uint32_t rd16(uint32_t a) { uint16_t v; memcpy(&v, vt_mem + a, 2); return v; }
 static inline uint32_t rd32(uint32_t a) { uint32_t v; memcpy(&v, vt_mem + a, 4); return v; }
 static inline uint64_t rd64(uint32_t a) { uint64_t v; memcpy(&v, vt_mem + a, 8); return v; }
 static inline void wr8(uint32_t a, uint32_t v) { vt_mem[a] = (uint8_t)v; }
-static inline void wr16(uint32_t a, uint32_t v) { uint16_t x = (uint16_t)v; memcpy(vt_mem + a, &x, 2); }
-static inline void wr32(uint32_t a, uint32_t v) { memcpy(vt_mem + a, &v, 4); }
-static inline void wr64(uint32_t a, uint64_t v) { memcpy(vt_mem + a, &v, 8); }
+static inline void wr16(uint32_t a, uint32_t v) { *(uint16_t *)(void *)(vt_mem + a) = (uint16_t)v; }
+static inline void wr32(uint32_t a, uint32_t v) { *(uint32_t *)(void *)(vt_mem + a) = v; }
+static inline void wr64(uint32_t a, uint64_t v) { *(uint64_t *)(void *)(vt_mem + a) = v; }
 
 /* Sign-extend the low `bits` of v to 32 bits. */
 static inline uint32_t vt_sx(uint32_t v, unsigned bits)
