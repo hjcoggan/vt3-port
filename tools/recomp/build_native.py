@@ -121,6 +121,12 @@ def main():
     sources += shim_src
     sources.append(translated)
 
+    # The runtime headers are part of vt3.c's ABI: vt3_cpu is declared in vt3rt.h and the
+    # generated code reads and writes it by field. An object built against an older copy links
+    # happily and is then wrong at run time, so the header mtimes have to gate the reuse too.
+    headers = [os.path.join(RT, h) for h in ('vt3rt.h', 'vt3fpu.h')]
+    headers += glob.glob(os.path.join(RUNTIME, 'include', 'vt3', '*.h'))
+
     incs = ['-I', RT,
             '-I', os.path.join(RUNTIME, 'include'),
             '-I', os.path.join(SHIM, 'include'),
@@ -132,8 +138,10 @@ def main():
         obj = os.path.join(OBJ, f'{i:03d}_{os.path.basename(src).replace(".c", ".o")}')
         if src == translated:
             prepare_out(translated, obj)
-            # vt3.c is about 100 MB and slow to compile. Reuse its object unless the source changed.
-            if os.path.exists(obj) and os.path.getmtime(obj) >= os.path.getmtime(src):
+            # vt3.c is about 100 MB and slow to compile. Reuse its object unless the source or
+            # anything it was compiled against has changed.
+            inputs = [src] + headers
+            if os.path.exists(obj) and min(map(os.path.getmtime, inputs)) >= os.path.getmtime(obj):
                 objs.append(obj)
                 continue
         level = ['-O1'] + flags[1:] if src == translated else flags   # same level as the first build; -O2 measured no gain

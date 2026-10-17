@@ -31,7 +31,7 @@ typedef struct vt3_cpu {
     uint32_t ftop;        /* x87 top of stack, 0..7 */
     uint32_t fcw;         /* x87 control word */
     uint32_t fsw;         /* x87 status word, TOP field is kept in ftop */
-    vt_x80 fp[8];        /* x87 physical registers, 80-bit (vt3fpu.h); st(i) = fp[(ftop+i)&7] */
+    vt_x80 fp[8];        /* x87 physical registers, host doubles (vt3fpu.h); st(i) = fp[(ftop+i)&7] */
     vt_xmm xmm[8];
     uint64_t mm[8];       /* MMX registers. Not aliased to the x87 stack. */
 } vt3_cpu;
