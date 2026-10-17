@@ -199,7 +199,8 @@ static struct {
     uint32_t cur;
     VkDescriptorSetLayout dsl0, dsl1;
     VkPipelineLayout pl;
-    VkSampler samp;
+    VkSampler samp, samp_point, samp_aniso;   /* linear (default), nearest, anisotropic */
+    float max_aniso;
     VkBuffer ubo, vb, ib;
     VkDeviceMemory ubo_mem, vb_mem, ib_mem;
     uint8_t *ubo_ptr, *vb_ptr, *ib_ptr;
@@ -1352,7 +1353,8 @@ static VkImageView resolve_view(vt3_tex t, int want_cube)
 
 /* Samplers the program does not declare get the white texel: the game leaves stale textures bound on
  * stages a shader never reads, and those should neither cost a layout change nor be read. */
-static VkDescriptorSet alloc_set1(vk_frame *f, uint8_t cube_mask, uint16_t declared, const vt3_tex *samplers)
+static VkDescriptorSet alloc_set1(vk_frame *f, uint8_t cube_mask, uint16_t declared, const vt3_tex *samplers,
+                                  const uint8_t *minf)
 {
     VkDescriptorSetAllocateInfo sai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
     sai.descriptorPool = f->pool;
@@ -1364,7 +1366,8 @@ static VkDescriptorSet alloc_set1(vk_frame *f, uint8_t cube_mask, uint16_t decla
     VkWriteDescriptorSet ws[VT3_MAX_SAMPLERS];
     for (int n = 0; n < VT3_MAX_SAMPLERS; n++) {
         int want_cube = (cube_mask >> n) & 1;
-        info[n].sampler = g.samp;
+        uint8_t f = minf ? minf[n] : 2u;
+        info[n].sampler = f == 1u ? g.samp_point : f == 3u ? g.samp_aniso : g.samp;
         vt3_tex st = samplers && ((declared >> n) & 1) ? samplers[n] : 0;
         /* A declared sampler that reads white is a texture the game expects and we do not have. */
         if ((declared >> n) & 1) {
@@ -1563,7 +1566,7 @@ static void vk_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_te
     VkDescriptorSet set1 = VK_NULL_HANDLE;
     vt3_tex samplers[VT3_MAX_SAMPLERS] = {0};
     samplers[0] = tex;
-    set1 = alloc_set1(f, 0, 1u, samplers);
+    set1 = alloc_set1(f, 0, 1u, samplers, NULL);
     if (!pipe || !set1) return;
 
     /* The push constants carry the bound target's size: pixel coordinates map to its whole area. */
@@ -1645,7 +1648,7 @@ static void vk_draw_program_impl(const vt3_draw *d)
     memcpy(psb + 4416u, &at_func, 4);
     memcpy(psb + 4420u, &at_ref, 4);
 
-    VkDescriptorSet set1 = alloc_set1(f, p->cube_mask, p->sampler_mask, d->samplers);
+    VkDescriptorSet set1 = alloc_set1(f, p->cube_mask, p->sampler_mask, d->samplers, d->samp_min);
     vk_tex *tgt = rt_of(g.tgt);
     VkPipeline pipe = get_pipeline(d->prog, p->vs, p->ps, d->layout, 0, &d->state,
                                    d->prim == VT3_PRIM_TRIANGLESTRIP, tgt ? (uint32_t)tgt->rpk : RPK_RGBA8);
@@ -1989,6 +1992,7 @@ static int vk_init(int logical_w, int logical_h)
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(g.phys, &props);
     VkPhysicalDeviceLimits lim = props.limits;
+    g.max_aniso = lim.maxSamplerAnisotropy > 0.0f ? lim.maxSamplerAnisotropy : 1.0f;
     if (lim.minUniformBufferOffsetAlignment > 256) {
         VT3_ERROR("vulkan: uniform buffer alignment %llu is larger than the 256 bytes assumed",
                   (unsigned long long)lim.minUniformBufferOffsetAlignment);
@@ -2095,6 +2099,14 @@ static int vk_init(int logical_w, int logical_h)
     sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     VKT(vkCreateSampler(g.dev, &sci, NULL, &g.samp), "sampler");
+    sci.magFilter = VK_FILTER_NEAREST;
+    sci.minFilter = VK_FILTER_NEAREST;
+    VKT(vkCreateSampler(g.dev, &sci, NULL, &g.samp_point), "point sampler");
+    sci.magFilter = VK_FILTER_LINEAR;
+    sci.minFilter = VK_FILTER_LINEAR;
+    sci.anisotropyEnable = VK_TRUE;
+    sci.maxAnisotropy = g.max_aniso;
+    VKT(vkCreateSampler(g.dev, &sci, NULL, &g.samp_aniso), "anisotropic sampler");
 
     /* Initial layouts for the offscreen target, then the dummy textures every sampler can fall back to. */
     if (once_submit(one_time_clear, NULL) != 0) return -1;
@@ -2169,6 +2181,8 @@ static void vk_shutdown(void)
     if (g.dsl0) vkDestroyDescriptorSetLayout(g.dev, g.dsl0, NULL);
     if (g.dsl1) vkDestroyDescriptorSetLayout(g.dev, g.dsl1, NULL);
     if (g.samp) vkDestroySampler(g.dev, g.samp, NULL);
+    if (g.samp_point) vkDestroySampler(g.dev, g.samp_point, NULL);
+    if (g.samp_aniso) vkDestroySampler(g.dev, g.samp_aniso, NULL);
     if (g.ubo) vkDestroyBuffer(g.dev, g.ubo, NULL);
     if (g.vb) vkDestroyBuffer(g.dev, g.vb, NULL);
     if (g.ib) vkDestroyBuffer(g.dev, g.ib, NULL);

@@ -117,6 +117,8 @@ typedef struct vt3_draw {
     int vsb[16];                /* vertex bool constants b0..b15 (D3D bool: non-zero = true) */
     int psb[16];                /* pixel bool constants */
     vt3_tex samplers[VT3_MAX_SAMPLERS];
+    uint8_t samp_min[VT3_MAX_SAMPLERS];  /* D3DTEXF_* min filter (1 POINT, 2 LINEAR, 3 ANISOTROPIC) */
+    uint8_t samp_mag[VT3_MAX_SAMPLERS];  /* D3DTEXF_* mag filter */
     vt3_rstate state;
 } vt3_draw;
 

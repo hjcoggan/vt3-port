@@ -969,6 +969,12 @@ static void gl_draw_program(const vt3_draw *d)
         p_glActiveTexture(GL_TEXTURE0 + (GLenum)n);
         p_glBindTexture(GL_TEXTURE_2D, tid2);
         p_glBindTexture(GL_TEXTURE_CUBE_MAP, tidc);
+        GLint mf = d->samp_min[n] == 1 ? GL_NEAREST : GL_LINEAR;   /* anisotropic -> linear here */
+        GLint gf = d->samp_mag[n] == 1 ? GL_NEAREST : GL_LINEAR;
+        p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, mf);
+        p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, gf);
+        p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, mf);
+        p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, gf);
         p_glUniform1i(p->loc_samp[n], n);
     }
     p_glActiveTexture(GL_TEXTURE0);

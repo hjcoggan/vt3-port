@@ -1005,6 +1005,10 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     memcpy(dd.vsb, d->vsb, sizeof dd.vsb);
     memcpy(dd.psb, d->psb, sizeof dd.psb);
     fill_textures(d, dd.samplers);
+    for (int s = 0; s < VT3_MAX_SAMPLERS; s++) {
+        dd.samp_min[s] = (uint8_t)d->samp[s][6];   /* D3DSAMP_MINFILTER */
+        dd.samp_mag[s] = (uint8_t)d->samp[s][5];   /* D3DSAMP_MAGFILTER */
+    }
     fill_rstate(d, &dd.state);
     if (vsh->skinned && getenv("VT3_SKIN_NOCULL")) dd.state.cull = 1;   /* debug: skinned meshes drawn two-sided */
     if (vsh->skinned && getenv("VT3_SKIN_FLIPCULL") && (dd.state.cull == 2 || dd.state.cull == 3))
