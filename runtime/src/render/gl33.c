@@ -92,7 +92,8 @@
     X(void, glRenderbufferStorage, (GLenum, GLenum, GLsizei, GLsizei))                    \
     X(void, glFramebufferRenderbuffer, (GLenum, GLenum, GLenum, GLuint))                  \
     X(void, glDisableVertexAttribArray, (GLuint))                                         \
-    X(void, glClearDepth, (GLclampd))
+    X(void, glClearDepth, (GLclampd))                                                     \
+    X(void, glGenerateMipmap, (GLenum))
 
 #define VT3_DECL_TYPE(ret, name, params) typedef ret (*vt3_pfn_##name) params;
 #define VT3_DECL_VAR(ret, name, params) static vt3_pfn_##name p_##name;
@@ -377,10 +378,11 @@ static int gl_tex_create(vt3_tex *out, int w, int h, vt3_texfmt fmt)
     else
         p_glTexImage2D(GL_TEXTURE_2D, 0, internal, w, h, 0,
                        (fmt == VT3_TEXFMT_A8) ? GL_RED : GL_BGRA, GL_UNSIGNED_BYTE, NULL);
-    p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);   /* raised after the upload */
     if (fmt == VT3_TEXFMT_X8R8G8B8) {
         const GLint swz[4] = { GL_RED, GL_GREEN, GL_BLUE, GL_ONE };
         p_glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swz);
@@ -414,6 +416,11 @@ static void gl_tex_upload(vt3_tex t, const void *pixels, int pitch, int w, int h
         p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
     }
     p_glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    /* Generate the mip chain (the game loads one level; a single-mip fine grid aliases at distance). */
+    p_glGenerateMipmap(GL_TEXTURE_2D);
+    int levels = 1, mx = w > h ? w : h;
+    while (mx > 1) { mx >>= 1; levels++; }
+    p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, levels - 1);
 }
 
 static void gl_tex_destroy(vt3_tex t)
@@ -969,7 +976,9 @@ static void gl_draw_program(const vt3_draw *d)
         p_glActiveTexture(GL_TEXTURE0 + (GLenum)n);
         p_glBindTexture(GL_TEXTURE_2D, tid2);
         p_glBindTexture(GL_TEXTURE_CUBE_MAP, tidc);
-        GLint mf = d->samp_min[n] == 1 ? GL_NEAREST : GL_LINEAR;   /* anisotropic -> linear here */
+        int has_mips = t != 0 && t != VT3_TEX_ZERO && t <= VT3_MAX_TEX && g.tex[t - 1].used &&
+                       !g.tex[t - 1].cube && !g.tex[t - 1].rt;
+        GLint mf = d->samp_min[n] == 1 ? GL_NEAREST : (has_mips ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
         GLint gf = d->samp_mag[n] == 1 ? GL_NEAREST : GL_LINEAR;
         GLint au = d->samp_addr_u[n] == 1 ? GL_REPEAT : d->samp_addr_u[n] == 2 ? GL_MIRRORED_REPEAT :
                    d->samp_addr_u[n] == 4 ? GL_CLAMP_TO_BORDER : GL_CLAMP_TO_EDGE;
@@ -979,7 +988,7 @@ static void gl_draw_program(const vt3_draw *d)
         p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, gf);
         p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, au);
         p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, av);
-        p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, mf);
+        p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, d->samp_min[n] == 1 ? GL_NEAREST : GL_LINEAR);
         p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, gf);
         p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, au);
         p_glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, av);

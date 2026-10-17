@@ -90,6 +90,7 @@ typedef struct vk_tex {
     VkFormat format;
     VkImageViewType view_type;
     int bpp;                       /* bytes per texel as uploaded: 4, or 1 for A8 */
+    int mips;                      /* mip levels in the image (1 for cube/render targets) */
     int rt;                        /* a render target: the fields below are set */
     int rpk;                       /* render pass kind: RPK_RGBA8 or RPK_RGBA16F */
     VkImage dep;
@@ -595,8 +596,16 @@ static int create_swapchain(void)
     return 0;
 }
 
+/* Total mip levels of a full pyramid for a w x h texture. */
+static uint32_t full_mip_count(uint32_t w, uint32_t h)
+{
+    uint32_t m = 0, mx = w > h ? w : h;
+    while (mx) { mx >>= 1; m++; }
+    return m;
+}
+
 static int create_image(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags usage, VkImageCreateFlags flags,
-                        uint32_t layers, VkImage *img, VkDeviceMemory *mem)
+                        uint32_t layers, uint32_t mips, VkImage *img, VkDeviceMemory *mem)
 {
     VkImageCreateInfo ii = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
     ii.flags = flags;
@@ -605,7 +614,7 @@ static int create_image(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags 
     ii.extent.width = w;
     ii.extent.height = h;
     ii.extent.depth = 1;
-    ii.mipLevels = 1;
+    ii.mipLevels = mips;
     ii.arrayLayers = layers;
     ii.samples = VK_SAMPLE_COUNT_1_BIT;
     ii.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -620,7 +629,7 @@ static int create_image(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags 
     return 0;
 }
 
-static VkImageView create_view(VkImage img, VkFormat fmt, VkImageViewType type, uint32_t layers,
+static VkImageView create_view(VkImage img, VkFormat fmt, VkImageViewType type, uint32_t layers, uint32_t mips,
                                VkComponentMapping swz, VkImageAspectFlags aspect)
 {
     VkImageViewCreateInfo vi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
@@ -629,7 +638,7 @@ static VkImageView create_view(VkImage img, VkFormat fmt, VkImageViewType type, 
     vi.format = fmt;
     vi.components = swz;
     vi.subresourceRange.aspectMask = aspect;
-    vi.subresourceRange.levelCount = 1;
+    vi.subresourceRange.levelCount = mips;
     vi.subresourceRange.layerCount = layers;
     VkImageView view = VK_NULL_HANDLE;
     if (vkCreateImageView(g.dev, &vi, NULL, &view) != VK_SUCCESS) return VK_NULL_HANDLE;
@@ -694,13 +703,13 @@ static int create_offscreen(void)
     if (create_image((uint32_t)g.logical_w, (uint32_t)g.logical_h, fmt,
                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                     0, 1, &g.col, &g.col_mem) != 0) return -1;
+                     0, 1, 1, &g.col, &g.col_mem) != 0) return -1;
     if (create_image((uint32_t)g.logical_w, (uint32_t)g.logical_h, VK_FORMAT_D32_SFLOAT,
-                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 0, 1, &g.dep, &g.dep_mem) != 0) return -1;
+                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 0, 1, 1, &g.dep, &g.dep_mem) != 0) return -1;
     VkComponentMapping id = { VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
                               VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY };
-    g.col_view = create_view(g.col, fmt, VK_IMAGE_VIEW_TYPE_2D, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);
-    g.dep_view = create_view(g.dep, VK_FORMAT_D32_SFLOAT, VK_IMAGE_VIEW_TYPE_2D, 1, id, VK_IMAGE_ASPECT_DEPTH_BIT);
+    g.col_view = create_view(g.col, fmt, VK_IMAGE_VIEW_TYPE_2D, 1, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);
+    g.dep_view = create_view(g.dep, VK_FORMAT_D32_SFLOAT, VK_IMAGE_VIEW_TYPE_2D, 1, 1, id, VK_IMAGE_ASPECT_DEPTH_BIT);
     if (!g.col_view || !g.dep_view) return -1;
 
     if (create_render_pass(VK_FORMAT_R8G8B8A8_UNORM, &g.rps[RPK_RGBA8]) != 0) return -1;
@@ -826,7 +835,29 @@ typedef struct upload_arg {
     uint32_t w, h;
     uint32_t row_pixels;
     int cube;
+    uint32_t mips;
 } upload_arg;
+
+/* A barrier for one mip level of one layer (used while generating the mip chain). */
+static void barrier_mip(VkCommandBuffer cb, VkImage img, VkImageLayout from, VkImageLayout to,
+                        VkPipelineStageFlags src_stage, VkAccessFlags src_access,
+                        VkPipelineStageFlags dst_stage, VkAccessFlags dst_access,
+                        uint32_t layer, uint32_t mip, VkImageAspectFlags aspect)
+{
+    VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    b.oldLayout = from;
+    b.newLayout = to;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = img;
+    b.subresourceRange.aspectMask = aspect;
+    b.subresourceRange.baseMipLevel = mip;
+    b.subresourceRange.levelCount = 1;
+    b.subresourceRange.baseArrayLayer = layer;
+    b.subresourceRange.layerCount = 1;
+    b.srcAccessMask = src_access;
+    b.dstAccessMask = dst_access;
+    vkCmdPipelineBarrier(cb, src_stage, dst_stage, 0, 0, NULL, 0, NULL, 1, &b);
+}
 
 static void record_upload(VkCommandBuffer cb, void *p)
 {
@@ -843,10 +874,39 @@ static void record_upload(VkCommandBuffer cb, void *p)
     c.imageExtent.height = u->h;
     c.imageExtent.depth = 1;
     vkCmdCopyBufferToImage(cb, u->src, u->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
-    barrier_image(cb, u->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
-                  u->layer, 1, VK_IMAGE_ASPECT_COLOR_BIT);
+    /* Generate the mip chain from level 0. The game loads one level, but a single-mip fine grid
+     * (the net) aliases badly at distance; pre-filtering removes the shimmer. */
+    uint32_t pw = u->w, ph = u->h;
+    for (uint32_t l = 1; l < u->mips; l++) {
+        uint32_t mw = pw >> 1 ? pw >> 1 : 1u;
+        uint32_t mh = ph >> 1 ? ph >> 1 : 1u;
+        barrier_mip(cb, u->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    u->layer, l - 1, VK_IMAGE_ASPECT_COLOR_BIT);
+        barrier_mip(cb, u->img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_ACCESS_TRANSFER_WRITE_BIT, u->layer, l, VK_IMAGE_ASPECT_COLOR_BIT);
+        VkImageBlit blit = {0};
+        blit.srcSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, l - 1, u->layer, 1 };
+        blit.srcOffsets[1] = (VkOffset3D){ (int)pw, (int)ph, 1 };
+        blit.dstSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, l, u->layer, 1 };
+        blit.dstOffsets[1] = (VkOffset3D){ (int)mw, (int)mh, 1 };
+        vkCmdBlitImage(cb, u->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, u->img,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+        pw = mw;
+        ph = mh;
+    }
+    for (uint32_t l = 0; l < u->mips; l++) {
+        int was_src = l + 1 < u->mips;
+        barrier_mip(cb, u->img,
+                    was_src ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    was_src ? VK_ACCESS_TRANSFER_READ_BIT : VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
+                    u->layer, l, VK_IMAGE_ASPECT_COLOR_BIT);
+    }
 }
 
 /* Formats: the device gets BGRA bytes (D3DFMT_A8R8G8B8 order) or A8 as one byte per texel. */
@@ -874,9 +934,14 @@ static int tex_build(vk_tex *t, int w, int h, int cube, vt3_texfmt fmt)
 {
     VkImageCreateFlags flags = cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
     uint32_t layers = cube ? 6 : 1;
-    if (create_image((uint32_t)w, (uint32_t)h, tex_format(fmt), VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                     flags, layers, &t->image, &t->mem) != 0) return -1;
-    t->view = create_view(t->image, tex_format(fmt), cube ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D, layers,
+    /* A 2-D texture gets a full mip chain even though the game loads one level: the net's
+     * single-mip grid aliases at distance, so pre-filter the pyramid on upload. */
+    uint32_t mips = cube ? 1u : full_mip_count((uint32_t)w, (uint32_t)h);
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                              (mips > 1 ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
+    if (create_image((uint32_t)w, (uint32_t)h, tex_format(fmt), usage,
+                     flags, layers, mips, &t->image, &t->mem) != 0) return -1;
+    t->view = create_view(t->image, tex_format(fmt), cube ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D, layers, mips,
                           tex_swizzle(fmt), VK_IMAGE_ASPECT_COLOR_BIT);
     if (!t->view) return -1;
     t->layout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -885,6 +950,7 @@ static int tex_build(vk_tex *t, int w, int h, int cube, vt3_texfmt fmt)
     t->cube = cube;
     t->format = tex_format(fmt);
     t->view_type = cube ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
+    t->mips = mips;
     t->bpp = fmt == VT3_TEXFMT_A8 ? 1 : 4;
     t->used = 1;
     return 0;
@@ -944,7 +1010,7 @@ static void upload_rows(vk_tex *t, uint32_t layer, const void *pixels, int pitch
         return;
     }
     memcpy(ptr, pixels, bytes);
-    upload_arg u = { sb, t->image, layer, (uint32_t)w, (uint32_t)h, (uint32_t)(pitch / t->bpp), t->cube };
+    upload_arg u = { sb, t->image, layer, (uint32_t)w, (uint32_t)h, (uint32_t)(pitch / t->bpp), t->cube, t->mips };
     record_upload(f->cmd_up, &u);
 }
 
@@ -1387,7 +1453,8 @@ static VkSampler sampler_for(uint8_t minf, uint8_t magf, uint8_t u, uint8_t v, u
     VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
     sci.magFilter = magf == 1 ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
     sci.minFilter = minf == 1 ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
-    sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sci.maxLod = VK_LOD_CLAMP_NONE;
     sci.addressModeU = sampler_address(u);
     sci.addressModeV = sampler_address(v);
     sci.addressModeW = sampler_address(w);
@@ -2162,6 +2229,8 @@ static int vk_init(int logical_w, int logical_h)
     VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
     sci.magFilter = VK_FILTER_LINEAR;
     sci.minFilter = VK_FILTER_LINEAR;
+    sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sci.maxLod = VK_LOD_CLAMP_NONE;
     sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -2362,12 +2431,12 @@ static int vk_rt_create(vt3_tex *out, int w, int h, vt3_texfmt fmt)
     if (create_image((uint32_t)w, (uint32_t)h, vf,
                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                          VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                     0, 1, &t->image, &t->mem) != 0 ||
+                     0, 1, 1, &t->image, &t->mem) != 0 ||
         create_image((uint32_t)w, (uint32_t)h, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 0, 1,
-                     &t->dep, &t->dep_mem) != 0)
+                     1, &t->dep, &t->dep_mem) != 0)
         goto fail;
-    t->view = create_view(t->image, vf, VK_IMAGE_VIEW_TYPE_2D, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);
-    t->dep_view = create_view(t->dep, VK_FORMAT_D32_SFLOAT, VK_IMAGE_VIEW_TYPE_2D, 1, id, VK_IMAGE_ASPECT_DEPTH_BIT);
+    t->view = create_view(t->image, vf, VK_IMAGE_VIEW_TYPE_2D, 1, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);
+    t->dep_view = create_view(t->dep, VK_FORMAT_D32_SFLOAT, VK_IMAGE_VIEW_TYPE_2D, 1, 1, id, VK_IMAGE_ASPECT_DEPTH_BIT);
     if (!t->view || !t->dep_view) goto fail;
     t->rpk = f16 ? RPK_RGBA16F : RPK_RGBA8;
     VkImageView views[2] = { t->view, t->dep_view };
