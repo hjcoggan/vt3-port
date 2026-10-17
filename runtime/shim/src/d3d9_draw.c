@@ -351,15 +351,17 @@ static void trace_draw(const d3d9_device *d, const d3d9_draw_args *a, uint32_t n
         vb[16] = pb[16] = 0;
         VT3_INFO("  bools vs %s ps %s", vb, pb);
     }
-    VT3_INFO("  vsc c0 %g %g %g %g | c4 %g %g %g %g | c15 %g %g %g %g",
+    VT3_INFO("  vsc c0 %g %g %g %g | c4 %g %g %g %g | c14 %g %g %g %g | c15 %g %g %g %g",
              d->vsc[0][0], d->vsc[0][1], d->vsc[0][2], d->vsc[0][3],
              d->vsc[4][0], d->vsc[4][1], d->vsc[4][2], d->vsc[4][3],
+             d->vsc[14][0], d->vsc[14][1], d->vsc[14][2], d->vsc[14][3],
              d->vsc[15][0], d->vsc[15][1], d->vsc[15][2], d->vsc[15][3]);
     for (int s = 0; s < VT3_MAX_SAMPLERS; s++) {
         d3d9_texture *t = d3d9_texture_of(d->textures[s]);
         if (!t) continue;
-        VT3_INFO("  sampler %d: texture %ux%u fmt 0x%x faces %u gl %u", s, t->w, t->h, t->fmt, t->faces,
-                 (unsigned)t->gl);
+        VT3_INFO("  sampler %d: texture %ux%u fmt 0x%x faces %u gl %u | min %d mag %d addrU %d addrV %d addrW %d",
+                 s, t->w, t->h, t->fmt, t->faces, (unsigned)t->gl,
+                 (int)d->samp[s][6], (int)d->samp[s][5], (int)d->samp[s][1], (int)d->samp[s][2], (int)d->samp[s][3]);
     }
 }
 
@@ -1091,6 +1093,36 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         }
     }
     trace_draw(d, a, nverts);
+    {   /* VT3_TRACE_UV=1 (debug): for draws the hash filter names, each float attribute's raw
+         * vertex span and the span after the c14 UV-scale the net shader multiplies by
+         * (vo_T0 = vi1 * c14). Separates "wrong UVs in the buffer" from "wrong constant scale". */
+        static int uv_on = -1, uv_shown;
+        if (uv_on < 0) uv_on = getenv("VT3_TRACE_UV") != NULL;
+        if (uv_on && uv_shown < 8 && trace_hash_match(vsh)) {
+            uv_shown++;
+            VT3_INFO("uv %d: vs %08x ps %08x, %u verts, c14 %g %g %g %g", uv_shown,
+                     vsh ? shader_hash(vsh) : 0u, psh ? shader_hash(psh) : 0u, (unsigned)nverts,
+                     vsc_copy[14 * 4], vsc_copy[14 * 4 + 1], vsc_copy[14 * 4 + 2], vsc_copy[14 * 4 + 3]);
+            for (int k = 0; k < lay.count; k++) {
+                if (lay.attr[k].type != VT3_VT_FLOAT) continue;
+                float mn[4], mx[4];
+                for (int c = 0; c < 4; c++) { mn[c] = 1e30f; mx[c] = -1e30f; }
+                for (uint32_t v = 0; v < nv; v++) {
+                    float o[4];
+                    attr_read(&lay.attr[k], vcopy + (size_t)v * (uint32_t)lay.stride, o);
+                    for (int c = 0; c < lay.attr[k].components && c < 4; c++) {
+                        if (o[c] < mn[c]) mn[c] = o[c];
+                        if (o[c] > mx[c]) mx[c] = o[c];
+                    }
+                }
+                VT3_INFO("  attr loc %d comps %d off %d raw x %g..%g y %g..%g | *c14 x %g..%g y %g..%g",
+                         lay.attr[k].location, lay.attr[k].components, lay.attr[k].offset,
+                         mn[0], mx[0], mn[1], mx[1],
+                         mn[0] * vsc_copy[14 * 4], mx[0] * vsc_copy[14 * 4],
+                         mn[1] * vsc_copy[14 * 4 + 1], mx[1] * vsc_copy[14 * 4 + 1]);
+            }
+        }
+    }
     vt3_gfx_draw_program(&dd);
     pixel_watch(d, a, vsh, psh);
 

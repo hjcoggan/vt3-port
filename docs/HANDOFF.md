@@ -25,8 +25,9 @@ Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one rend
 | 286a448 | **Adreno T-pose root cause (the real fix).** Adreno 740 reads the skinning shader's blend-indices vertex element (`UBYTE4`, bound as `R8G8B8A8_USCALED`) as zero, so the bone index `a0.x` collapsed to 0 and every skinned mesh rendered as a rigid bind/T-pose (this is separate from the `dce147b` zero-init). `d3d9_draw.c` now expands the four index bytes into a `float4` in the shim's per-draw vertex copy (stride + 12, following attribute offsets + 12). No game data or shader changed. |
 | ee0d643 | Renderer now carries per-draw min/mag texture-filter state and creates point/linear/anisotropic samplers. **This did not fix the missing net**; the net root cause was sampler address mode (see `04d62fa` below). |
 | bd01b0f | **Xbox 360 gamepad layout (macOS & Android).** Verified against `VT3.exe`'s `FUN_004018c0`, `FUN_00476300`, `FUN_004763c0`, and `0x0085603c` (`[12,13,14,15,2,0,3,1,4,7]`): DI button 0 (`A`) is Top Spin / Menu Select, DI button 2 (`B` and `X`) is Slice / Drop Shot / Menu Cancel, DI button 3 (`Y`) is Lob / World Tour Home, DI button 4 (`LB`/`RB`/`LT`/`RT`) is Instruct COM Partner / Incoming Mail, DI button 7 (`Start`) is Pause, `Back` asserts `DIK_V` (`0x2F`) for Change Camera, and `RB`/`RT` assert `DIK_LMENU` (`0x38`) for World Tour Tour Calendar without triggering DI button 1's match pause (`0x10`). Added `debug.vt3.swap_ab_xy` on Android and `VT3_GAMEPAD_USE_LABELS` on SDL3. |
-| 04d62fa | **Missing net mesh fixed.** The net's UVs span 30×4 texture tiles, while D3D9 sampler address U/V are `WRAP` (value 1). Both backends hardcoded `CLAMP_TO_EDGE`, so only UVs within the first tile rendered the net grid; the remainder sampled a transparent edge. Per-draw address modes are now carried from `SetSamplerState` into Vulkan sampler selection and GL texture wrap state. Verified on the Retroid: the grid now covers the full net. |
-| *this session* | **Net mipmap pyramid: attempted, reverted.** Tried allocating a full 2D mip chain and generating it on level-0 upload (`vkCmdBlitImage` / `glGenerateMipmap`) to stop the net's single-mip grid shimmering at distance. On the Retroid this produced a **black screen** (the game still ran at ~50 fps with no Vulkan errors), so the mip generation was removed and textures stay at one level. The net now renders fully (address-mode fix above) but still shimmers at distance and costs some performance, especially on grass. |
+| 04d62fa | **Missing net mesh fixed.** The net's UVs span many texture tiles (24x4 for the court-net draw, measured with `VT3_TRACE_UV`; earlier notes said 30x4), while D3D9 sampler address U/V are `WRAP` (value 1). Both backends hardcoded `CLAMP_TO_EDGE`, so only UVs within the first tile rendered the net grid; the remainder sampled a transparent edge. Per-draw address modes are now carried from `SetSamplerState` into Vulkan sampler selection and GL texture wrap state. Verified on the Retroid: the grid now covers the full net. |
+| *this session* | **Net mesh fixed: samplers could never reach a mip level.** The net is a 128x128 wire-textile (`tex_230`, the draw's `gl 230`) tiled 24x4 by `c14`, so at any real distance it must be sampled from a small mip — but `sampler_for` and the fallback `g.samp` never set `mipmapMode`/`lodMax`, and Vulkan defaults those to `NEAREST` and **0.0**. Every sample was hard-clamped to mip 0 no matter how far away the net was, so the fine grid minified to sub-texel and rendered as a scrambled, coarse-looking pattern (also why the earlier mip attempt `b6e14e2` could not have worked: it built a chain nothing could select — and see the row below for why it black-screened). Now: full mip chain on 2D upload (`full_mip_count`, `TRANSFER_SRC` only when `mips > 1`, per-level `barrier_mip` with each level transitioning from its own layout) **and** `mipmapMode LINEAR`, `minLod 0`, `maxLod VK_LOD_CLAMP_NONE` in both `sampler_for` and `g.samp`. Verified on the Mac (0 validation messages, clean fine mesh) and on the Retroid (`c27c2f60`): the net now matches the PC reference's uniform fine mesh, no black screen, memory unchanged (~55 MB graphics of 11.4 GB), and no frame-rate cost (A/B from the log ring buffer: 38.6 fps before, 39.5 after; thermal status 0). |
+| *this session* | **Net mipmap pyramid: first attempt reverted.** The `b6e14e2` attempt black-screened the Retroid (game ran, no Vulkan errors) and was dropped by `13380c0`; the row above supersedes it. Kept for the record because the failure was misdiagnosed as a blit/barrier problem: the upload-time blit was only half of it, and the samplers could not select a mip anyway. Cube textures and render targets still use one level. |
 | 7cd9a86 | `VT3_VK_DEBUG=1` routes validation-layer messages into the log (desktop). |
 | e8d1a37 | DirectSound: unwritten 256-byte blocks mix as silence instead of replaying old audio, and the mixer thread asks for audio priority. Mac: 13 exact 128 ms repeats per 60 s match before, 0 after. **Not yet confirmed on the Retroid**: if the game's writer is starved there, repeats become gaps. Back out with `git revert e8d1a37`. |
 | db04521 | Shadow debugging aids (below). |
@@ -68,11 +69,11 @@ Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one rend
 3. **Android audio** needs a listen with e8d1a37 (see above). Android stutter during loading is
    probably CPU load: the game's audio writer is starved. Raising the writer thread's priority is
    the next lever.
-4. **Net coverage: fixed this session** (see Fixed table). `04d62fa` fixed the missing U/V
-   `WRAP` address mode so the 30×4 tiled net mesh renders across the full court. Remaining:
-   the single-mip wire grid shimmers at distance and costs some performance, especially on grass;
-   a mip-chain attempt black-screened the device and was reverted (see Fixed table). **Shadows
-   duplicated** was reported on Android before the zero-init fix; re-check with the current build.
+4. **Net: fixed this session** (see Fixed table). `04d62fa` fixed the missing U/V `WRAP` address mode
+   so the 24x4 tiled net mesh renders across the full court, and the row above fixes the sampler LOD
+   that clamped every sample to mip 0 (the coarse/scrambled grid). Both verified on the Retroid
+   against the PC reference: a uniform fine mesh, no shimmer. Remaining: **shadows duplicated** was
+   reported on Android before the zero-init fix; re-check with the current build.
 5. **Screen shape.** The game should render cleanly at 4:3, 16:10, 16:9, 18:9 and 19.5:9. Letterbox
    is the right default (`runtime/src/render/letterbox.c`; integer mode ignores the display aspect,
    off by default). True widescreen needs a Hor+ change to the game's projection (guest code); size
@@ -81,8 +82,12 @@ Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one rend
    without Homebrew's SDL3/Vulkan/MoltenVK to prove it launches there.
 7. Vulkan memory is about 128 MB host-visible (two frames of rings): watch it on the Retroid.
    MoltenVK logs "Metal does not support disabling primitive restart" (harmless).
-8. Frame rate 53-55 fps on the Retroid; the GPU is not the wait (fence wait ~0.01 ms), so stalls are
-   CPU-side (loading).
+8. Frame rate on the Retroid: **~39 fps average in play** (measured from the log ring buffer across
+   a run: 38.6 before this session's mip work, 39.5 after — so the mip chain is not a cost; the older
+   "53-55 fps" figure in previous handoffs predates this session's renderer commits and is not
+   reproducible here). Venue and opponent are random per run, so compare within one build only, and
+   check `Thermal Status` first (it was 0 while measuring). The GPU is not the wait (3.5 ms/frame,
+   fence wait ~0.01 ms), so the stall is CPU-side (loading).
 9. Route flake: the Tournament route sometimes never reaches a match (about 59-62 textures at the
    last key, no error), more often while a build is using the CPU. Rerun.
 
@@ -139,6 +144,7 @@ the GLSL.
 | `VT3_TRACE_DRAW=N`, `_AFTER=s`, `_MIN=prims`, `VT3_TRACE_HASH=hex` | Per-draw trace. The hash filter only applies with the draw trace on. |
 | `VT3_TRACE_QUAD=1` | Layout, raw vertices, constants and state of small draws into off-screen targets. |
 | `VT3_TRACE_QUAD_BB=s` | The same for small draws into the back buffer (screen pictures such as the changeover / result background), deduplicated by shader and layout; waits `s` seconds first, `0` for the whole run. |
+| `VT3_TRACE_UV=1` | For the draws `VT3_TRACE_HASH` names: each float attribute's raw vertex span and its span after the `c14` UV scale (`vo_T0 = vi1 * c14`), plus the shader hashes. Use it to tell "the UVs in the buffer are wrong" from "the constant scaling is wrong"; the draw trace above now prints `c14` and each sampler's min/mag/address state too. |
 | `VT3_DUMP_RT=dir`, `VT3_DUMP_RT_AT=s` (GL) | Write every 8-bit render target to TGA once. |
 | `VT3_DUMP_QUAD=dir` (GL) | The same, just before and after the mask blur draw (`pre_` / `post_` files). |
 | `VT3_SHADOW_COPY=1` (GL) | Replace the mask blur with a copy. |
