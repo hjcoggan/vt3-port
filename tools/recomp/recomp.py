@@ -1436,6 +1436,23 @@ def string_op(ins):
         if base in ('scas', 'cmps'):
             stop = "if (zf) break;" if ins.repne else "if (!zf) break;"
             return blk("while (ecx != 0u) {", *body, "ecx -= 1u;", stop, "}")
+        if base == 'movs' and sz == 4:
+            # REP MOVSD is common in the game's hot structure-copy routines. For DF=0 and
+            # disjoint, non-wrapping guest ranges, libc's bulk copy is equivalent to the x86
+            # forward loop. Keep the scalar loop for overlap, DF=1, or address wrap, where
+            # memcpy would change guest semantics.
+            loop = blk("while (ecx != 0u) {", *body, "ecx -= 1u;", "}")
+            bulk = (
+                "uint64_t nbytes = (uint64_t)ecx * 4u;",
+                "uint64_t src_end = (uint64_t)esi + nbytes;",
+                "uint64_t dst_end = (uint64_t)edi + nbytes;",
+                "if (src_end <= 0x100000000ull && dst_end <= 0x100000000ull && "
+                "(src_end <= (uint64_t)edi || dst_end <= (uint64_t)esi)) {",
+                "memcpy(vt_mem + edi, vt_mem + esi, (size_t)nbytes);",
+                "esi += (uint32_t)nbytes; edi += (uint32_t)nbytes; ecx = 0u;",
+                "} else " + loop,
+            )
+            return blk("if (ecx >= 8u && !df) {", *bulk, "} else ", loop)
         return blk("while (ecx != 0u) {", *body, "ecx -= 1u;", "}")
     return blk(*body)
 

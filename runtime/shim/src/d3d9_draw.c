@@ -53,6 +53,22 @@ static int warned_once(int *flag)
     return 0;
 }
 
+/* Draw calls are serialized by the guest lock and both backends copy submitted bytes before
+ * returning. Reuse one bounded-by-high-water scratch buffer instead of allocating once per
+ * draw. Keeping it at file scope is safe because D3D9 draw submission is serialized here. */
+static uint8_t *g_vertex_scratch;
+static size_t g_vertex_scratch_cap;
+
+static uint8_t *vertex_scratch_reserve(size_t need)
+{
+    if (need <= g_vertex_scratch_cap) return g_vertex_scratch;
+    uint8_t *p = realloc(g_vertex_scratch, need);
+    if (!p) return NULL;
+    g_vertex_scratch = p;
+    g_vertex_scratch_cap = need;
+    return p;
+}
+
 static uint32_t prim_vertex_count(uint32_t prim, uint32_t count)
 {
     if (prim == PRIM_TRIANGLELIST) return 3u * count;
@@ -902,18 +918,18 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
             blend_indices = 1;
             break;
         }
-    int needs_copy = swap || multi || blend_indices;
+    int needs_copy = swap || multi;
 
     /* Vertex bytes for the referenced range. Indexed: [first, first + count); plain: the vertices. */
     uint32_t v0 = first_v;
     uint32_t nv = a->indexed ? count_v : nverts;
     size_t bytes = (size_t)nv * stride;
+    size_t expanded_bytes = blend_indices ? (size_t)nv * (stride + 12u) : 0u;
+    size_t scratch_need = (needs_copy ? bytes : 0u) + expanded_bytes;
     uint8_t *vcopy = NULL;
-    int vcopy_owned = 0;
     if (needs_copy) {
-        vcopy = malloc(bytes ? bytes : 1);
+        vcopy = vertex_scratch_reserve(scratch_need ? scratch_need : 1);
         if (!vcopy) { free(idx16); return E_OUTOFMEMORY_D3D9; }
-        vcopy_owned = 1;
         if (multi) {
             for (uint32_t v = 0; v < nv; v++)
                 for (uint32_t s = 0; s < 16; s++)
@@ -1005,23 +1021,34 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     for (int k = 0; k < lay.count; k++)
         if (lay.attr[k].location == 2 && lay.attr[k].type == VT3_VT_UBYTE && lay.attr[k].components == 4)
             idx_k = k;
-    uint8_t *repacked = NULL;
     vt3_vlayout rlay = lay;
     uint32_t rstride = (uint32_t)lay.stride;
+    const uint8_t *draw_vertices = vcopy;
     if (idx_k >= 0) {
         int ioff = lay.attr[idx_k].offset;
         rstride = (uint32_t)lay.stride + 12u;
-        repacked = malloc((size_t)nv * rstride);
-        if (repacked) {
+        /* Convert directly from the locked source for simple streams; swapped / merged sources
+         * stay in the first scratch region while the expanded draw data occupies the tail. */
+        uint8_t *scratch = vertex_scratch_reserve(scratch_need ? scratch_need : 1);
+        size_t expanded_offset = (vcopy == g_vertex_scratch) ? bytes : 0u;
+        uint8_t *expanded = scratch ? scratch + expanded_offset : NULL;
+        if (!expanded || expanded_bytes > g_vertex_scratch_cap - expanded_offset) {
+            free(idx16);
+            return E_OUTOFMEMORY_D3D9;
+        }
+        {
             for (uint32_t v = 0; v < nv; v++) {
                 const uint8_t *src = vcopy + (size_t)v * (uint32_t)lay.stride;
-                uint8_t *dst = repacked + (size_t)v * rstride;
+                uint8_t *dst = expanded + (size_t)v * rstride;
                 memcpy(dst, src, (size_t)ioff);
-                const uint8_t *ix = src + ioff;
-                float *f = (float *)(dst + ioff);
-                f[0] = (float)ix[0]; f[1] = (float)ix[1]; f[2] = (float)ix[2]; f[3] = (float)ix[3];
-                memcpy(dst + ioff + 16, src + ioff + 4, (size_t)lay.stride - (size_t)ioff - 4u);
+                uint8_t ix[4];
+                memcpy(ix, src + ioff, sizeof ix);
+                float f[4] = { (float)ix[0], (float)ix[1], (float)ix[2], (float)ix[3] };
+                memcpy(dst + ioff, f, sizeof f);
+                memcpy(dst + ioff + 16, src + ioff + 4,
+                       (size_t)lay.stride - (size_t)ioff - 4u);
             }
+            draw_vertices = expanded;
             rlay.attr[idx_k].type = VT3_VT_FLOAT;
             for (int k = 0; k < rlay.count; k++)
                 if (rlay.attr[k].offset > ioff) rlay.attr[k].offset += 12;
@@ -1032,9 +1059,9 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     vt3_draw dd;
     memset(&dd, 0, sizeof dd);
     dd.prog = prog;
-    dd.layout = repacked ? &rlay : &lay;
-    dd.vertices = repacked ? repacked : vcopy;
-    dd.vertex_bytes = repacked ? (uint32_t)nv * rstride : (uint32_t)bytes;
+    dd.layout = (idx_k >= 0 && rlay.stride != lay.stride) ? &rlay : &lay;
+    dd.vertices = draw_vertices;
+    dd.vertex_bytes = (uint32_t)nv * (uint32_t)dd.layout->stride;
     dd.indices = use_idx ? idx16 : NULL;
     dd.count = use_idx ? nidx : nverts;
     dd.prim = prim_list == PRIM_TRIANGLESTRIP ? VT3_PRIM_TRIANGLESTRIP : VT3_PRIM_TRIANGLELIST;
@@ -1166,8 +1193,6 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     vt3_gfx_draw_program(&dd);
     pixel_watch(d, a, vsh, psh);
 
-    free(repacked);
-    if (vcopy_owned) free(vcopy);
     free(idx16);
     return S_OK;
 }
