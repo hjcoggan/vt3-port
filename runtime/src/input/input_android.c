@@ -154,6 +154,10 @@ int vt3_input_android_event(const AInputEvent *e)
 {
     int32_t type = AInputEvent_getType(e);
     if (type == AINPUT_EVENT_TYPE_KEY) {
+        int32_t code = AKeyEvent_getKeyCode(e);
+        /* Volume keys belong to the system: consuming them hides the volume HUD. */
+        if (code == AKEYCODE_VOLUME_UP || code == AKEYCODE_VOLUME_DOWN ||
+            code == AKEYCODE_VOLUME_MUTE) return 0;
         key_event(e);
         return 1;
     }
