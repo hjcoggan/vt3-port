@@ -924,7 +924,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
             copy_vertices(vcopy, vbase + (size_t)v0 * stride, nv, stride, dc);
         }
     } else {
-        vcopy = vbase + (size_t)v0 * stride;   /* renderer copies into its ring within the call */
+        vcopy = (uint8_t *)vbase + (size_t)v0 * stride;   /* renderer copies into its ring within the call */
     }
     skin_check(d, vsh, a, &lay, vcopy, nv, stride, use_idx ? idx16 : NULL, use_idx ? nidx : nverts,
                prim_list != PRIM_TRIANGLESTRIP);
