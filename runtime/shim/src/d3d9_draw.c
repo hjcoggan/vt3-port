@@ -891,22 +891,41 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
      * would come from the previous mesh's declaration and its UV would sample the wrong bytes.
      * The FVF-derived layout above is the quad's real one. */
 
+    /* Whether the vertex bytes need a shadow copy: a D3DCOLOR element must be byte-swapped
+     * (cannot touch the source buffer), multiple streams must be gathered into one, or the
+     * Adreno UBYTE4 blend-indices must be expanded to float4. Anything else can be handed to
+     * the renderer straight from the locked buffer, which copies it into the frame's vertex
+     * ring within the same call - no second copy, no per-draw malloc. */
+    int blend_indices = 0;
+    for (int k = 0; k < lay.count; k++)
+        if (lay.attr[k].location == 2 && lay.attr[k].type == VT3_VT_UBYTE && lay.attr[k].components == 4) {
+            blend_indices = 1;
+            break;
+        }
+    int needs_copy = swap || multi || blend_indices;
+
     /* Vertex bytes for the referenced range. Indexed: [first, first + count); plain: the vertices. */
     uint32_t v0 = first_v;
     uint32_t nv = a->indexed ? count_v : nverts;
     size_t bytes = (size_t)nv * stride;
-    uint8_t *vcopy = malloc(bytes ? bytes : 1);
-    if (!vcopy) { free(idx16); return E_OUTOFMEMORY_D3D9; }
-    if (multi) {
-        for (uint32_t v = 0; v < nv; v++)
-            for (uint32_t s = 0; s < 16; s++)
-                if (sptr[s])
-                    memcpy(vcopy + (size_t)v * stride + sbase[s], sptr[s] + (size_t)(v0 + v) * sstride[s], sstride[s]);
-        copy_vertices(vcopy, vcopy, nv, stride, dc);   /* in place: the D3DCOLOR swaps only */
+    uint8_t *vcopy = NULL;
+    int vcopy_owned = 0;
+    if (needs_copy) {
+        vcopy = malloc(bytes ? bytes : 1);
+        if (!vcopy) { free(idx16); return E_OUTOFMEMORY_D3D9; }
+        vcopy_owned = 1;
+        if (multi) {
+            for (uint32_t v = 0; v < nv; v++)
+                for (uint32_t s = 0; s < 16; s++)
+                    if (sptr[s])
+                        memcpy(vcopy + (size_t)v * stride + sbase[s], sptr[s] + (size_t)(v0 + v) * sstride[s], sstride[s]);
+            copy_vertices(vcopy, vcopy, nv, stride, dc);   /* in place: the D3DCOLOR swaps only */
+        } else {
+            copy_vertices(vcopy, vbase + (size_t)v0 * stride, nv, stride, dc);
+        }
     } else {
-        copy_vertices(vcopy, vbase + (size_t)v0 * stride, nv, stride, dc);
+        vcopy = vbase + (size_t)v0 * stride;   /* renderer copies into its ring within the call */
     }
-    (void)swap;
     skin_check(d, vsh, a, &lay, vcopy, nv, stride, use_idx ? idx16 : NULL, use_idx ? nidx : nverts,
                prim_list != PRIM_TRIANGLESTRIP);
     {   /* VT3_DUMP_SKIN=1: layout and the first vertices of skinned draws, as the renderer receives them */
@@ -1145,7 +1164,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     pixel_watch(d, a, vsh, psh);
 
     free(repacked);
-    free(vcopy);
+    if (vcopy_owned) free(vcopy);
     free(idx16);
     return S_OK;
 }
