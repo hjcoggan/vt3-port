@@ -120,6 +120,16 @@ static void key_event(const AInputEvent *e)
         vt3_input_set_key(0x19u, down, ms); /* HID V / DirectInput DIK_V */
         return;
     }
+    /* Some Android input stacks deliver controller face/shoulder buttons with a keyboard
+     * source even though they retain the reserved gamepad keycodes. Route those keycodes
+     * through the pad state too; otherwise DirectInput sees neither a keyboard mapping nor
+     * a pad button (notably, B cannot cancel modal screens such as Editing Tips). */
+    uint32_t pad_mask = pad_button_for_keycode(code);
+    if (pad_mask) {
+        note_pad();
+        set_pad(pad_mask, down);
+        return;
+    }
     if (is_pad(source)) {
         note_pad();
         set_pad(pad_button_for_keycode(code), down);
