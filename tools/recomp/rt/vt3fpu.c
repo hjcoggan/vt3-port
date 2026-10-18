@@ -22,7 +22,6 @@
 #include "vt3fpu.h"
 #include "vt3rt.h"
 
-#include <fenv.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -100,11 +99,8 @@ static x80mem d_to_x80(double d)
 
 /* ---- rounding ---------------------------------------------------------------- */
 
-static const int vt_fe_rc[4] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};
-
 /* Round by RC, as frndint does. floor/ceil/trunc and nearbyint cover the four x87 modes;
- * nearbyint runs on the host's own mode, which is round-to-nearest-even unless these
- * functions have just changed it. */
+ * nearbyint runs on the host's own mode, which is round-to-nearest-even. */
 static double round_by_rc(double x, uint32_t rc)
 {
     switch (rc & 3u) {
@@ -115,18 +111,36 @@ static double round_by_rc(double x, uint32_t rc)
     }
 }
 
-/* Round to the precision of a float32 under RC. The float store is the one conversion where
- * the bits the double register file dropped could still matter, so the directed modes are
- * done properly instead of being left to the host's nearest rounding. The mode is changed
- * only when RC asks for it, which is never in this game. */
+/* Round to float32 precision under RC. nearest-even (RC==0) is the hardware default and is
+ * just a cast. For the directed modes we start from the nearest-even float and step one ulp
+ * toward the requested side when the nearest float landed on the wrong side of x - one ulp is
+ * always enough because a nearest float is never more than half an ulp away. This matches x87
+ * directed rounding exactly without ever touching the FPU control word (no fegetround /
+ * fesetround mode switches, which profiled at ~5% of Retroid CPU). */
+static float round_f32_rc(double x, uint32_t rc)
+{
+    float f = (float)x;
+    double d = (double)f;
+    switch (rc & 3u) {
+    case 1:  /* toward -inf: result <= x */
+        if (d > x) f = nextafterf(f, -INFINITY);
+        break;
+    case 2:  /* toward +inf: result >= x */
+        if (d < x) f = nextafterf(f, INFINITY);
+        break;
+    case 3:  /* toward zero: |result| <= |x| */
+        if (fabs(d) > fabs(x)) f = nextafterf(f, 0.0f);
+        break;
+    default: /* nearest even: already done */
+        break;
+    }
+    return f;
+}
+
 static double round_to32(double x, uint32_t rc)
 {
     if (rc == 0u || !isfinite(x)) return x;
-    int old = fegetround();
-    fesetround(vt_fe_rc[rc & 3u]);
-    volatile double r = (double)(float)x;           /* volatile forces the rounding to happen */
-    fesetround(old);
-    return r;
+    return (double)round_f32_rc(x, rc);
 }
 
 /* The game holds the control word at 0x037F: extended precision, round to nearest. RC is
