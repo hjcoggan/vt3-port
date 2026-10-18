@@ -114,6 +114,8 @@ typedef struct vt3_draw {
     vt3_prim prim;
     const float *vsc;           /* 256 x vec4, NULL = zeros */
     const float *psc;           /* 256 x vec4, NULL = zeros */
+    uint32_t vs_const_max;      /* one past the highest vertex constant the vs reads directly */
+    uint32_t ps_const_max;      /* one past the highest pixel constant the ps reads directly */
     int vsb[16];                /* vertex bool constants b0..b15 (D3D bool: non-zero = true) */
     int psb[16];                /* pixel bool constants */
     vt3_tex samplers[VT3_MAX_SAMPLERS];

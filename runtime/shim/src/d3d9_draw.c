@@ -1040,6 +1040,9 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     dd.prim = prim_list == PRIM_TRIANGLESTRIP ? VT3_PRIM_TRIANGLESTRIP : VT3_PRIM_TRIANGLELIST;
     dd.vsc = vsc;
     dd.psc = psc;
+    dd.vs_const_max = vsh->sm.const_max;      /* ≤ 256 = vsc[256][4] */
+    dd.ps_const_max = psh ? psh->sm.const_max : 0;
+    if (dd.ps_const_max > 224u) dd.ps_const_max = 224u;   /* psc[224][4]; device never writes beyond */
     memcpy(dd.vsb, d->vsb, sizeof dd.vsb);
     memcpy(dd.psb, d->psb, sizeof dd.psb);
     fill_textures(d, dd.samplers);

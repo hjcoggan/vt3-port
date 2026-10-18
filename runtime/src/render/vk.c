@@ -1757,21 +1757,24 @@ static void vk_draw_program_impl(const vt3_draw *d)
         f->ib_used += ibytes;
     }
 
-    /* The constant blocks, std140 as the translator declares them. */
+    /* The constant blocks, std140 as the translator declares them. Only copy the range each
+     * shader reads directly (vt3_sm2 sets const_max at translate time; relative addressing
+     * forces it to the full range, so this is always safe). Registers the game never wrote
+     * read as zero, and this ring slot is fresh per draw - previously we always memcpy'd the
+     * full 4 KB vertex + 4 KB pixel blocks, ~1.8 MB per frame at 210 draws. */
     if (f->ubo_used + 2u * UBO_SLOT > UBO_RING) { VT3_WARN_ONCE("vk: uniform ring full, draw dropped"); return; }
     uint32_t vs_off = f->ubo_base + f->ubo_used;
     uint32_t ps_off = vs_off + UBO_SLOT;
     f->ubo_used += 2u * UBO_SLOT;
     uint8_t *vsb = g.ubo_ptr + vs_off, *psb = g.ubo_ptr + ps_off;
-    /* The 256 constants are the head of each block and are always written, so only the tail -
-     * vsi/vsb4, psi/psb4 and the alpha test, 336 bytes - needs clearing first. Zeroing the whole
-     * 4416 and 4432 per draw was 1.8 MB of memset a frame for bytes the memcpy overwrote. */
-    if (d->vsc) memcpy(vsb, d->vsc, VT3_CONST_REGS * 16u);
-    else memset(vsb, 0, VT3_CONST_REGS * 16u);
-    memset(vsb + VT3_CONST_REGS * 16u, 0, VS_BLOCK_BYTES - VT3_CONST_REGS * 16u);
-    if (d->psc) memcpy(psb, d->psc, VT3_CONST_REGS * 16u);
-    else memset(psb, 0, VT3_CONST_REGS * 16u);
-    memset(psb + VT3_CONST_REGS * 16u, 0, PS_BLOCK_BYTES - VT3_CONST_REGS * 16u);
+    uint32_t vs_n = d->vs_const_max * 16u;   /* d->vs_const_max ≤ 256 */
+    uint32_t ps_n = d->ps_const_max * 16u;   /* d->ps_const_max ≤ 224 */
+    if (d->vsc) memcpy(vsb, d->vsc, vs_n);
+    else memset(vsb, 0, vs_n);
+    memset(vsb + vs_n, 0, VS_BLOCK_BYTES - vs_n);
+    if (d->psc) memcpy(psb, d->psc, ps_n);
+    else memset(psb, 0, ps_n);
+    memset(psb + ps_n, 0, PS_BLOCK_BYTES - ps_n);
     /* vsi[i] holds the bool constants b0..b15 as ints, and vsb4[i >> 2][i & 3] (ivec4 vsb4[4])
      * lives after vsi[16], at offset 4096 + 256; the two runs are the same 16 values. Stores,
      * not the 32 four-byte memcpys this used to be. */
