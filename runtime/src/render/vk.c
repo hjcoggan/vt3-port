@@ -1110,8 +1110,7 @@ static int upload_dummy(vk_tex *t, uint32_t px, uint32_t layers)
 
 /* ---- frames ------------------------------------------------------------------ */
 
-/* Per-second counters, logged with the frame rate when VT3_TRACE_FPS is set (it is on by default on
- * Android): where a frame's time goes, CPU recording or waiting for the GPU. */
+/* Per-second diagnostic counters, enabled only by VT3_TRACE_FPS: where frame time goes. */
 static struct {
     uint64_t t0, fence_ns, acquire_ns, limit_ns, frames, draws, passes, blits;
     uint64_t asked_ns, slow_frames, max_ns, last_present;
@@ -1125,11 +1124,16 @@ static uint64_t now_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-static void stats_log(void)
+static int stats_enabled(void)
 {
     static int on = -1;
     if (on < 0) on = getenv("VT3_TRACE_FPS") != NULL;
-    if (!on) return;
+    return on;
+}
+
+static void stats_log(void)
+{
+    if (!stats_enabled()) return;
     uint64_t now = now_ns();
     g_stats.frames++;
     if (g_stats.last_present) {
@@ -1163,9 +1167,9 @@ static int ensure_frame(void)
 {
     if (g.open) return 0;
     vk_frame *f = &g.fr[g.cur];
-    uint64_t wt0 = now_ns();
+    uint64_t wt0 = stats_enabled() ? now_ns() : 0;
     VkResult w = vkWaitForFences(g.dev, 1, &f->fence, VK_TRUE, 5000000000ull);
-    g_stats.fence_ns += now_ns() - wt0;
+    if (stats_enabled()) g_stats.fence_ns += now_ns() - wt0;
     if (w != VK_SUCCESS) {
         VT3_ERROR("vulkan: frame %u did not finish (fence %d)", (unsigned)g.cur, (int)w);
         return -1;
@@ -1273,7 +1277,7 @@ static int ensure_pass(void)
     vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
     g.pass_open = 1;
     g.pass_tgt = want;
-    g_stats.passes++;
+    if (stats_enabled()) g_stats.passes++;
     return 0;
 }
 
@@ -1321,9 +1325,9 @@ static int submit_frame(uint32_t sc_index, int use_sc)
     si.pCommandBuffers = cbs;
     si.signalSemaphoreCount = ns;
     si.pSignalSemaphores = signals;
-    uint64_t st0 = now_ns();
+    uint64_t st0 = stats_enabled() ? now_ns() : 0;
     VKT(vkQueueSubmit(g.queue, 1, &si, f->fence), "vkQueueSubmit");
-    g_stats.submit_ns += now_ns() - st0;
+    if (stats_enabled()) g_stats.submit_ns += now_ns() - st0;
     g.chain_armed = 1;
     f->timed = g.qp != VK_NULL_HANDLE;
     f->recording = 0;
@@ -1654,10 +1658,12 @@ static VkPipeline get_pipeline(uint32_t prog, VkShaderModule vs, VkShaderModule 
     gci.renderPass = g.rps[rpk];
     gci.subpass = 0;
     VkPipeline pipe = VK_NULL_HANDLE;
-    uint64_t pt0 = now_ns();
+    uint64_t pt0 = stats_enabled() ? now_ns() : 0;
     VkResult pcr = vkCreateGraphicsPipelines(g.dev, VK_NULL_HANDLE, 1, &gci, NULL, &pipe);
-    g_stats.pipes++;
-    g_stats.pipe_ns += now_ns() - pt0;
+    if (stats_enabled()) {
+        g_stats.pipes++;
+        g_stats.pipe_ns += now_ns() - pt0;
+    }
     if (pcr != VK_SUCCESS) {
         VT3_ERROR("vulkan: pipeline creation failed (program %u)", (unsigned)prog);
         return VK_NULL_HANDLE;
@@ -1726,6 +1732,10 @@ static void vk_draw_program_impl(const vt3_draw *d);
 
 static void vk_draw_program(const vt3_draw *d)
 {
+    if (!stats_enabled()) {
+        vk_draw_program_impl(d);
+        return;
+    }
     uint64_t t0 = now_ns();
     vk_draw_program_impl(d);
     g_stats.record_ns += now_ns() - t0;
@@ -1795,7 +1805,7 @@ static void vk_draw_program_impl(const vt3_draw *d)
     VkCommandBuffer cb = f->cmd;
     VkRect2D sc = current_scissor();
     VkViewport vp = current_viewport(&d->state);
-    g_stats.draws++;
+    if (stats_enabled()) g_stats.draws++;
     uint32_t dyn[2] = { vs_off, ps_off };
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
     vkCmdSetViewport(cb, 0, 1, &vp);
@@ -1852,7 +1862,7 @@ static void frame_limit(void)
         uint64_t elapsed = now - last_ns;
         if (elapsed < (uint64_t)period_ns) {
             uint64_t wait = (uint64_t)period_ns - elapsed;
-            g_stats.asked_ns += wait;
+            if (stats_enabled()) g_stats.asked_ns += wait;
             ts.tv_sec = (time_t)(wait / 1000000000ull);
             ts.tv_nsec = (long)(wait % 1000000000ull);
             nanosleep(&ts, NULL);
@@ -1940,9 +1950,9 @@ static void vk_present(const vt3_rect *dst, int nearest, int drawable_w, int dra
     uint32_t cur = g.cur;
     vk_frame *f = &g.fr[cur];
     uint32_t idx = 0;
-    uint64_t at0 = now_ns();
+    uint64_t at0 = stats_enabled() ? now_ns() : 0;
     VkResult ar = vkAcquireNextImageKHR(g.dev, g.sc, 2000000000ull, f->acquire, VK_NULL_HANDLE, &idx);
-    g_stats.acquire_ns += now_ns() - at0;
+    if (stats_enabled()) g_stats.acquire_ns += now_ns() - at0;
     if (ar == VK_ERROR_OUT_OF_DATE_KHR) {
         /* The window changed under us. Drop this frame; the next one uses the new swapchain. */
         submit_frame(0, 0);
@@ -2001,9 +2011,9 @@ static void vk_present(const vt3_rect *dst, int nearest, int drawable_w, int dra
     VkResult pr = vkQueuePresentKHR(g.queue, &pi);
     if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) recreate_swapchain();
     else if (pr != VK_SUCCESS) VT3_ERROR("vulkan: present failed (%d)", (int)pr);
-    uint64_t lt0 = now_ns();
+    uint64_t lt0 = stats_enabled() ? now_ns() : 0;
     frame_limit();
-    g_stats.limit_ns += now_ns() - lt0;
+    if (stats_enabled()) g_stats.limit_ns += now_ns() - lt0;
     stats_log();
 }
 
@@ -2226,7 +2236,7 @@ static int vk_init(int logical_w, int logical_h)
     }
     VT3_INFO("vulkan: %s, API %u.%u", props.deviceName, VK_VERSION_MAJOR(props.apiVersion),
              VK_VERSION_MINOR(props.apiVersion));
-    if (qf[found].timestampValidBits && props.limits.timestampPeriod > 0.0f) {
+    if (stats_enabled() && qf[found].timestampValidBits && props.limits.timestampPeriod > 0.0f) {
         VkQueryPoolCreateInfo qci2 = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
         qci2.queryType = VK_QUERY_TYPE_TIMESTAMP;
         qci2.queryCount = 2 * NFRAMES;
@@ -2631,7 +2641,7 @@ static void vk_blit(vt3_tex dst, vt3_rect dr, vt3_tex src, vt3_rect sr, int near
     b.dstOffsets[1].y = dr.y + dr.h;
     b.dstOffsets[1].z = 1;
     int linear = !nearest && (!rs || rs->rpk != RPK_RGBA16F || g.linear_f16);
-    g_stats.blits++;
+    if (stats_enabled()) g_stats.blits++;
     vkCmdBlitImage(cb, simg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dimg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b,
                    linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
 }
