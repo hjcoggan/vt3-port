@@ -1868,11 +1868,75 @@ static int recreate_swapchain(void)
     return create_swapchain();
 }
 
+#ifdef __ANDROID__
+/* Replace the surface only after retiring its swapchain. A swapchain must be destroyed
+ * before its surface, and oldSwapchain passed to vkCreateSwapchainKHR must belong to
+ * the same surface as the new swapchain. */
+static int replace_android_surface(ANativeWindow *win)
+{
+    vkDeviceWaitIdle(g.dev);
+    if (g.sc) {
+        vkDestroySwapchainKHR(g.dev, g.sc, NULL);
+        g.sc = VK_NULL_HANDLE;
+    }
+    for (uint32_t i = 0; i < 8; i++) {
+        if (g.sc_done[i]) vkDestroySemaphore(g.dev, g.sc_done[i], NULL);
+        g.sc_done[i] = VK_NULL_HANDLE;
+        g.sc_img[i] = VK_NULL_HANDLE;
+    }
+    g.nsc = 0;
+    if (g.surf) {
+        vkDestroySurfaceKHR(g.inst, g.surf, NULL);
+        g.surf = VK_NULL_HANDLE;
+    }
+
+    VkAndroidSurfaceCreateInfoKHR asci = { VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR };
+    asci.window = win;
+    if (vkCreateAndroidSurfaceKHR(g.inst, &asci, NULL, &g.surf) != VK_SUCCESS) {
+        VT3_ERROR("vulkan: could not recreate the Android surface");
+        return -1;
+    }
+    g.window = win;
+    if (create_swapchain() != 0) {
+        g.window = NULL; /* leave recovery eligible for the next frame */
+        return -1;
+    }
+    return 0;
+}
+#endif
+
 static void vk_present(const vt3_rect *dst, int nearest, int drawable_w, int drawable_h)
 {
     (void)drawable_w;
     (void)drawable_h;
-    if (!g.sc || ensure_frame() != 0) return;
+    if (ensure_frame() != 0) return;
+#ifdef __ANDROID__
+    /* The Android window surface is destroyed when the device sleeps and recreated on wake. If the
+     * window pointer changed, rebuild the Vulkan surface and swapchain so we present to the new one;
+     * otherwise we keep presenting to the dead surface and the screen stays black while the game
+     * (and its audio) carries on. */
+    ANativeWindow *win = vt3_platform_native_window();
+    if (!win) {
+        submit_frame(0, 0);
+        return;
+    }
+    if (!g.sc || win != g.window) {
+        VT3_INFO("vulkan: android window changed (%p -> %p), recreating surface and swapchain",
+                 (void *)g.window, (void *)win);
+        end_pass();
+        if (replace_android_surface(win) != 0) {
+            /* ensure_frame() reset this slot's fence before surface recovery. Submit its
+             * offscreen work so the next frame can wait on a fence that will be signalled. */
+            submit_frame(0, 0);
+            return;
+        }
+    }
+#else
+    if (!g.sc) {
+        submit_frame(0, 0);
+        return;
+    }
+#endif
     uint32_t cur = g.cur;
     vk_frame *f = &g.fr[cur];
     uint32_t idx = 0;
