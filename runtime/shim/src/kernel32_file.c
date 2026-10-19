@@ -643,8 +643,14 @@ DWORD WINAPI GetFileAttributesA(LPCSTR name)
     }
     char path[PATH_MAX];
     struct stat st;
-    if (resolve_path(win, path, sizeof path) != 0 || stat(path, &st) != 0) {
+    int resolved = resolve_path(win, path, sizeof path);
+    int stat_result = resolved == 0 ? stat(path, &st) : -1;
+    int path_errno = errno;
+    if (resolved != 0 || stat_result != 0) {
         VT3_DEBUG("GetFileAttributesA: not found: %s", win);
+        if (getenv("VT3_TRACE_PATHS"))
+            VT3_INFO("path trace: root='%s' request='%s' resolved=%d path='%s' stat_errno=%d",
+                     vt3s_game_root(), win, resolved, resolved == 0 ? path : "<unresolved>", path_errno);
         vt3s_set_last_error(missing_error(win));
         return INVALID_FILE_ATTRIBUTES;
     }

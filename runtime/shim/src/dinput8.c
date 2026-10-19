@@ -24,11 +24,11 @@
  *   buttons 0..10 (offsets 48..58) match VT3's default gamepad mapping [12,13,14,15,2,0,3,1,4,7]
  *   to the Xbox 360 layout:
  *     0: A (Top Spin / Menu Select / World Tour Open)   [slot 5 = 0x85605a -> raw 0x40000]
- *     1: (unmapped: slot 7 = 0x85605e sets raw 0x10 which pauses matches)
+ *     1: Back / Select (slot 7 = 0x85605e -> raw 0x10); see VT3_SELECT below
  *     2: B / X (Slice / Drop Shot / Menu Cancel)        [slot 4 = 0x856058 -> raw 0x100000]
  *     3: Y (Lob / World Tour Return Home)               [slot 6 = 0x85605c -> raw 0x200000]
  *     4: LB / RB / LT / RT (Instruct COM Partner / World Tour Incoming Mail) [slot 8 = 0x856060 -> raw 0x20000000]
- *     5: RB             6: Back (also asserts DIK_V = 0x2F for Change Camera)
+ *     5: RB             6: Back
  *     7: Start (Pause / Open Main Menu)                 [slot 9 = 0x856062 -> raw 0x20]
  *     8: LS             9: RS             10: Guide
  *   RB / RT also assert DIK_LMENU (0x38) on the keyboard device so World Tour Tour Calendar
@@ -311,6 +311,31 @@ static int32_t scale_axis(float a, int32_t lo, int32_t hi, int trigger, uint32_t
     return (int32_t)((int64_t)lo + (int64_t)((float)span * t + 0.5f));
 }
 
+/* The game's own pad table (FUN_004018c0 slot 7) puts Change Camera on DI button 1 -> raw 0x10.
+ * The 1:1 Xbox layout leaves button 1 free, so the pad's Back/Select asserts it here. Override
+ * with VT3_SELECT (button index, or -1 for none). */
+static int select_pad_button(void)
+{
+    static int idx = -2;
+    if (idx == -2) {
+        const char *s = getenv("VT3_SELECT");
+        idx = s ? atoi(s) : 1;
+    }
+    return idx;
+}
+
+/* Optional DIK offset the pad's Back/Select also asserts on the keyboard device (-1 disables).
+ * Override with VT3_SELECT_KEY. */
+static int select_key_dik(void)
+{
+    static int dik = -2;
+    if (dik == -2) {
+        const char *s = getenv("VT3_SELECT_KEY");
+        dik = s ? (int)strtol(s, NULL, 0) : -1;
+    }
+    return dik;
+}
+
 static void fill_keyboard(const di_device *d, uint8_t *buf, uint32_t cb)
 {
     const vt3_input_state *in = vt3_input_get();
@@ -321,10 +346,7 @@ static void fill_keyboard(const di_device *d, uint8_t *buf, uint32_t cb)
         if (!(o->type & DIDFT_BUTTON) || o->ofs >= cb || o->ofs >= 256) continue;
         uint32_t usage = g_usage_of_dik[o->ofs];
         int down = usage && vt3_input_key_down(usage);
-        /* The PC port has no gamepad slot for Change Camera (Xbox 360 BACK button) and only
-         * checks the keyboard's Camera key (default DIK_V = 0x2F). Map gamepad BACK to DIK_V
-         * so the Back/Select button toggles the camera viewpoint as on Xbox 360. */
-        if (o->ofs == 0x2Fu && (pad_btn & VT3_BTN_BACK)) down = 1;
+        if ((int)o->ofs == select_key_dik() && (pad_btn & VT3_BTN_BACK)) down = 1;
         /* In World Tour, Tour Calendar is opened by action bits 0x200000|0x400000 (FUN_00475a60 /
          * FUN_00475a80). On gamepad, 0x200000 is tied to slot 7 (Button 1) which also sets 0x10
          * (Pause match). Asserting DIK_LMENU (0x38 -> raw 0x800 -> action 0x400000) when RB or RT
@@ -360,8 +382,11 @@ static void fill_pad(const di_device *d, uint8_t *buf, uint32_t cb)
             if (o->ofs >= 32 && o->ofs < 48 && o->ofs % 4 == 0 && o->ofs + 4 <= cb)
                 st32(buf, o->ofs, o->ofs == 32 ? pov : 0xFFFFFFFFu);
         } else if (o->type & DIDFT_BUTTON) {
-            if (o->ofs >= 48 && o->ofs - 48 < 11 && o->ofs < cb)
-                buf[o->ofs] = (btn & k_pad_button[o->ofs - 48]) ? 0x80 : 0;
+            if (o->ofs >= 48 && o->ofs - 48 < 11 && o->ofs < cb) {
+                int down = (btn & k_pad_button[o->ofs - 48]) != 0;
+                if ((int)(o->ofs - 48) == select_pad_button() && (btn & VT3_BTN_BACK)) down = 1;
+                buf[o->ofs] = down ? 0x80 : 0;
+            }
         }
     }
 }

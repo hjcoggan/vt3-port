@@ -111,13 +111,12 @@ static void key_event(const AInputEvent *e)
     int down = AKeyEvent_getAction(e) == AKEY_EVENT_ACTION_DOWN;
     uint32_t ms = (uint32_t)(AKeyEvent_getEventTime(e) / 1000000);
     int32_t source = AInputEvent_getSource(e);
-    /* Retroid exposes Select as BUTTON_SELECT, but some Android builds report it with
-     * a keyboard source. Feed the game's actual camera key as well as the virtual pad
-     * button, so both buffered and polled DirectInput keyboard paths see the press. */
+    /* Retroid exposes Select as BUTTON_SELECT, but some Android builds report it with a
+     * keyboard source, which would otherwise drop the event. Route it to the virtual pad's
+     * Back button either way. */
     if (code == AKEYCODE_BUTTON_SELECT) {
         if (is_pad(source)) note_pad();
         set_pad(VT3_BTN_BACK, down);
-        vt3_input_set_key(0x19u, down, ms); /* HID V / DirectInput DIK_V */
         return;
     }
     /* Some Android input stacks deliver controller face/shoulder buttons with a keyboard
@@ -132,7 +131,6 @@ static void key_event(const AInputEvent *e)
     }
     if (is_pad(source)) {
         note_pad();
-        set_pad(pad_button_for_keycode(code), down);
         return;
     }
     uint32_t hid = hid_for_keycode(code);
