@@ -8,6 +8,7 @@
 #include "vt3/vt3_input.h"
 #include "vt3/vt3_log.h"
 #include "vt3/vt3_platform.h"
+#include "vt3/vt3_touch.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -223,6 +224,7 @@ void d3d9_gpu_present(void)
     if (!g_gpu_ok) return;
     int w = 0, h = 0;
     vt3_platform_drawable_size(&w, &h);
+    vt3_touch_frame(w, h);         /* on-screen controls, drawn over the game's frame */
     vt3_gfx_present(w, h);
     vt3_platform_swap();
     vt3_platform_pump_events();    /* keeps the window responsive; quit requests are ignored here */

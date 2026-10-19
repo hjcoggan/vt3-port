@@ -177,6 +177,10 @@ int  vt3_gfx_rt_create(vt3_tex *out, int w, int h, vt3_texfmt fmt);
 void vt3_gfx_rt_bind(vt3_tex t);
 void vt3_gfx_blit(vt3_tex dst, vt3_rect dr, vt3_tex src, vt3_rect sr, int nearest);
 void vt3_gfx_set_scissor(int enable, vt3_rect r);
+/* The game's logical frame size, and where it lands in a drawable of this size (the same rect
+ * present() uses). For 2D overlays that must hit-test against what is on screen. */
+void vt3_gfx_logical_size(int *w, int *h);
+void vt3_gfx_view_rect(int drawable_w, int drawable_h, vt3_rect *out);
 
 extern const vt3_gfx_ops vt3_gfx_gl33;
 extern const vt3_gfx_ops vt3_gfx_vk;   /* compile-time present: Vulkan on Android, MoltenVK on macOS */

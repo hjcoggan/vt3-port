@@ -68,6 +68,12 @@ uint32_t vt3_input_pad_buttons(void);
 void     vt3_input_set_pad_connected(int connected);
 int      vt3_input_pad_connected(void);
 
+/* Whether a physical keyboard or gamepad has been used. The on-screen controls hide while either is
+ * set, so they do not cover the game for a player on real hardware. On Android both are sticky for
+ * the session (a device is never reported as removed without Java). */
+void     vt3_input_set_keyboard_connected(int seen);
+int      vt3_input_keyboard_connected(void);
+
 /* Loading activity, for the input script's quiet waits ("wN:KEY" in VT3_INPUT_SCRIPT). The shim
  * notes each texture it creates; a quiet wait presses its key once none has been made for N seconds. */
 void     vt3_input_note_load(void);

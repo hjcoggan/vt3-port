@@ -132,3 +132,16 @@ void vt3_gfx_set_scissor(int enable, vt3_rect r)
     if (g_ops && g_ops->set_scissor) g_ops->set_scissor(enable, r);
 }
 
+void vt3_gfx_logical_size(int *w, int *h)
+{
+    if (w) *w = g_cfg.logical_w;
+    if (h) *h = g_cfg.logical_h;
+}
+
+void vt3_gfx_view_rect(int drawable_w, int drawable_h, vt3_rect *out)
+{
+    if (!out) return;
+    *out = vt3_letterbox(drawable_w, drawable_h, g_cfg.logical_w, g_cfg.logical_h,
+                         g_cfg.aspect_w, g_cfg.aspect_h, g_cfg.integer_scale);
+}
+

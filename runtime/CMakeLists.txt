@@ -42,6 +42,7 @@ set(VT3_CORE_COMMON
     src/audio/ringbuf.c
     src/audio/adx.c
     src/input/input.c
+    src/ui/touch_controls.c
 )
 if(VT3_ANDROID)
     set(VT3_CORE_PLATFORM

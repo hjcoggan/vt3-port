@@ -5,6 +5,7 @@
  */
 #include "vt3/vt3_input.h"
 #include "vt3/vt3_log.h"
+#include "vt3/vt3_touch.h"
 
 #include <android/input.h>
 #include <android/keycodes.h>
@@ -111,6 +112,12 @@ static void key_event(const AInputEvent *e)
     int down = AKeyEvent_getAction(e) == AKEY_EVENT_ACTION_DOWN;
     uint32_t ms = (uint32_t)(AKeyEvent_getEventTime(e) / 1000000);
     int32_t source = AInputEvent_getSource(e);
+    /* A key that is not from a gamepad or joystick means a physical keyboard is in use: the
+     * on-screen controls hide for the rest of the session. */
+    if (!is_pad(source) && !vt3_input_keyboard_connected()) {
+        VT3_INFO("input: physical keyboard in use (keycode %d, source 0x%x)", (int)code, (unsigned)source);
+        vt3_input_set_keyboard_connected(1);
+    }
     /* Retroid exposes Select as BUTTON_SELECT, but some Android builds report it with a
      * keyboard source, which would otherwise drop the event. Route it to the virtual pad's
      * Back button either way. */
@@ -166,6 +173,40 @@ static void motion_event(const AInputEvent *e)
     vt3_input_set_axis(VT3_AXIS_RT, rt);
 }
 
+/* Touch on the on-screen controls. Returns 1 when the controls are up (and so claim the event),
+ * even for a touch that misses them. */
+static int touch_event(const AInputEvent *e)
+{
+    if (!vt3_touch_enabled()) return 0;
+    int32_t action = AMotionEvent_getAction(e);
+    int32_t masked = action & AMOTION_EVENT_ACTION_MASK;
+    if (masked == AMOTION_EVENT_ACTION_CANCEL) {
+        vt3_touch_release_all();
+        return 1;
+    }
+    int32_t up_index = (int32_t)((action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)
+                                 >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
+    size_t n = AMotionEvent_getPointerCount(e);
+    for (size_t i = 0; i < n; i++) {
+        int32_t id = AMotionEvent_getPointerId(e, i);
+        float x = AMotionEvent_getX(e, i), y = AMotionEvent_getY(e, i);
+        int down;
+        switch (masked) {
+        case AMOTION_EVENT_ACTION_UP:
+            down = 0;                                        /* the last pointer lifted */
+            break;
+        case AMOTION_EVENT_ACTION_POINTER_UP:
+            down = (int32_t)i != up_index;                   /* the rest stay down */
+            break;
+        default:
+            down = 1;                                        /* DOWN, POINTER_DOWN, MOVE */
+            break;
+        }
+        vt3_touch_pointer(id, down, x, y);
+    }
+    return 1;
+}
+
 /* The glue's input callback. Returns 1 when the event was used. */
 int vt3_input_android_event(const AInputEvent *e)
 {
@@ -178,9 +219,12 @@ int vt3_input_android_event(const AInputEvent *e)
         key_event(e);
         return 1;
     }
-    if (type == AINPUT_EVENT_TYPE_MOTION && is_pad(AInputEvent_getSource(e))) {
-        motion_event(e);
-        return 1;
+    if (type == AINPUT_EVENT_TYPE_MOTION) {
+        if (is_pad(AInputEvent_getSource(e))) {
+            motion_event(e);
+            return 1;
+        }
+        return touch_event(e);
     }
     return 0;
 }

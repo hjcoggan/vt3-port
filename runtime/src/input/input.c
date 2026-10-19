@@ -14,6 +14,7 @@ static uint32_t g_q_head, g_q_len;          /* ring of key transitions, oldest a
 
 static uint32_t g_pad;                      /* raw gamepad buttons, enum vt3_button bits */
 static int g_pad_connected;
+static int g_keyboard_seen;                 /* a physical keyboard has delivered a key */
 
 void vt3_input_init(void)
 {
@@ -23,6 +24,7 @@ void vt3_input_init(void)
     g_q_head = g_q_len = 0;
     g_pad = 0;
     g_pad_connected = 0;
+    g_keyboard_seen = 0;
 }
 
 void vt3_input_set_button(uint32_t mask, int down)
@@ -95,6 +97,16 @@ void vt3_input_set_pad_connected(int connected)
 int vt3_input_pad_connected(void)
 {
     return g_pad_connected;
+}
+
+void vt3_input_set_keyboard_connected(int seen)
+{
+    g_keyboard_seen = seen != 0;
+}
+
+int vt3_input_keyboard_connected(void)
+{
+    return g_keyboard_seen;
 }
 
 /* Loading activity. Written from the guest threads (texture creation), read by the input script's

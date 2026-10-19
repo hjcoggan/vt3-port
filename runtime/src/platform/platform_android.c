@@ -16,6 +16,8 @@
 
 /* Defined in src/input/input_android.c */
 int vt3_input_android_event(const AInputEvent *e);
+/* Defined in src/ui/touch_controls.c */
+void vt3_touch_release_all(void);
 
 #define EVENT_QUEUE 32
 
@@ -61,6 +63,7 @@ void vt3_platform_android_cmd(struct android_app *app, int32_t cmd)
         break;
     case APP_CMD_TERM_WINDOW:
         g_window = NULL;
+        vt3_touch_release_all();          /* no surface: drop anything the controls held */
         push_event(VT3_EV_BLUR, 0, 0);
         break;
     case APP_CMD_WINDOW_RESIZED:
@@ -73,6 +76,7 @@ void vt3_platform_android_cmd(struct android_app *app, int32_t cmd)
         push_event(VT3_EV_FOCUS, 0, 0);
         break;
     case APP_CMD_LOST_FOCUS:
+        vt3_touch_release_all();
         push_event(VT3_EV_BLUR, 0, 0);
         break;
     case APP_CMD_DESTROY:
