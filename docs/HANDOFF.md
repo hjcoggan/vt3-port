@@ -193,7 +193,8 @@ ANDROID_NDK=/opt/homebrew/share/android-ndk cmake -S runtime -B ../dump/android/
 cmake --build ../dump/android/cmake-arm64-main --target vt3android -j 8   # 5-10 min: huge vt3.c
 /opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-strip \
   -o ../dump/android/libvt3android-stripped.so ../dump/android/cmake-arm64-main/libvt3android.so
-$PY android/build_apk.py game vt3android --so ../dump/android/libvt3android-stripped.so --install c27c2f60
+$PY android/build_apk.py game vt3android --so ../dump/android/libvt3android-stripped.so --asset ../dump/android/shaders.pack --install c27c2f60
+# First launch opens the installer (pick the ISO and NoCD zip); deploy_data.sh + touch files/install.ok skips it.
 adb -s c27c2f60 push ../dump/android/shaders.pack /sdcard/Android/data/net.vt3port.game/files/shaders.pack
 adb -s c27c2f60 push ../dump/android/vt3.env /sdcard/Android/data/net.vt3port.game/files/vt3.env
 adb -s c27c2f60 shell am force-stop net.vt3port.game   # avoid a monkey relaunch racing a live game

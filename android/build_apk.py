@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Builds, signs and (optionally) installs a NativeActivity APK for the Retroid.
 
-The APK holds one native library and no Java code. Steps: NDK clang builds lib<name>.so for
+The APK holds the native library, plus, when android/<SOURCE_DIR>/ has them, Java classes from java/
+(javac + d8) and a second JNI library from jni/ (with the vendored unshield). Steps: NDK clang builds lib<name>.so for
 arm64-v8a; aapt2 links the manifest into base.apk; the library is added to the zip; zipalign and
 apksigner finish it. The debug keystore and all outputs live under dump/android/, outside the repo.
 
-Usage: build_apk.py SOURCE_DIR NAME [--so LIBRARY] [--install SERIAL]
+Usage: build_apk.py SOURCE_DIR NAME [--so LIBRARY] [--asset FILE]... [--install SERIAL]
   SOURCE_DIR holds the C sources (compiled with NDK clang), or is ignored when --so names a library
   that is already built. The manifest is android/<SOURCE_DIR's name>/AndroidManifest.xml.
+  --asset FILE   bundle FILE as assets/<its name> (the game takes shaders.pack this way)
 """
 import os
 import shutil
@@ -68,6 +70,27 @@ def main(argv):
 
     bt = tool(SDK, "build-tools", "36.1.0")
     jar = tool(SDK, "platforms", "android-%d" % TARGET_API, "android.jar")
+    app_dir = os.path.dirname(manifest)
+    clang = tool(NDK, "toolchains", "llvm", "prebuilt", "darwin-x86_64", "bin", "aarch64-linux-android%d-clang" % API)
+    jni_dir = os.path.join(app_dir, "jni")
+    if os.path.isdir(jni_dir):
+        us = os.path.join(REPO, "android", "third_party", "unshield")
+        us_src = [os.path.join(us, "lib", f) for f in sorted(os.listdir(os.path.join(us, "lib"))) if f.endswith(".c")]
+        run([clang, "-shared", "-fPIC", "-O2", "-I", us, "-I", os.path.join(us, "lib"),
+             "-Wl,-z,max-page-size=16384", "-o", os.path.join(stage, "lib", "arm64-v8a", "libvt3install.so")]
+            + [os.path.join(jni_dir, f) for f in sorted(os.listdir(jni_dir)) if f.endswith(".c")]
+            + us_src + [os.path.join(us, "lib", "md5", "md5c.c"), "-lz"])
+    java_dir = os.path.join(app_dir, "java")
+    if os.path.isdir(java_dir):
+        classes = os.path.join(build, "classes")
+        javas = [os.path.join(d, f) for d, _, fs in os.walk(java_dir) for f in fs if f.endswith(".java")]
+        run([os.path.join(JAVA_HOME, "bin", "javac"), "--release", "11", "-classpath", jar, "-d", classes] + javas)
+        class_files = [os.path.join(d, f) for d, _, fs in os.walk(classes) for f in fs if f.endswith(".class")]
+        run([tool(bt, "d8"), "--min-api", str(API), "--lib", jar, "--output", stage] + class_files)
+    assets = [argv[i + 1] for i, a in enumerate(argv) if a == "--asset"]
+    for a in assets:
+        os.makedirs(os.path.join(stage, "assets"), exist_ok=True)
+        shutil.copy(a, os.path.join(stage, "assets", os.path.basename(a)))
     base = os.path.join(build, "base.apk")
     res_dir = os.path.join(os.path.dirname(manifest), "res")
     link_inputs = []
@@ -77,9 +100,9 @@ def main(argv):
         link_inputs = [compiled]
     run([tool(bt, "aapt2"), "link", "-o", base, "-I", jar] + link_inputs +
         ["--manifest", manifest,
-         "--min-sdk-version", str(API), "--target-sdk-version", str(TARGET_API),
-         "--version-code", "1", "--version-name", "0.1"])
-    run(["zip", "-q", "-r", base, "lib"], cwd=stage)
+         "--min-sdk-version", str(API), "--target-sdk-version", str(TARGET_API)])
+    run(["zip", "-q", "-r", base] + [f for f in ("lib", "assets", "classes.dex") if os.path.exists(os.path.join(stage, f))],
+        cwd=stage)
     aligned = os.path.join(build, "aligned.apk")
     run([tool(bt, "zipalign"), "-f", "-p", "4", base, aligned])
 

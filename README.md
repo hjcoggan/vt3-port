@@ -1,42 +1,81 @@
-# Virtua Tennis 3 port
+# Virtua Tennis 3 Port
 
-Goal: a native port of the **PC release** of Virtua Tennis 3 (2007, Windows, Direct3D 9, English), running first on the Apple Silicon Mac, then on an Android Snapdragon 8 Gen 2 handheld in 4:3 at native resolution, with a controller.
+<p align="center">
+  <a href="https://github.com/hjcoggan/vt3-port/releases/latest/download/VT3-Android.apk"><strong>DOWNLOAD THE ANDROID APK</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/hjcoggan/vt3-port/releases"><strong>RELEASES</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/hjcoggan/vt3-port/issues/new"><strong>REPORT A BUG</strong></a>
+</p>
 
-## Status
+<p align="center">
+  <img src="assets/icon/vt3_logo_icon_1024.png" alt="Virtua Tennis 3 port icon" width="160">
+</p>
 
-| Area | State |
-| --- | --- |
-| Original game files | Local only, under `Virtua Tennis 3/dump/` (not in this repo) |
-| PC release identified | Yes: `VT3.exe`, Windows PE (i386), Direct3D 9 |
-| Game data (assets) | Mostly readable. CAPX archives and InstallShield cabs extracted locally |
-| Audio | CRI ADX confirmed. Decodes to WAV with ffmpeg (checked on one clip) |
-| Game code | **Blocked.** `VT3.exe` is SafeDisc-protected (see below) |
-| Arcade (Lindbergh) build | Not readable. Disk images are encrypted-looking from the first byte |
-| Port runtime | Skeleton builds and runs on macOS (SDL3, GL 3.3, ADX audio). See `runtime/` |
+<p align="center">
+  <img src="docs/screenshot.png" alt="A match running on the Retroid Pocket" width="100%">
+</p>
 
-## Blocker: SafeDisc on `VT3.exe`
+The PC release of Virtua Tennis 3 (SEGA, 2007) running as native code on Android and Apple Silicon
+Macs through static recompilation. This is not an emulator and nothing runs under Wine.
 
-`VT3.exe` has the usual SafeDisc signature:
+It is an experimental developer build. It is playable on the Retroid Pocket (Snapdragon 8 Gen 2).
+Vulkan is the default renderer on both platforms, with OpenGL as the fallback on the Mac.
 
-- `.text` is effectively random (entropy 8.00/8 bits): the game code is encrypted on disk.
-- The import table lists only a handful of functions. The real imports are resolved at runtime.
-- The entry point is inside an `stxt371` section, which is SafeDisc's loader stub.
+No game files are included. You must provide your own copy of the game.
 
-So the game's logic cannot be analysed or recompiled from the file on disk. Getting at it means running SafeDisc's loader and dumping the decrypted image, or emulating that loader. The owner has approved this for the research project. Decisions and the legal caveat are in [docs/decisions.md](docs/decisions.md).
+## Players: start here
 
-## Repo layout
+1. [Download the latest Android APK](https://github.com/hjcoggan/vt3-port/releases/latest/download/VT3-Android.apk).
+2. Copy two files onto the device:
+   - the PC disc image, `Virtua Tennis 3 (Europe) (En,Fr,De,Es,It).iso`
+   - the v1.0.1 no-CD zip, `Virtua-Tennis-3_NoCD_Win_EN_for-version-101.zip` (holds `VT3.exe`)
+3. Install the APK and open **VT3**.
+4. Tap **Select PC disc image**, then **Select v1.0.1 NoCD**, then **Install**.
+   Unpacking takes about a minute. Keep the app open.
+5. The game starts. From then on, opening VT3 goes straight into the game.
 
-- `tools/capx_extract.py` lists and extracts `.xpac` (CAPX) archives. It can convert ADX entries to WAV.
-- `docs/formats.md` records the data formats found so far.
-- `docs/decisions.md` records open decisions for the owner.
+Requirements: Android 10 or newer, ARM64, Vulkan, and about 4.5 GB free. Controllers work, and
+on-screen touch controls appear on phones. Updating the APK keeps the installed game.
+Uninstalling removes it.
 
-## Data policy
+## How it works
 
-- Game files are never committed. `.gitignore` excludes ISOs, CABs, executables, DLLs, and extracted assets.
-- Only English content is extracted. Other languages are skipped.
-- Game files stay on the local machine.
+1. `tools/recomp/recomp.py` statically translates the x86 code of the v1.0.1 no-CD `VT3.exe` into C.
+   Clang compiles that C for ARM64 (Android) or Apple Silicon (macOS).
+2. A Win32, DirectSound and Direct3D 9 shim in plain C (`runtime/shim`) stands in for Windows.
+   Direct3D 9 draws go to a Vulkan renderer, or to OpenGL on the Mac. The game's shader model 2
+   shaders are translated to GLSL, and to a prebuilt SPIR-V pack for Vulkan.
+3. SDL3 supplies the window, controllers, touch and audio.
+4. On Android, a small launcher reads the disc image through the system file picker. It unpacks the
+   InstallShield cabinets on the device (with [unshield](https://github.com/twogood/unshield)) and
+   builds the guest image from `VT3.exe`, checking it against a known SHA-256. Everything stays in the
+   app's own storage.
 
-## Environment
+The repository holds no retail executables, assets or generated game code.
 
-- Analysis venv: `Virtua Tennis 3/tools/venv` (pefile, capstone, lief, pycdlib). Outside the repo.
-- Needs `ffmpeg` (WAV conversion) and `unshield` / `cabextract` (InstallShield cab extraction).
+## Building
+
+Developer notes, build commands and the current state of the port are in
+[docs/HANDOFF.md](docs/HANDOFF.md).
+
+- **macOS:** `tools/recomp/build_native.py` builds the game; `assets/macos/make_app.sh` bundles it as an `.app`.
+- **Android:** CMake with the NDK builds `libvt3android.so`. `android/build_apk.py` then packages it
+  with the launcher and the shader pack:
+  `android/build_apk.py game vt3android --so libvt3android.so --asset shaders.pack`.
+
+## Current status
+
+- Boots, menus, tournaments and matches play on Mac and Android
+- Native Vulkan rendering on both, with OpenGL as the fallback on the Mac
+- Widescreen (Hor+) fill
+- Controllers on both platforms, with on-screen touch controls on Android
+- One-step install from your own disc image on Android
+
+## More documentation
+
+- [docs/recomp-design.md](docs/recomp-design.md): the recompiler
+- [docs/d3d9-shaders.md](docs/d3d9-shaders.md): shader translation
+- [docs/WIDESCREEN.md](docs/WIDESCREEN.md) and [docs/TOUCH_CONTROLS.md](docs/TOUCH_CONTROLS.md)
+- [docs/formats.md](docs/formats.md): game data formats
+- [docs/decisions.md](docs/decisions.md): decision log
