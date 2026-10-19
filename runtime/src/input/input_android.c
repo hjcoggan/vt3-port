@@ -112,12 +112,6 @@ static void key_event(const AInputEvent *e)
     int down = AKeyEvent_getAction(e) == AKEY_EVENT_ACTION_DOWN;
     uint32_t ms = (uint32_t)(AKeyEvent_getEventTime(e) / 1000000);
     int32_t source = AInputEvent_getSource(e);
-    /* A key that is not from a gamepad or joystick means a physical keyboard is in use: the
-     * on-screen controls hide for the rest of the session. */
-    if (!is_pad(source) && !vt3_input_keyboard_connected()) {
-        VT3_INFO("input: physical keyboard in use (keycode %d, source 0x%x)", (int)code, (unsigned)source);
-        vt3_input_set_keyboard_connected(1);
-    }
     /* Retroid exposes Select as BUTTON_SELECT, but some Android builds report it with a
      * keyboard source, which would otherwise drop the event. Route it to the virtual pad's
      * Back button either way. */
@@ -142,6 +136,14 @@ static void key_event(const AInputEvent *e)
     }
     uint32_t hid = hid_for_keycode(code);
     if (!hid) return;
+    /* A key we understand, from something that is not a gamepad, means a physical keyboard is in
+     * use: the on-screen controls hide for the rest of the session. Only mapped keys count, so
+     * system navigation keys do not: the back-edge gesture delivers KEYCODE_BACK with a keyboard
+     * source, and it fires easily while playing, which would hide the controls mid-rally. */
+    if (!is_pad(source) && !vt3_input_keyboard_connected()) {
+        VT3_INFO("input: physical keyboard in use (keycode %d)", (int)code);
+        vt3_input_set_keyboard_connected(1);
+    }
     vt3_input_set_key(hid, down, ms);
     uint32_t mask = button_for_hid(hid);
     if (mask) vt3_input_set_button(mask, down);
