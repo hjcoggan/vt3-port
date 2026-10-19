@@ -28,10 +28,12 @@ REBUILT_BINS = os.path.join(DUMP, "runtime", "shaders", "rebuilt")
 BUILTIN_TOOL_SRC = os.path.join(ROOT, "runtime", "tools", "builtin_dump.c")
 BUILTIN_SRC = os.path.join(ROOT, "runtime", "src", "render", "builtin_glsl.c")
 TOOL_SRC = os.path.join(ROOT, "runtime", "tools", "sm2tool.c")
-TOOL_DIR = os.path.join(DUMP, "android", "tools")
-TOOL = os.path.join(TOOL_DIR, "vt3sm2")
-BUILTIN_TOOL = os.path.join(TOOL_DIR, "vt3builtin")
+EXE = ".exe" if os.name == "nt" else ""
+TOOL_DIR = os.path.join(DUMP, "android", "tools")  # main() moves this next to the pack
+TOOL = os.path.join(TOOL_DIR, "vt3sm2" + EXE)
+BUILTIN_TOOL = os.path.join(TOOL_DIR, "vt3builtin" + EXE)
 GLSLANG = "glslangValidator"
+CC = os.environ.get("CC", "cc")
 
 
 def fnv1a64(data):
@@ -47,13 +49,13 @@ def build_tool():
     srcs = [TOOL_SRC, os.path.join(ROOT, "runtime", "src", "render", "sm2_glsl.c"),
             os.path.join(ROOT, "runtime", "src", "core", "log.c")]
     inc = os.path.join(ROOT, "runtime", "include")
-    subprocess.run(["cc", "-std=c11", "-O1", "-I", inc, "-o", TOOL] + srcs, check=True)
+    subprocess.run([CC, "-std=c11", "-O1", "-I", inc, "-o", TOOL] + srcs, check=True)
 
 
 def build_builtin_dump():
     """The built-in Vulkan GLSL, written to a directory the pack reads as text."""
     inc = os.path.join(ROOT, "runtime", "include")
-    subprocess.run(["cc", "-std=c11", "-O1", "-I", inc, "-o", BUILTIN_TOOL, BUILTIN_TOOL_SRC, BUILTIN_SRC],
+    subprocess.run([CC, "-std=c11", "-O1", "-I", inc, "-o", BUILTIN_TOOL, BUILTIN_TOOL_SRC, BUILTIN_SRC],
                    check=True)
     out = os.path.join(TOOL_DIR, "builtin_glsl")
     os.makedirs(out, exist_ok=True)
@@ -87,6 +89,10 @@ def main(argv):
         print(__doc__)
         return 2
     out_path = argv[1]
+    global TOOL_DIR, TOOL, BUILTIN_TOOL
+    TOOL_DIR = os.path.join(os.path.dirname(os.path.abspath(out_path)), "tools")
+    TOOL = os.path.join(TOOL_DIR, "vt3sm2" + EXE)
+    BUILTIN_TOOL = os.path.join(TOOL_DIR, "vt3builtin" + EXE)
     bins = []
     glsl_dirs = []
     i = 2

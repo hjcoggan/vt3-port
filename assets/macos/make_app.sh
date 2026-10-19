@@ -1,6 +1,7 @@
 #!/bin/bash
 # Builds VT3.app: the desktop game binary, the icon, and a launcher that sets the data root.
-# Usage: make_app.sh BINARY IMAGE_BIN OUT_DIR
+# Usage: make_app.sh BINARY IMAGE_BIN OUT_DIR [DATA_DIR]
+# DATA_DIR (the unpacked data2 folder) defaults to ~/Library/Application Support/VT3/data2.
 # The data stays outside the app (VT3_GAME_ROOT points at the extracted English archives).
 #
 # The Vulkan loader (libvulkan) is linked dynamically, so the bundle carries its own copy in
@@ -11,6 +12,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
 binary="$1"; image="$2"; out="$3"
+data="${4:-$HOME/Library/Application Support/VT3/data2}"
 app="$out/VT3.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks" \
@@ -73,12 +75,14 @@ if [[ -f "$pack" ]]; then
 else
     echo "warning: shader pack not found at $pack; Vulkan will fail without it" >&2
 fi
-cat > "$app/Contents/MacOS/VT3" <<'LAUNCH'
+cat > "$app/Contents/MacOS/VT3" <<LAUNCH
 #!/bin/bash
+export VT3_GAME_ROOT="\${VT3_GAME_ROOT:-$data}"
+LAUNCH
+cat >> "$app/Contents/MacOS/VT3" <<'LAUNCH'
 # Starts the game from the bundle's Resources folder, where image.bin is.
 here="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$here/Resources"
-export VT3_GAME_ROOT="${VT3_GAME_ROOT:-/Users/heath/Virtua Tennis 3/dump/pc/extracted/data2}"
 if [[ -f "$here/Resources/shaders.pack" ]]; then
     export VT3_SHADER_PACK="${VT3_SHADER_PACK:-$here/Resources/shaders.pack}"
 fi

@@ -184,6 +184,12 @@ $PY tools/formats/shaders/gen_spirv_pack.py ../dump/android/shaders.pack
 - Homebrew: `molten-vk vulkan-loader vulkan-headers vulkan-validationlayers glslang`.
 - Run one game at a time and check `pgrep -x vt3_native`: concurrent runs skew timing and audio.
 
+**From scratch** (what players run; no files from `../dump`): `python build.py android --exe VT3.exe`
+translates with `tools/recomp/vt3_seeds.txt` (function entries, addresses only, from the Ghidra
+dump) and `tools/recomp/vt3_table_sizes.txt`, extracts the SM2 blobs from VT3.exe for the shader
+pack, then runs the CMake and APK steps below into `build/`. The output matches the maintainer
+build except that `../dump/recomp/vt3_nocd/vt3.c` predates the rep-movs fast path from e5bdaf9.
+
 **Android** (configure once from the repo root; use a build dir for this tree):
 ```bash
 ANDROID_NDK=/opt/homebrew/share/android-ndk cmake -S runtime -B ../dump/android/cmake-arm64-main \

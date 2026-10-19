@@ -31,6 +31,8 @@ BASE = os.path.dirname(REPO)
 DUMP = os.environ.get('VT3_DUMP', os.path.join(BASE, 'dump'))
 DEFAULT_OUT = os.path.join(DUMP, 'recomp', 'vt3_nocd')
 PY = os.path.join(BASE, 'tools', 'venv', 'bin', 'python')
+if not os.path.exists(PY):
+    PY = sys.executable
 CC = 'clang'
 
 
