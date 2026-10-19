@@ -28,8 +28,17 @@ No game files are included. You must provide your own copy of the game.
 
 1. [Download the latest Android APK](https://github.com/hjcoggan/vt3-port/releases/latest/download/VT3-Android.apk).
 2. Copy two files onto the device:
-   - the PC disc image, `Virtua Tennis 3 (Europe) (En,Fr,De,Es,It).iso`
-   - the v1.0.1 no-CD zip, `Virtua-Tennis-3_NoCD_Win_EN_for-version-101.zip` (holds `VT3.exe`)
+   - a disc image of the **European PC DVD** (English, French, German, Spanish, Italian), e.g.
+     `Virtua Tennis 3 (Europe) (En,Fr,De,Es,It).iso`
+   - the English v1.0.1 no-CD zip, `Virtua-Tennis-3_NoCD_Win_EN_for-version-101.zip` (holds `VT3.exe`)
+
+   | File | Size | SHA-256 |
+   | --- | --- | --- |
+   | European PC DVD image | 2,623,963,136 bytes | `10862f2a0c35cd0673b406331494f2482d107a4efab52aa6b7725a8c346e6165` |
+   | v1.0.1 no-CD zip | 1,713,811 bytes | `0fdad05635c47da60ac18d3c6530b82b2f53bb6294913a036bfb342dcb80a943` |
+
+   Only the European PC release has been tested. The USA PC release has not, and the installer
+   rejects any `VT3.exe` other than the v1.0.1 no-CD one above.
 3. Install the APK and open **VT3**.
 4. Tap **Select PC disc image**, then **Select v1.0.1 NoCD**, then **Install**.
    Unpacking takes about a minute. Keep the app open.
@@ -79,3 +88,10 @@ Developer notes, build commands and the current state of the port are in
 - [docs/WIDESCREEN.md](docs/WIDESCREEN.md) and [docs/TOUCH_CONTROLS.md](docs/TOUCH_CONTROLS.md)
 - [docs/formats.md](docs/formats.md): game data formats
 - [docs/decisions.md](docs/decisions.md): decision log
+
+## Legal
+
+This repository contains no copyrighted game code or game data from Virtua Tennis 3: no
+executables, assets, or code generated from them. A legitimately owned copy of the game is
+required to play. Virtua Tennis 3 and all related trademarks and copyrights belong to SEGA
+Corporation. This is an unofficial fan project and is not affiliated with or endorsed by SEGA.
