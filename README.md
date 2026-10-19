@@ -22,7 +22,7 @@ Macs through static recompilation. This is not an emulator and nothing runs unde
 It is an experimental developer build. It is playable on the Retroid Pocket (Snapdragon 8 Gen 2).
 Vulkan is the default renderer on both platforms, with OpenGL as the fallback on the Mac.
 
-No game files are included. You must provide your own copy of the game.
+You must provide your own copy of the game.
 
 ## Players: start here
 
