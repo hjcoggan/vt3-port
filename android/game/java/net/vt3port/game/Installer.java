@@ -25,7 +25,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 /**
- * Launcher. On first run the player picks their PC disc image and the v1.0.1 no-CD zip; this unpacks
+ * Launcher. On first run the player picks their PC disc image and the v1.0.1 VT3.exe; this unpacks
  * the game data and builds image.bin in the app's files dir (the VT3_ANDROID_ROOT the game reads),
  * then writes install.ok. Every later launch goes straight to the game.
  */
@@ -36,7 +36,7 @@ public class Installer extends Activity {
     static native int progress(); /* permille of cabinet files done */
     static native byte[] flattenPe(byte[] exe);
 
-    /* SHA-256 of the image built from the v1.0.1 no-CD VT3.exe the port is translated from. */
+    /* SHA-256 of the image built from the v1.0.1 VT3.exe the port is translated from. */
     static final String IMAGE_SHA256 = "52be3cda5edb9aa536394fed656e22270d688d74e86db8602fd39a7512fc80bf";
     static final int PICK_ISO = 1, PICK_ZIP = 2;
 
@@ -63,7 +63,7 @@ public class Installer extends Activity {
         title.setTextSize(24);
         box.addView(title);
         isoButton = button(box, "1. Select PC disc image (.iso)", PICK_ISO);
-        zipButton = button(box, "2. Select v1.0.1 NoCD (.zip or VT3.exe)", PICK_ZIP);
+        zipButton = button(box, "2. Select v1.0.1 VT3.exe (or a .zip holding it)", PICK_ZIP);
         installButton = new Button(this);
         installButton.setText("Install");
         installButton.setEnabled(false);
@@ -88,7 +88,7 @@ public class Installer extends Activity {
     protected void onActivityResult(int code, int result, Intent data) {
         if (result != RESULT_OK || data == null) return;
         if (code == PICK_ISO) { iso = data.getData(); isoButton.setText("1. Disc image selected"); }
-        if (code == PICK_ZIP) { zip = data.getData(); zipButton.setText("2. NoCD selected"); }
+        if (code == PICK_ZIP) { zip = data.getData(); zipButton.setText("2. VT3.exe selected"); }
         installButton.setEnabled(iso != null && zip != null);
     }
 
@@ -126,7 +126,7 @@ public class Installer extends Activity {
         }).start();
     }
 
-    /* The NoCD may be picked as the zip it ships in or as the bare VT3.exe. */
+    /* VT3.exe may be picked bare or inside a zip. */
     void buildImage() throws Exception {
         byte[] exe;
         try (InputStream in = getContentResolver().openInputStream(zip)) {
@@ -143,7 +143,7 @@ public class Installer extends Activity {
         }
         byte[] img = flattenPe(exe);
         if (img == null || !IMAGE_SHA256.equals(hex(MessageDigest.getInstance("SHA-256").digest(img))))
-            throw new IOException("That VT3.exe is not the v1.0.1 NoCD this port needs.");
+            throw new IOException("That VT3.exe is not the v1.0.1 build this port needs.");
         File tmp = new File(root, "image.bin.tmp");
         try (OutputStream o = new FileOutputStream(tmp)) { o.write(img); }
         if (!tmp.renameTo(new File(root, "image.bin"))) throw new IOException("Could not write image.bin.");
