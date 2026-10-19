@@ -343,7 +343,7 @@ HRESULT WINAPI IDirect3DDevice9_SetViewport(GPTR This, GPTR viewport)
     for (int i = 0; i < 6; i++) d->viewport[i] = d3d9_rd(viewport, (uint32_t)(4 * i));
     if (getenv("VT3_TRACE_VIEWPORT")) {
         d3d9_surface *ts = d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
-        VT3_INFO("viewport %u %u %u %u z %g %g on rt 0x%x (%ux%u)", d->viewport[0], d->viewport[1], d->viewport[2], d->viewport[3], (double)0, (double)0, (unsigned)d->rt[0], ts ? (unsigned)ts->w : 0u, ts ? (unsigned)ts->h : 0u);
+        VT3_INFO("viewport %u %u %u %u z %g %g on rt 0x%x (%ux%u) from 0x%x", d->viewport[0], d->viewport[1], d->viewport[2], d->viewport[3], (double)0, (double)0, (unsigned)d->rt[0], ts ? (unsigned)ts->w : 0u, ts ? (unsigned)ts->h : 0u, vt3s_guest_caller);
     }
     return S_OK;
 }

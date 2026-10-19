@@ -150,6 +150,7 @@ int vt3shim_init(void)
         return -1;
     }
     vt3s_heap_module_init();
+    vt3s_display_prepare();   /* window up and a display-sized frame for the game before it runs */
     VT3_INFO("shim: initialised (guest arena %zu MiB)", vt3_guest_size() >> 20);
     return 0;
 }

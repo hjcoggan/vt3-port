@@ -53,6 +53,10 @@ uint32_t vt3s_load_u32(GPTR p);
 /* Game root for file paths. Never NULL: "." if unset. */
 const char *vt3s_game_root(void);
 
+/* Bring up the window and write the WIDESCREEN INI before the game runs (d3d9_gpu.c). A no-op
+ * when there is no window or widescreen is switched off. */
+void vt3s_display_prepare(void);
+
 /* System DLL handles for GetModuleHandleA and LoadLibraryA. 0 when not a system DLL. */
 HANDLE vt3s_system_module(LPCSTR name);
 

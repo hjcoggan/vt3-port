@@ -70,7 +70,16 @@ int vt3_platform_init(const vt3_config *c)
         SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     }
 
-    g_win = SDL_CreateWindow(c->title, c->window_w, c->window_h,
+    /* Start at the primary display's usable size so the game scales to the screen instead of a fixed
+     * 4:3 window. The frame the game renders follows the logical size the shim hands it (see
+     * docs/WIDESCREEN.md), so the image fills this window at its own aspect. */
+    int win_w = c->window_w, win_h = c->window_h;
+    SDL_Rect disp;
+    if (SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &disp) && disp.w > 0 && disp.h > 0) {
+        win_w = disp.w;
+        win_h = disp.h;
+    }
+    g_win = SDL_CreateWindow(c->title, win_w, win_h,
                              (g_vk ? SDL_WINDOW_VULKAN : SDL_WINDOW_OPENGL) | SDL_WINDOW_RESIZABLE |
                                  SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!g_win) {
@@ -88,9 +97,12 @@ int vt3_platform_init(const vt3_config *c)
         SDL_GL_SetSwapInterval(c->vsync ? 1 : 0);
     }
 
-    int pw, ph;
+    /* Keep the window user-resizable on every platform so it can be scaled to any screen. */
+    SDL_SetWindowResizable(g_win, true);
+    int pw, ph, ww, wh;
     SDL_GetWindowSizeInPixels(g_win, &pw, &ph);
-    VT3_INFO("window: %dx%d points, %dx%d pixels", c->window_w, c->window_h, pw, ph);
+    SDL_GetWindowSize(g_win, &ww, &wh);
+    VT3_INFO("window: %dx%d points, %dx%d pixels", ww, wh, pw, ph);
     vt3_input_sdl_open_attached();
     vt3_input_sdl_script_start();
     return 0;

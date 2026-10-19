@@ -176,6 +176,8 @@ void d3d9_device_free(d3d9_device *d);
 /* ---- GPU glue (d3d9_gpu.c) ----------------------------------------------- */
 
 int d3d9_gpu_init(uint32_t width, uint32_t height);   /* 0 on success, -1 when no renderer */
+/* Bring up the window and choose a back buffer at the display's aspect. 0 on success. */
+int d3d9_gpu_prepare(uint32_t req_w, uint32_t req_h, uint32_t *out_w, uint32_t *out_h);
 int d3d9_gpu_ok(void);
 void d3d9_gpu_begin(void);
 void d3d9_gpu_clear(uint32_t argb, int do_color, int do_depth, float depth);

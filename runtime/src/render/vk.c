@@ -534,6 +534,12 @@ static int create_swapchain(void)
     VKT(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g.phys, g.surf, &caps), "surface capabilities");
     VkExtent2D ext = caps.currentExtent;
 #ifdef __ANDROID__
+    VT3_DEBUG("vulkan: caps extent %ux%u transform %d (identity=%d rot90=%d rot180=%d rot270=%d) supported 0x%x, window %dx%d",
+             caps.currentExtent.width, caps.currentExtent.height, (int)caps.currentTransform,
+             (int)VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR, (int)VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR,
+             (int)VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR, (int)VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR,
+             (unsigned)caps.supportedTransforms,
+             ANativeWindow_getWidth(g.window), ANativeWindow_getHeight(g.window));
     if (ext.width == 0xFFFFFFFFu) {
         ext.width = (uint32_t)ANativeWindow_getWidth(g.window);
         ext.height = (uint32_t)ANativeWindow_getHeight(g.window);
@@ -575,7 +581,17 @@ static int create_swapchain(void)
     sci.imageArrayLayers = 1;
     sci.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    /* Android reports currentExtent already in the display's current orientation (3120x1440 in
+     * landscape on a 1440x3120 panel) while currentTransform is still ROTATE_90. The extent and the
+     * transform must agree: a landscape-sized image with ROTATE_90 pre-rotation is rotated again by
+     * the compositor and comes out sideways and squashed. Present the image as-is instead. */
+#ifdef __ANDROID__
+    sci.preTransform = (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+                           ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+                           : caps.currentTransform;
+#else
     sci.preTransform = caps.currentTransform;
+#endif
     sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     sci.presentMode = g.present_mode;
     sci.clipped = VK_TRUE;
@@ -2009,8 +2025,24 @@ static void vk_present(const vt3_rect *dst, int nearest, int drawable_w, int dra
     pi.pSwapchains = &g.sc;
     pi.pImageIndices = &idx;
     VkResult pr = vkQueuePresentKHR(g.queue, &pi);
-    if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) recreate_swapchain();
-    else if (pr != VK_SUCCESS) VT3_ERROR("vulkan: present failed (%d)", (int)pr);
+    if (pr == VK_ERROR_OUT_OF_DATE_KHR) {
+        recreate_swapchain();
+    } else if (pr == VK_SUBOPTIMAL_KHR) {
+#ifdef __ANDROID__
+        /* Expected on Android: we present with IDENTITY while the surface advertises ROTATE_90,
+         * because currentExtent is already in the display's orientation. The image is correct, so
+         * rebuilding the swapchain here would recreate it every frame. */
+        static int warned;
+        if (!warned) {
+            warned = 1;
+            VT3_DEBUG("vulkan: present suboptimal (pre-rotation differs); keeping the swapchain");
+        }
+#else
+        recreate_swapchain();
+#endif
+    } else if (pr != VK_SUCCESS) {
+        VT3_ERROR("vulkan: present failed (%d)", (int)pr);
+    }
     uint64_t lt0 = stats_enabled() ? now_ns() : 0;
     frame_limit();
     if (stats_enabled()) g_stats.limit_ns += now_ns() - lt0;

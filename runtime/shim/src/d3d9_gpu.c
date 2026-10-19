@@ -14,24 +14,165 @@
 #include <string.h>
 
 static int g_gpu_ok;
+static int g_plat_ok;
+
+/* The game has its own widescreen mode, named WIDESCREEN in its INI. With it on, the 3D camera
+ * keeps its vertical field of view and widens horizontally (a true Hor+), and the HUD lays itself
+ * out for the wider frame. Two guest globals drive it:
+ *   - 0x6cf0e8, the float aspect the wide camera uses (16:9 on the disc),
+ *   - 0x8599c2, the WIDESCREEN config byte, copied to the engine at +0x9c/+0x9d.
+ * The byte is read once at startup, so vt3s_display_prepare() writes it (and the resolution) into
+ * the game's INI before the game runs; widescreen_enable() then keeps the engine copy set in case
+ * the engine is rebuilt.
+ *
+ * The camera aspect is not derived from the resolution: it is the fixed 16:9 constant, so a phone
+ * panel (about 19.5:9) would still be pillarboxed. widescreen_aspect() points that constant at the
+ * frame the game actually renders, which keeps the vertical FOV and widens only horizontally. */
+#define VT3_GUEST_WIDE_ASPECT 0x006cf0e8u
+#define VT3_GUEST_CONFIG_WIDE 0x008599c2u
+#define VT3_GUEST_ENGINE      0x009abe88u
+#define VT3_ENGINE_WIDE_OFF   0x9cu
+
+/* Cap the back buffer height: a 1440p phone panel would otherwise cost about four times the pixels
+ * of the game's 1024x768 frame for no visible gain at arm's length. */
+#define VT3_WIDE_MAX_H 1080
+
+static void widescreen_enable(void)
+{
+    if (getenv("VT3_NO_WIDESCREEN")) return;
+    uint32_t c = vt3s_load_u32((GPTR)VT3_GUEST_CONFIG_WIDE);
+    vt3s_store_u32((GPTR)VT3_GUEST_CONFIG_WIDE, (c & 0xffffff00u) | 0x01u);
+    uint32_t eng = vt3s_load_u32((GPTR)VT3_GUEST_ENGINE);
+    if (eng) {
+        uint32_t f = vt3s_load_u32((GPTR)(eng + VT3_ENGINE_WIDE_OFF));
+        vt3s_store_u32((GPTR)(eng + VT3_ENGINE_WIDE_OFF), (f & 0xffff0000u) | 0x0101u);
+    }
+}
+
+static void widescreen_aspect(int w, int h)
+{
+    if (getenv("VT3_NO_WIDESCREEN")) return;
+    if (w <= 0 || h <= 0) return;
+    float aspect = (float)w / (float)h;
+    uint32_t bits;
+    memcpy(&bits, &aspect, 4);
+    vt3s_store_u32((GPTR)VT3_GUEST_WIDE_ASPECT, bits);
+}
+
+/* A frame at the display's aspect and a reasonable height, so the renderer fills the screen. */
+static void choose_target(int dw, int dh, uint32_t *out_w, uint32_t *out_h){
+    if (dw <= 0 || dh <= 0) {
+        *out_w = 1024;
+        *out_h = 768;
+        return;
+    }
+    const char *env = getenv("VT3_RENDER_HEIGHT");
+    int max_h = env ? atoi(env) : VT3_WIDE_MAX_H;
+    int h = dh > max_h ? max_h : dh;
+    if (h < 2) h = 2;
+    int w = (int)(((int64_t)h * dw + dh / 2) / dh);
+    if (w < 2) w = 2;
+    *out_w = (uint32_t)(w & ~1);
+    *out_h = (uint32_t)(h & ~1);
+}
+
+/* Bring up the window and pick the frame size. Returns 0, or -1 when there is no window. */
+int d3d9_gpu_prepare(uint32_t req_w, uint32_t req_h, uint32_t *out_w, uint32_t *out_h)
+{
+    if (!g_plat_ok) {
+        vt3_config cfg;
+        vt3_config_defaults(&cfg);
+        cfg.title = "VT3";
+        cfg.window_w = (int)(req_w ? req_w : 640);
+        cfg.window_h = (int)(req_h ? req_h : 480);
+        cfg.logical_w = cfg.window_w;
+        cfg.logical_h = cfg.window_h;
+        cfg.aspect_w = cfg.window_w;     /* display keeps the back buffer's own aspect */
+        cfg.aspect_h = cfg.window_h;
+        cfg.audio = 0;                   /* audio is not wired through the shim yet */
+        if (vt3_platform_init(&cfg) != 0) {
+            VT3_WARN("gpu: no window or GL context; the device runs headless");
+            return -1;
+        }
+        g_plat_ok = 1;
+    }
+    int dw = 0, dh = 0;
+    vt3_platform_drawable_size(&dw, &dh);
+    choose_target(dw, dh, out_w, out_h);
+    return 0;
+}
+
+/* Write (or refresh) the three keys we drive, keeping any other key the player put in the file. */
+static int write_widescreen_ini(const char *path, uint32_t w, uint32_t h)
+{
+    char *body = NULL;
+    size_t blen = 0;
+    FILE *f = fopen(path, "rb");
+    if (f) {
+        if (fseek(f, 0, SEEK_END) == 0) {
+            long n = ftell(f);
+            if (n > 0 && n < (1L << 20)) {
+                rewind(f);
+                body = malloc((size_t)n + 1);
+                if (body) {
+                    blen = fread(body, 1, (size_t)n, f);
+                    body[blen] = '\0';
+                }
+            }
+        }
+        fclose(f);
+    }
+    FILE *o = fopen(path, "wb");
+    if (!o) {
+        free(body);
+        return -1;
+    }
+    fprintf(o, "DX/RES/WIDTH = %u\nDX/RES/HEIGHT = %u\nWIDESCREEN = 1\n", (unsigned)w, (unsigned)h);
+    if (body) {
+        char *save = NULL;
+        for (char *line = strtok_r(body, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+            char *s = line;
+            while (*s == ' ' || *s == '\t' || *s == '\r') s++;
+            if (!*s) continue;
+            if (strncmp(s, "DX/RES/WIDTH", 12) == 0 || strncmp(s, "DX/RES/HEIGHT", 13) == 0 ||
+                strncmp(s, "WIDESCREEN", 10) == 0)
+                continue;   /* a previous copy of ours: it is rewritten above */
+            fputs(s, o);
+            fputc('\n', o);
+        }
+        free(body);
+    }
+    return fclose(o);
+}
+
+/* Called once from the shim before the game runs: bring up the window, then hand the game a
+ * WIDESCREEN INI for a frame that fills the display. The game reads this before it sets up the
+ * renderer, so its viewport, HUD and camera all agree on the same widescreen frame; overriding the
+ * back buffer behind its back would leave the picture in the top-left corner. */
+void vt3s_display_prepare(void)
+{
+    uint32_t tw = 0, th = 0;
+    if (d3d9_gpu_prepare(0, 0, &tw, &th) != 0) return;
+    if (getenv("VT3_NO_WIDESCREEN")) return;
+
+    char path[1200];
+    snprintf(path, sizeof path, "%svt3.ini", vt3s_game_root());
+    if (write_widescreen_ini(path, tw, th) != 0) {
+        VT3_WARN("widescreen: cannot write %s; the game keeps its own resolution", path);
+    } else {
+        VT3_INFO("widescreen: %s = %ux%u", path, (unsigned)tw, (unsigned)th);
+    }
+    widescreen_aspect((int)tw, (int)th);
+    widescreen_enable();
+}
 
 int d3d9_gpu_init(uint32_t width, uint32_t height)
 {
     if (g_gpu_ok) return 0;
     if (width == 0 || height == 0) return -1;
-    vt3_config cfg;
-    vt3_config_defaults(&cfg);
-    cfg.title = "VT3";
-    cfg.window_w = (int)width;
-    cfg.window_h = (int)height;
-    cfg.logical_w = (int)width;
-    cfg.logical_h = (int)height;
-    cfg.aspect_w = (int)width;     /* display keeps the back buffer's own aspect */
-    cfg.aspect_h = (int)height;
-    cfg.audio = 0;                 /* audio is not wired through the shim yet */
-    if (vt3_platform_init(&cfg) != 0) {
-        VT3_WARN("gpu: no window or GL context; the device runs headless");
-        return -1;
+    if (!g_plat_ok) {
+        uint32_t tw = width, th = height;
+        if (d3d9_gpu_prepare(width, height, &tw, &th) != 0) return -1;
     }
     vt3_gfx_config gc;
     gc.logical_w = (int)width;
@@ -45,6 +186,8 @@ int d3d9_gpu_init(uint32_t width, uint32_t height)
         return -1;
     }
     g_gpu_ok = 1;
+    widescreen_aspect((int)width, (int)height);   /* follow the INI if it set its own size */
+    widescreen_enable();
     VT3_INFO("gpu: %ux%u window and renderer", (unsigned)width, (unsigned)height);
     return 0;
 }
@@ -56,7 +199,9 @@ int d3d9_gpu_ok(void)
 
 void d3d9_gpu_begin(void)
 {
-    if (g_gpu_ok) vt3_gfx_begin_frame();
+    if (!g_gpu_ok) return;
+    widescreen_enable();   /* the engine can be rebuilt between frames; keep its widescreen flag on */
+    vt3_gfx_begin_frame();
 }
 
 void d3d9_gpu_clear(uint32_t argb, int do_color, int do_depth, float depth)
