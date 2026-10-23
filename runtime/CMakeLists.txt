@@ -31,6 +31,21 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
     set(VT3_WARNINGS -Wall -Wextra -Wno-unused-parameter)
 endif()
 
+# Hot call paths: the shim and runtime call into libc constantly, and each cross-library call is
+# a PLT hop (1.9% of in-match CPU on the Retroid). -fno-plt turns those into GOT-indirect calls.
+# No -ftls-model=initial-exec: NativeActivity dlopen()s the game library, and at android-26 the
+# NDK uses emulated TLS anyway (the __thread cost is handled in the adapters instead, see
+# vt3s_guest_ctx_on). Android only: the desktop build is not the one short of CPU.
+set(VT3_ANDROID_FASTCALL)
+if(CMAKE_SYSTEM_NAME STREQUAL "Android" AND CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    set(VT3_ANDROID_FASTCALL -fno-plt)
+    # The NDK adds -fstack-protector-strong to everything; the desktop build never had it. The
+    # translated game is thousands of small functions called millions of times a second, and every
+    # one that owns a local array pays a canary store and check. The port reads its own game data
+    # and has no untrusted input reaching those frames, so the canary buys nothing here.
+    add_compile_options(-fno-stack-protector)
+endif()
+
 # Platform layer, renderer, audio, input, and the ADX decoder.
 set(VT3_CORE_COMMON
     src/core/log.c
@@ -68,7 +83,7 @@ if(VT3_ANDROID)
 else()
     target_link_libraries(vt3core PUBLIC SDL3::SDL3 Vulkan::Vulkan)
 endif()
-target_compile_options(vt3core PRIVATE ${VT3_WARNINGS})
+target_compile_options(vt3core PRIVATE ${VT3_WARNINGS} ${VT3_ANDROID_FASTCALL})
 
 # Win32/D3D9 shim: headers plus skeleton implementations.
 add_library(vt3shim STATIC
@@ -103,7 +118,7 @@ add_library(vt3shim STATIC
 )
 target_include_directories(vt3shim PUBLIC shim/include)
 target_link_libraries(vt3shim PUBLIC vt3core)
-target_compile_options(vt3shim PRIVATE ${VT3_WARNINGS})
+target_compile_options(vt3shim PRIVATE ${VT3_WARNINGS} ${VT3_ANDROID_FASTCALL})
 
 if(VT3_ANDROID)
     # The game for the device: the loader, the adapters, the shim and the translated module, as a
@@ -139,7 +154,7 @@ if(VT3_ANDROID)
     )
     target_include_directories(vt3android PRIVATE ${VT3_RT_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${ANDROID_NDK}/sources/android/native_app_glue)
-    target_compile_options(vt3android PRIVATE -O2 -std=gnu11 -w -ffp-contract=off)
+    target_compile_options(vt3android PRIVATE -O2 -std=gnu11 -w -ffp-contract=off ${VT3_ANDROID_FASTCALL})
     set_source_files_properties(${VT3_GAME_DIR}/vt3.c PROPERTIES COMPILE_OPTIONS "-O1;-std=gnu11;-w;-ffp-contract=off")
     # The weak defaults in vt3shim must lose to the real renderer, platform and audio in vt3core, so
     # every member of both archives is linked in (as -all_load does on the desktop).

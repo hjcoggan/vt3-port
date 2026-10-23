@@ -68,6 +68,13 @@ void *vt3s_handle_take(HANDLE h, vt3s_hkind kind)
 __thread uint32_t vt3s_guest_caller;
 __thread uint32_t vt3s_guest_esp;
 
+/* Only the traces read the two above (VT3_TRACE_VIEWPORT, VT3_PIXEL_TEX, VT3_TRACE_NAN,
+ * VT3_TRACE_LOCK). The generated adapters would otherwise store them on every shim call, and a
+ * thread-local store on Android is a call into the emulated-TLS runtime: two per call, 2.1% of
+ * in-match CPU plus 1.0% in pthread_getspecific in the profile. Off unless one of those traces
+ * is asked for, so the default build pays one predictable branch instead. */
+int vt3s_guest_ctx_on;
+
 void vt3s_guest_backtrace(char *buf, size_t size)
 {
     size_t pos = 0;
@@ -163,6 +170,9 @@ int vt3shim_init(void)
     }
     vt3s_heap_module_init();
     vt3s_display_prepare();   /* window up and a display-sized frame for the game before it runs */
+    vt3s_guest_ctx_on = getenv("VT3_TRACE_VIEWPORT") || getenv("VT3_PIXEL_TEX") ||
+                        getenv("VT3_TRACE_NAN") || getenv("VT3_TRACE_LOCK") ||
+                        getenv("VT3_TRACE_SLOW");   /* its slow-read lines print a guest backtrace */
     VT3_INFO("shim: initialised (guest arena %zu MiB)", vt3_guest_size() >> 20);
     return 0;
 }

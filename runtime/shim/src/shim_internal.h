@@ -39,6 +39,9 @@ void vt3s_unimpl(const char *api);   /* logs once per API name */
  * 0 when the shim is called from the host. */
 extern __thread uint32_t vt3s_guest_caller;
 extern __thread uint32_t vt3s_guest_esp;   /* the guest stack pointer at that call */
+/* Non-zero only when a trace that prints them is enabled: the adapters skip the two stores
+ * above otherwise (see shim_core.c). */
+extern int vt3s_guest_ctx_on;
 
 /* A rough guest backtrace for traces: the words on the guest stack above vt3s_guest_esp that look
  * like return addresses into the game's code, nearest first, written as hex into buf. */

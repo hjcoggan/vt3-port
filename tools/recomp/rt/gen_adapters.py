@@ -85,8 +85,11 @@ def emit(protos, names):
         "",
         "#define VT_ARG(c, i) rd32((c)->esp + 4u + 4u * (uint32_t)(i))",
         "",
-        "/* The guest return address of the call in progress, for shim traces (shim_internal.h). */",
+        "/* The guest return address of the call in progress, for shim traces (shim_internal.h).\n"
+        " * Written only when such a trace is on: a thread-local store is a call into Android's\n"
+        " * emulated-TLS runtime, and this is the hottest line in the whole port. */",
         "extern __thread uint32_t vt3s_guest_caller, vt3s_guest_esp;",
+        "extern int vt3s_guest_ctx_on;",
         "",
     ]
     table = []
@@ -97,8 +100,7 @@ def emit(protos, names):
         nslots = sum(slot_counts)
         out.append(f"static void imp_{name}(vt3_cpu *c)")
         out.append("{")
-        out.append("    vt3s_guest_caller = rd32(c->esp);")
-        out.append("    vt3s_guest_esp = c->esp;")
+        out.append("    if (vt3s_guest_ctx_on) { vt3s_guest_caller = rd32(c->esp); vt3s_guest_esp = c->esp; }")
         idx = 0
         args = []
         for p, n in zip(fixed, slot_counts):

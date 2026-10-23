@@ -69,6 +69,39 @@ static uint8_t *vertex_scratch_reserve(size_t need)
     return p;
 }
 
+/* The index list D3D hands us is converted to the 16-bit, range-relative form the renderer
+ * takes, per draw. That list used to be malloc'd and freed every draw and the conversion read
+ * the 32-bit indices a byte at a time; on the Retroid the loop was ~4% of in-match CPU. Reuse
+ * one growing buffer (draws are serialized by the guest lock) and let the compiler load whole
+ * 32-bit indices. */
+static uint16_t *g_index_scratch;
+static size_t g_index_scratch_n;
+
+static uint16_t *index_scratch_reserve(size_t n)
+{
+    if (n <= g_index_scratch_n) return g_index_scratch;
+    uint16_t *p = realloc(g_index_scratch, n * sizeof *p);
+    if (!p) return NULL;
+    g_index_scratch = p;
+    g_index_scratch_n = n;
+    return p;
+}
+
+/* A triangle fan expands to a triangle list: three indices per triangle, at most as many as
+ * there are fan indices. Same lifetime as the list above. */
+static uint16_t *g_fan_scratch;
+static size_t g_fan_scratch_n;
+
+static uint16_t *fan_scratch_reserve(size_t n)
+{
+    if (n <= g_fan_scratch_n) return g_fan_scratch;
+    uint16_t *p = realloc(g_fan_scratch, n * sizeof *p);
+    if (!p) return NULL;
+    g_fan_scratch = p;
+    g_fan_scratch_n = n;
+    return p;
+}
+
 static uint32_t prim_vertex_count(uint32_t prim, uint32_t count)
 {
     if (prim == PRIM_TRIANGLELIST) return 3u * count;
@@ -776,16 +809,28 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         const uint8_t *ip = ibase + (size_t)a->start * isz;
         uint32_t lo = a->min_vertex, hi = a->min_vertex + a->num_vertices;
         if (hi <= lo) return S_OK;
-        idx16 = malloc((size_t)nidx * sizeof *idx16);
+        idx16 = index_scratch_reserve(nidx ? nidx : 1u);
         if (!idx16) return E_OUTOFMEMORY_D3D9;
-        for (uint32_t i = 0; i < nidx; i++) {
-            uint32_t v = isz == 4 ? (uint32_t)(ip[4 * i] | (ip[4 * i + 1] << 8) | (ip[4 * i + 2] << 16) | ((uint32_t)ip[4 * i + 3] << 24))
-                                  : (uint32_t)(ip[2 * i] | (ip[2 * i + 1] << 8));
-            if (v < lo || v >= hi) {
-                if (warned_once(&g_warn_idx) == 0) VT3_WARN("draw: index %u outside [%u,%u), clamped", v, lo, hi);
-                v = lo;
+        if (isz == 4) {
+            for (uint32_t i = 0; i < nidx; i++) {
+                uint32_t v;
+                memcpy(&v, ip + 4 * i, 4);
+                if (v < lo || v >= hi) {
+                    if (warned_once(&g_warn_idx) == 0) VT3_WARN("draw: index %u outside [%u,%u), clamped", v, lo, hi);
+                    v = lo;
+                }
+                idx16[i] = (uint16_t)(v - lo);
             }
-            idx16[i] = (uint16_t)(v - lo);
+        } else {
+            for (uint32_t i = 0; i < nidx; i++) {
+                uint32_t v;
+                memcpy(&v, ip + 2 * i, 2);
+                if (v < lo || v >= hi) {
+                    if (warned_once(&g_warn_idx) == 0) VT3_WARN("draw: index %u outside [%u,%u), clamped", v, lo, hi);
+                    v = lo;
+                }
+                idx16[i] = (uint16_t)(v - lo);
+            }
         }
         first_v = a->base_vertex + (int32_t)lo;
         count_v = a->num_vertices;
@@ -801,14 +846,13 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     if (a->prim == PRIM_TRIANGLEFAN) {
         uint32_t fan_n = a->indexed ? nidx : nverts;
         uint32_t tris = fan_n >= 3 ? fan_n - 2 : 0;
-        uint16_t *fan = malloc((size_t)(tris ? tris : 1) * 3 * sizeof *fan);
-        if (!fan) { free(idx16); return E_OUTOFMEMORY_D3D9; }
+        uint16_t *fan = fan_scratch_reserve((size_t)(tris ? tris : 1) * 3u);
+        if (!fan) { return E_OUTOFMEMORY_D3D9; }
         for (uint32_t t = 0; t < tris; t++) {
             uint32_t k[3] = { 0, t + 1, t + 2 };
             for (int j = 0; j < 3; j++)
                 fan[3 * t + (uint32_t)j] = a->indexed ? idx16[k[j]] : (uint16_t)k[j];
         }
-        free(idx16);
         idx16 = fan;
         nidx = tris * 3;
         use_idx = 1;
@@ -817,11 +861,11 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
 
     /* ---- fixed function: the TL path ---- */
     if (d->vs == 0 && d->fvf == FVF_TL) {
-        if (stride != 28) { free(idx16); return S_OK; }
+        if (stride != 28) { return S_OK; }
         uint32_t n = use_idx ? nidx : nverts;
         const uint8_t *src = vbase + (size_t)first_v * stride;
         vt3_tlvertex *tmp = malloc((size_t)n * sizeof *tmp);
-        if (!tmp) { free(idx16); return E_OUTOFMEMORY_D3D9; }
+        if (!tmp) { return E_OUTOFMEMORY_D3D9; }
         if (use_idx) {
             /* idx16 is local to the range that starts at first_v. */
             for (uint32_t i = 0; i < n; i++)
@@ -846,14 +890,12 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         vt3_gfx_draw(prim_list == PRIM_TRIANGLESTRIP ? VT3_PRIM_TRIANGLESTRIP : VT3_PRIM_TRIANGLELIST,
                      tmp, n, t0);
         free(tmp);
-        free(idx16);
         return S_OK;
     }
 
     /* ---- shader path ---- */
     if (d->vs == 0) {
         if (!warned_once(&g_warn_ff_ps)) VT3_WARN("draw: fixed-function vertex format 0x%x not supported", d->fvf);
-        free(idx16);
         return S_OK;
     }
     d3d9_host *vh = d3d9_host_of(d->vs, D3D9_KIND_VSHADER);
@@ -870,7 +912,6 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
             VT3_WARN("draw: shader not translated (skipped): vs 0x%x %s, ps 0x%x %s", d->vs,
                      vsh ? (vsh->translated ? "translated" : "untranslated") : "missing", d->ps,
                      d->ps ? (psh ? (psh->translated ? "translated" : "untranslated") : "missing") : "none");
-        free(idx16);
         return S_OK;
     }
     {   /* VT3_SKIP_MESH=<vs hash>:<prims>[,...]: drop those draws (debug: see what one mesh covers) */
@@ -888,17 +929,16 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
             }
         }
         for (int k = 0; k < n_skip; k++)
-            if (a->prim_count == skip_prims[k] && shader_hash(vsh) == skip_hash[k]) { free(idx16); return S_OK; }
+            if (a->prim_count == skip_prims[k] && shader_hash(vsh) == skip_hash[k]) { return S_OK; }
     }
     vt3_prog prog = program_for(d->vs, d->ps, vsh, psh);
-    if (!prog) { free(idx16); return S_OK; }
+    if (!prog) { return S_OK; }
 
     vt3_vlayout lay;
     int swap = 0;
     if (layout_from_decl(dc, &lay, stride, &swap) != 0) {
         if (!warned_once(&g_warn_layout))
             VT3_WARN("draw: vertex element type %u (usage %u) not supported (skipped)", g_bad_type, g_bad_usage);
-        free(idx16);
         return S_OK;
     }
     /* The game's picture and blur quads (FVF 0x102, POSITION float3 + TEXCOORD float2) draw after
@@ -929,7 +969,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     uint8_t *vcopy = NULL;
     if (needs_copy) {
         vcopy = vertex_scratch_reserve(scratch_need ? scratch_need : 1);
-        if (!vcopy) { free(idx16); return E_OUTOFMEMORY_D3D9; }
+        if (!vcopy) { return E_OUTOFMEMORY_D3D9; }
         if (multi) {
             for (uint32_t v = 0; v < nv; v++)
                 for (uint32_t s = 0; s < 16; s++)
@@ -1033,7 +1073,6 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         size_t expanded_offset = (vcopy == g_vertex_scratch) ? bytes : 0u;
         uint8_t *expanded = scratch ? scratch + expanded_offset : NULL;
         if (!expanded || expanded_bytes > g_vertex_scratch_cap - expanded_offset) {
-            free(idx16);
             return E_OUTOFMEMORY_D3D9;
         }
         {
@@ -1192,7 +1231,5 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     }
     vt3_gfx_draw_program(&dd);
     pixel_watch(d, a, vsh, psh);
-
-    free(idx16);
     return S_OK;
 }
