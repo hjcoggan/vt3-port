@@ -22,6 +22,8 @@ with `/tmp/vt3run.sh NAME SECS ENVFILE` and `python3 /tmp/vt3an.py LOG` (kept ou
 
 - Now: **88-98 fps median with safepoints off, 73-93 with the default 8 ms safepoints**; GPU 4-5.6 ms
   a frame, so the limit is CPU. Before this session: 75-80 fps.
+- Also landed later: constant block tails no longer zeroed and identical blocks reused within a frame
+  (`71072cf`, `VT3_UBO_DEDUP=0` off), D3D9 object lookup inlined (`a591585`).
 - Landed: SSE registers in locals (`ae97d87`), toward-zero float stores inline (`450c695`),
   zero-copy vertex ring (`90f9c69`), getenv off the per-draw path, guest load/store helpers inline,
   API 29 build, the nested-call stack word in the TEB instead of TLS, directed lock handoff on by
@@ -29,7 +31,8 @@ with `/tmp/vt3run.sh NAME SECS ENVFILE` and `python3 /tmp/vt3an.py LOG` (kept ou
 - Measured and dropped (do not retry as is): vectorised index rebasing (faster in the profile,
   slower on the device: the Vulkan ring is uncached and the next draw's recording got slower),
   static vertex buffers on the GPU (`exp/vb-cache`), the DirectSound cursor hold (`exp/ds-hold`),
-  safepoints gated on missing Presents.
+  safepoints gated on missing Presents, converting indices in cached scratch and copying them into the
+  ring in one memcpy (same fps as the direct 2-byte stores: 82.5/83.3/94.0 against 81.3/82.8/94.1).
 - Profile now (simpleperf, `ANDROID_SERIAL=c27c2f60`: a TV is also on adb): `fn_00421e90` (cloth
   solver) 12%, memcpy 9% (half the game's own copies, a quarter each d3d9_draw and the Vulkan draw),
   d3d9_draw 6%, vt_icall 3%, syscall/futex 4%.
