@@ -156,6 +156,21 @@ static void test_dsound_mixer(void)
     CHECK(interp, "24 kHz interpolation: got %d %d %d, want %d %d %d",
           acc[0], acc[2], acc[4], want[0], want[1], want[2]);
 
+    /* A full-scale step interpolated past the midpoint, and a full-scale 5.1 downmix through the
+     * gate, both exceed int32 in the intermediate product: they must not wrap. */
+    static const int16_t step[2] = { -32768, 32767 };
+    memset(acc, 0, sizeof acc);
+    st = (ds_mix_state){ 0, UINT32_MAX, VT3_MIX_GATE_MAX };
+    n = ds_mix_render(acc, 2, (const uint8_t *)step, sizeof step, 1, 16, 2, 0, NULL,
+                      ds_mix_step(36000), 1.0, 1.0, &st);
+    CHECK(n == 2 && acc[2] == 16383, "full-scale step at 0.75: got %d, want 16383", acc[2]);
+    static const int16_t loud51[6] = { 32767, 32767, 32767, 32767, 32767, 32767 };
+    memset(acc, 0, sizeof acc);
+    st = (ds_mix_state){ 0, UINT32_MAX, VT3_MIX_GATE_MAX };
+    n = ds_mix_render(acc, 1, (const uint8_t *)loud51, sizeof loud51, 6, 16, 12, 0, NULL,
+                      ds_mix_step(48000), 1.0, 1.0, &st);
+    CHECK(n == 1 && acc[0] > 79000 && acc[1] > 79000, "full-scale 5.1 downmix: got %d %d", acc[0], acc[1]);
+
     /* 8-bit interpolates too: 0 -> 255 at half rate lands on the midpoint. */
     static const uint8_t bytes8[2] = { 0x00, 0xFF };
     memset(acc, 0, sizeof acc);

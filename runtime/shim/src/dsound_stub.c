@@ -242,7 +242,7 @@ static int32_t lerp_ch(const uint8_t *p0, const uint8_t *p1, uint32_t off, uint3
 {
     int32_t s0 = pcm_sample(p0 + off, bits);
     int32_t s1 = pcm_sample(p1 + off, bits);
-    return s0 + ((s1 - s0) * (int32_t)frac >> 16);
+    return s0 + (int32_t)((int64_t)(s1 - s0) * frac >> 16);   /* 64-bit: a full-scale step times frac overflows int32 */
 }
 
 uint32_t ds_mix_render(int32_t *acc, uint32_t frames, const uint8_t *data, uint32_t bytes,
@@ -307,8 +307,9 @@ uint32_t ds_mix_render(int32_t *acc, uint32_t frames, const uint8_t *data, uint3
                 l = fl + (int32_t)(0.7071 * (c + bl));
                 r = fr + (int32_t)(0.7071 * (c + br));
             }
-            acc[2 * j]     += (int32_t)(((l * gate) >> 15) * gl);
-            acc[2 * j + 1] += (int32_t)(((r * gate) >> 15) * gr);
+            /* 64-bit: a surround downmix reaches ~79k, which times a Q15 gate overflows int32. */
+            acc[2 * j]     += (int32_t)((((int64_t)l * gate) >> 15) * gl);
+            acc[2 * j + 1] += (int32_t)((((int64_t)r * gate) >> 15) * gr);
         }
         st->phase = phase + step_q32;
     }
@@ -876,6 +877,11 @@ HRESULT WINAPI IDirectSoundBuffer_SetFrequency(GPTR This, DWORD dwFrequency)
     if (dwFrequency < DSBFREQUENCY_MIN || dwFrequency > DSBFREQUENCY_MAX) {
         pthread_mutex_unlock(&g_mu);
         return DSERR_INVALIDPARAM;
+    }
+    if (b->playing) {                        /* rebase, or the new rate would move the cursor retroactively */
+        uint64_t now = now_ns();
+        b->play_base = play_cursor_at(b, now);
+        b->play_ns = now;
     }
     b->freq = dwFrequency;
     pthread_mutex_unlock(&g_mu);
