@@ -9,8 +9,10 @@
  * gives, so it reads only what the game has already written: the game writes about 50 ms
  * ahead of that position. The output ring adds about 40 ms of delay before the sound is heard,
  * which does not change what is read. Buffers are converted to 48 kHz stereo 16-bit with
- * nearest-sample resampling and a surround downmix. If no device opens, playback stays silent
- * and the game still runs.
+ * linear interpolation (a 22.05 or 44.1 kHz buffer is resampled smoothly; holding each sample
+ * the way nearest-neighbour does aliases into a hard, gargly edge) and a surround downmix.
+ * SetFrequency changes the playback rate, and SetPan attenuates the far channel. If no device
+ * opens, playback stays silent and the game still runs.
  *
  * A failed creation still writes a stub object (no host data, methods report
  * DSERR_UNSUPPORTED), so a guest creation call does not leave its output empty.
@@ -63,6 +65,7 @@ typedef struct ds_buffer {
     uint32_t freq;
     uint32_t lock_off;           /* where the last Lock began: the Unlock writes start here */
     uint8_t *fresh;              /* one flag per FRESH_BLOCK bytes: set when the game writes it, cleared once played */
+    ds_mix_state mix;            /* resampler state; only the mixer thread reads it, and Play/SetCurrentPosition reset it under g_mu */
 } ds_buffer;
 
 /* ---- output mixer ----------------------------------------------------------
@@ -74,7 +77,9 @@ typedef struct ds_buffer {
 #define MIX_RING_MS 40u
 #define MIX_MAX_FRAMES 960u
 #define MIX_MAX_ACTIVE 64
-#define FRESH_BLOCK 256u
+#define FRESH_BLOCK VT3_MIX_FRESH_BLOCK
+/* Q15 gate change per output frame: the ramp completes inside VT3_MIX_RAMP_FRAMES. */
+#define MIX_GATE_STEP ((VT3_MIX_GATE_MAX + VT3_MIX_RAMP_FRAMES - 1) / VT3_MIX_RAMP_FRAMES)
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static ds_buffer *g_active[MIX_MAX_ACTIVE];
@@ -114,6 +119,12 @@ static uint64_t now_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
 }
 
+/* Little-endian readers for the guest WAVEFORMATEX bytes. */
+static uint16_t fmt16(const uint8_t *f, uint32_t off)
+{
+    return (uint16_t)(f[off] | (f[off + 1] << 8));
+}
+
 /* ---- playback model -------------------------------------------------------- */
 
 static uint32_t avg_bytes_per_sec(const ds_buffer *b)
@@ -121,24 +132,36 @@ static uint32_t avg_bytes_per_sec(const ds_buffer *b)
     return rd32(b->fmt, 8);
 }
 
+/* Bytes a second playback consumes. SetFrequency overrides the format's rate. */
+static uint32_t buf_bps(const ds_buffer *b)
+{
+    uint32_t align = fmt16(b->fmt, 12);
+    uint32_t hz = b->freq ? b->freq : rd32(b->fmt, 4);
+    uint32_t bps = hz * align;
+    return bps ? bps : avg_bytes_per_sec(b);
+}
+
 /* The write cursor runs this far ahead of the play cursor: 50 ms, or half the buffer. */
 static uint32_t write_lead(const ds_buffer *b)
 {
-    uint32_t lead = avg_bytes_per_sec(b) / 20u;
+    uint32_t lead = buf_bps(b) / 20u;
     return lead < b->bytes / 2u ? lead : b->bytes / 2u;
 }
 
-static uint32_t play_cursor(const ds_buffer *b)
+static uint32_t play_cursor_at(const ds_buffer *b, uint64_t now)
 {
     if (!b->playing || b->bytes == 0) return b->pos;
-    uint64_t us = (now_ns() - b->play_ns) / 1000u;
-    uint64_t moved = us * avg_bytes_per_sec(b) / 1000000u;
+    uint64_t us = now > b->play_ns ? (now - b->play_ns) / 1000u : 0;
+    uint64_t moved = us * buf_bps(b) / 1000000u;
     return (uint32_t)((b->play_base + moved) % b->bytes);
 }
 
-static uint32_t write_cursor(const ds_buffer *b)
+/* Both cursors from one clock read, so GetCurrentPosition cannot report a play cursor and a
+ * write cursor taken at different instants. */
+static void cursors_at(const ds_buffer *b, uint64_t now, uint32_t *play, uint32_t *write)
 {
-    return b->bytes ? (play_cursor(b) + write_lead(b)) % b->bytes : 0;
+    *play = play_cursor_at(b, now);
+    *write = b->bytes ? (*play + write_lead(b)) % b->bytes : 0;
 }
 
 /* ---- the mixer ------------------------------------------------------------- */
@@ -161,11 +184,6 @@ static void active_remove_locked(ds_buffer *b)
     }
 }
 
-static uint16_t fmt16(const uint8_t *f, uint32_t off)
-{
-    return (uint16_t)(f[off] | (f[off + 1] << 8));
-}
-
 /* VT3_TRACE_AUDIO=1 logs buffer creation, Play and Stop. */
 static int dsound_trace(void)
 {
@@ -180,12 +198,11 @@ static int32_t pcm_sample(const uint8_t *p, uint32_t bits)
     return bits == 16 ? (int32_t)(int16_t)(p[0] | (p[1] << 8)) : ((int32_t)p[0] - 128) * 256;
 }
 
-/* Adds the sound of one playing buffer to acc for frames output frames. Output frame j is at
- * time t0 + j, so the source position comes from the same wall-clock model as GetCurrentPosition. */
-/* The game's writes mark the FRESH_BLOCK blocks they cover (Unlock). The mixer plays a block only while it
- * is marked, and clears the mark once it has moved past it, so each write plays once. A block the game has
- * not written since the mixer last played it is mixed as silence, not replayed: a late writer then costs a
- * gap instead of a repeat. Without flags (no memory for them) a buffer plays as before. */
+/* The game's writes mark the FRESH_BLOCK blocks they cover (Unlock), and the mixer clears the
+ * mark as it moves past each block, so every write plays exactly once. The mixer core below
+ * fades a block out over VT3_MIX_RAMP_FRAMES when it is not marked: a late writer then costs a
+ * smooth dip instead of a click or a stale repeat. Without flags (no memory for them) a buffer
+ * plays with the gate pinned open. */
 static void mark_fresh(ds_buffer *b, uint32_t off, uint32_t n)
 {
     if (!b->fresh || n == 0 || off >= b->bytes) return;
@@ -193,18 +210,113 @@ static void mark_fresh(ds_buffer *b, uint32_t off, uint32_t n)
     for (uint32_t k = off / FRESH_BLOCK; k * FRESH_BLOCK < end; k++) __atomic_store_n(&b->fresh[k], 1, __ATOMIC_RELEASE);
 }
 
-/* 1 when the block at byte offset off is not fresh. Moving into a new block clears the one left behind. */
-static int stale_block(ds_buffer *b, uint64_t off, uint32_t *last_blk)
+/* ---- the mixer core ---------------------------------------------------------
+ * ds_mix_render, ds_mix_volume and ds_mix_pan are declared in win32/dsound.h and checked by
+ * tests/selftest.c. The phase runs in Q32 source frames: an output frame advances it by
+ * ds_mix_step(rate), and the source frame at bits 32.. is interpolated toward the next one by
+ * the fraction in bits 16..0. At the format's exact 48 kHz the fraction is always zero, so a
+ * 48 kHz buffer passes through bit-exact. */
+
+uint64_t ds_mix_step(uint32_t rate_hz)
 {
-    if (!b->fresh) return 0;
-    uint32_t blk = (uint32_t)(off / FRESH_BLOCK);
-    if (blk != *last_blk) {
-        if (*last_blk != UINT32_MAX) __atomic_store_n(&b->fresh[*last_blk], 0, __ATOMIC_RELAXED);
-        *last_blk = blk;
-    }
-    return !__atomic_load_n(&b->fresh[blk], __ATOMIC_ACQUIRE);
+    return ((uint64_t)rate_hz << 32) / MIX_RATE;
 }
 
+/* DSBVOLUME: hundredths of a dB, 0 (full) down to -10000 (silent). */
+double ds_mix_volume(int32_t hundredths_db)
+{
+    return hundredths_db <= -10000 ? 0.0 : pow(10.0, hundredths_db / 2000.0);
+}
+
+/* DSBPAN: -10000 full left to 10000 full right. */
+void ds_mix_pan(int32_t pan, double *gl, double *gr)
+{
+    if (pan < -10000) pan = -10000;
+    if (pan > 10000) pan = 10000;
+    *gl = pan > 0 ? 1.0 - pan / 10000.0 : 1.0;
+    *gr = pan < 0 ? 1.0 + pan / 10000.0 : 1.0;
+}
+
+/* One channel of one frame, linearly interpolated between the frame at p0 and the next. */
+static int32_t lerp_ch(const uint8_t *p0, const uint8_t *p1, uint32_t off, uint32_t bits, uint32_t frac)
+{
+    int32_t s0 = pcm_sample(p0 + off, bits);
+    int32_t s1 = pcm_sample(p1 + off, bits);
+    return s0 + ((s1 - s0) * (int32_t)frac >> 16);
+}
+
+uint32_t ds_mix_render(int32_t *acc, uint32_t frames, const uint8_t *data, uint32_t bytes,
+                       uint32_t nch, uint32_t bits, uint32_t align, int looping,
+                       uint8_t *fresh, uint64_t step_q32, double gl, double gr,
+                       ds_mix_state *st)
+{
+    uint32_t src_frames = bytes / align;
+    if (src_frames == 0 || step_q32 == 0 || nch == 0 || (bits != 8 && bits != 16)) return 0;
+    uint32_t bpsamp = bits / 8;
+    uint64_t wrap = (uint64_t)src_frames << 32;
+    uint32_t j;
+    for (j = 0; j < frames; j++) {
+        uint64_t phase = st->phase;
+        if (phase >= wrap) {
+            if (!looping) break;
+            do { phase -= wrap; } while (phase >= wrap);
+        }
+        uint32_t f = (uint32_t)(phase >> 32);
+
+        /* The game's writes mark the FRESH_BLOCK blocks they cover (Unlock); the mixer clears
+         * a block as it leaves it, so each write plays once. A block the game has not written
+         * since the mixer last played it is stale: its gate fades to silence instead of
+         * cutting to it (a click) or replaying the old audio (the repeats e8d1a37 removed). */
+        int32_t target = VT3_MIX_GATE_MAX;
+        if (fresh) {
+            uint32_t blk = (uint32_t)((f * (uint64_t)align) / FRESH_BLOCK);
+            if (blk != st->last_blk) {
+                if (st->last_blk != UINT32_MAX) __atomic_store_n(&fresh[st->last_blk], 0, __ATOMIC_RELAXED);
+                st->last_blk = blk;
+            }
+            /* Acquire, pairing with mark_fresh's release: the game's samples must be visible
+             * once the flag is. A missed mark only extends the dip by one ramp. */
+            if (!__atomic_load_n(&fresh[blk], __ATOMIC_ACQUIRE)) target = 0;
+        }
+        int32_t gate = st->gate;
+        if (gate < target)      { gate += MIX_GATE_STEP; if (gate > target) gate = target; }
+        else if (gate > target) { gate -= MIX_GATE_STEP; if (gate < target) gate = target; }
+        st->gate = gate;
+
+        if (gate) {
+            uint32_t f2 = f + 1 < src_frames ? f + 1 : (looping ? 0 : f);
+            const uint8_t *p0 = data + f * (uint64_t)align;
+            const uint8_t *p1 = data + f2 * (uint64_t)align;
+            uint32_t frac = (uint32_t)(phase >> 16) & 0xFFFFu;
+            int32_t l, r;
+            if (nch == 1) {
+                l = r = lerp_ch(p0, p1, 0, bits, frac);
+            } else if (nch == 2) {
+                l = lerp_ch(p0, p1, 0, bits, frac);
+                r = lerp_ch(p0, p1, bpsamp, bits, frac);
+            } else {
+                /* Surround in SPEAKER order: FL, FR, FC, LFE, BL, BR (quad: FL, FR, BL, BR). The centre and
+                 * the rears fold into the stereo pair at -3 dB; the LFE channel is left out. */
+                int32_t fl = lerp_ch(p0, p1, 0, bits, frac);
+                int32_t fr = lerp_ch(p0, p1, bpsamp, bits, frac);
+                int32_t c = nch == 4 ? 0 : lerp_ch(p0, p1, 2 * bpsamp, bits, frac);
+                int32_t bl = nch == 4 ? lerp_ch(p0, p1, 2 * bpsamp, bits, frac)
+                           : nch >= 6 ? lerp_ch(p0, p1, 4 * bpsamp, bits, frac) : 0;
+                int32_t br = nch == 4 ? lerp_ch(p0, p1, 3 * bpsamp, bits, frac)
+                           : nch >= 6 ? lerp_ch(p0, p1, 5 * bpsamp, bits, frac) : 0;
+                l = fl + (int32_t)(0.7071 * (c + bl));
+                r = fr + (int32_t)(0.7071 * (c + br));
+            }
+            acc[2 * j]     += (int32_t)(((l * gate) >> 15) * gl);
+            acc[2 * j + 1] += (int32_t)(((r * gate) >> 15) * gr);
+        }
+        st->phase = phase + step_q32;
+    }
+    return j;
+}
+
+/* Mixes one playing buffer into acc for frames output frames, starting at output time t0. The
+ * start position comes from the same wall-clock model as GetCurrentPosition, so the two agree. */
 static void mix_buffer_locked(ds_buffer *b, int32_t *acc, uint32_t frames, uint64_t t0)
 {
     uint32_t nch = fmt16(b->fmt, 2), bits = fmt16(b->fmt, 14), align = fmt16(b->fmt, 12);
@@ -213,45 +325,30 @@ static void mix_buffer_locked(ds_buffer *b, int32_t *acc, uint32_t frames, uint6
     const uint8_t *data = d3d9_gmem(b->storage, b->bytes);
     if (!data) return;
     uint32_t src_frames = b->bytes / align;
-    uint32_t bps = avg_bytes_per_sec(b);
-    double gain = b->volume <= -10000 ? 0.0 : pow(10.0, b->volume / 2000.0);   /* hundredths of dB */
-    uint32_t bytes_per_sample = bits / 8;
-    uint32_t last_blk = UINT32_MAX;
-    for (uint32_t j = 0; j < frames; j++) {
-        uint64_t t = t0 + (uint64_t)j * 1000000000u / MIX_RATE;
-        double moved = t > b->play_ns ? (double)(t - b->play_ns) * bps / 1e9 : 0.0;
-        double pos = (double)b->play_base + moved;
-        if (!b->looping && pos >= (double)b->bytes) {
-            /* A non-looping buffer stops at its end. */
-            b->playing = 0;
-            b->pos = 0;
-            active_remove_locked(b);
-            return;
-        }
-        uint64_t f = ((uint64_t)pos / align) % src_frames;
-        const uint8_t *fr = data + f * align;
-        int32_t l, r;
-        if (stale_block(b, f * align, &last_blk)) {
-            l = r = 0;                           /* not written since it was last played: silence, not a replay */
-        } else if (nch == 1) {
-            l = r = pcm_sample(fr, bits);
-        } else if (nch == 2) {
-            l = pcm_sample(fr, bits);
-            r = pcm_sample(fr + bytes_per_sample, bits);
-        } else {
-            /* Surround in SPEAKER order: FL, FR, FC, LFE, BL, BR (quad: FL, FR, BL, BR). The centre and
-             * the rears fold into the stereo pair at -3 dB; the LFE channel is left out. */
-            int32_t fl = pcm_sample(fr, bits), fr_ = pcm_sample(fr + bytes_per_sample, bits);
-            int32_t c = nch == 4 ? 0 : pcm_sample(fr + 2 * bytes_per_sample, bits);
-            int32_t bl = nch == 4 ? pcm_sample(fr + 2 * bytes_per_sample, bits)
-                       : nch >= 6 ? pcm_sample(fr + 4 * bytes_per_sample, bits) : 0;
-            int32_t br = nch == 4 ? pcm_sample(fr + 3 * bytes_per_sample, bits)
-                       : nch >= 6 ? pcm_sample(fr + 5 * bytes_per_sample, bits) : 0;
-            l = fl + (int32_t)(0.7071 * (c + bl));
-            r = fr_ + (int32_t)(0.7071 * (c + br));
-        }
-        acc[2 * j] += (int32_t)(l * gain);
-        acc[2 * j + 1] += (int32_t)(r * gain);
+    uint32_t hz = b->freq ? b->freq : rate;        /* SetFrequency overrides the format's rate */
+    uint64_t moved_ns = t0 > b->play_ns ? t0 - b->play_ns : 0;
+    double start = (double)(b->play_base / align) + (double)moved_ns * (double)hz / 1e9;
+    if (b->looping) {
+        start = fmod(start, (double)src_frames);
+    } else if (start >= (double)src_frames) {        /* a non-looping buffer has played out */
+        b->playing = 0;
+        b->pos = 0;
+        active_remove_locked(b);
+        return;
+    }
+    b->mix.phase = (uint64_t)(start * 4294967296.0);
+    double gain = ds_mix_volume(b->volume), gl, gr;
+    ds_mix_pan(b->pan, &gl, &gr);
+    gl *= gain;
+    gr *= gain;
+    uint32_t done = ds_mix_render(acc, frames, data, b->bytes, nch, bits, align, b->looping,
+                                  b->fresh, ds_mix_step(hz), gl, gr, &b->mix);
+    if (done < frames) {                             /* the buffer ran out mid-chunk */
+        b->playing = 0;
+        b->pos = 0;
+        b->mix.gate = 0;
+        b->mix.last_blk = UINT32_MAX;
+        active_remove_locked(b);
     }
 }
 
@@ -372,6 +469,7 @@ static GPTR buffer_new(GPTR parent, uint32_t bytes, const uint8_t *fmt)
     memcpy(b->fmt, fmt, WFX_BYTES);
     b->freq = rd32(fmt, 4);
     b->volume = DSBVOLUME_MAX;
+    b->mix.last_blk = UINT32_MAX;
     GPTR obj = d3d9_obj_new(D3D9_KIND_DSBUFFER, b, parent);
     if (!obj) {
         HeapFree(GetProcessHeap(), 0, b->storage);
@@ -509,6 +607,13 @@ HRESULT WINAPI IDirectSound_DuplicateSoundBuffer(GPTR This, GPTR pdsbOriginal, G
     const void *from = d3d9_gmem(src->storage, src->bytes);
     void *to = d3d9_gmem(buf_of(obj)->storage, src->bytes);
     if (from && to) memcpy(to, from, src->bytes);
+    ds_buffer *d = buf_of(obj);                /* a duplicate copies the settings too */
+    if (d) {
+        d->volume = src->volume;
+        d->pan = src->pan;
+        d->freq = src->freq;
+        d->pos = src->pos;
+    }
     put32(ppdsbDuplicate, obj);
     return DS_OK;
 }
@@ -571,12 +676,15 @@ HRESULT WINAPI IDirectSoundBuffer_GetCurrentPosition(GPTR This, GPTR pdwCurrentP
 {
     ds_buffer *b = buf_of(This);
     if (!b) return DSERR_UNSUPPORTED;
-    put32(pdwCurrentPlayCursor, play_cursor(b));
-    put32(pdwCurrentWriteCursor, write_cursor(b));
+    uint32_t play, write;
+    uint64_t now = now_ns();
+    cursors_at(b, now, &play, &write);
+    put32(pdwCurrentPlayCursor, play);
+    put32(pdwCurrentWriteCursor, write);
     if (dsound_trace())
         VT3_INFO("DirectSound: GetCurrentPosition 0x%08x play %u write %u (playing %d) t=%llu ms thr %llu", (unsigned)This,
-                 (unsigned)play_cursor(b), (unsigned)write_cursor(b), b->playing,
-                 (unsigned long long)(now_ns() / 1000000u % 100000u), (unsigned long long)((uintptr_t)pthread_self() % 1000u));
+                 (unsigned)play, (unsigned)write, b->playing,
+                 (unsigned long long)(now / 1000000u % 100000u), (unsigned long long)((uintptr_t)pthread_self() % 1000u));
     return DS_OK;
 }
 
@@ -649,14 +757,18 @@ HRESULT WINAPI IDirectSoundBuffer_Lock(GPTR This, DWORD dwOffset, DWORD dwBytes,
     put32(ppvAudioPtr2, 0);
     put32(pdwAudioBytes2, 0);
     uint32_t off = dwOffset, n = dwBytes;
-    if (dwFlags & DSBLOCK_FROMWRITECURSOR) off = write_cursor(b);
+    if (dwFlags & DSBLOCK_FROMWRITECURSOR) {
+        uint32_t play, write;
+        cursors_at(b, now_ns(), &play, &write);
+        off = write;
+    }
     if (dwFlags & DSBLOCK_ENTIREBUFFER) {
         off = 0;
         n = b->bytes;
     }
     if (dsound_trace())
         VT3_INFO("DirectSound: Lock 0x%08x offset %u bytes %u flags 0x%x (play %u) t=%llu ms thr %llu", (unsigned)This, (unsigned)off,
-                 (unsigned)n, (unsigned)dwFlags, (unsigned)play_cursor(b),
+                 (unsigned)n, (unsigned)dwFlags, (unsigned)play_cursor_at(b, now_ns()),
                  (unsigned long long)(now_ns() / 1000000u % 100000u), (unsigned long long)((uintptr_t)pthread_self() % 1000u));
     if (!b->bytes || off >= b->bytes || n > b->bytes) return DSERR_INVALIDPARAM;
     b->lock_off = off;
@@ -689,6 +801,8 @@ HRESULT WINAPI IDirectSoundBuffer_Play(GPTR This, DWORD dwReserved1, DWORD dwPri
         b->playing = 1;
         b->play_base = b->pos;
         b->play_ns = now_ns();
+        b->mix.gate = 0;                     /* fade in over the ramp: no click at the start */
+        b->mix.last_blk = UINT32_MAX;
         active_add_locked(b);
     }
     pthread_mutex_unlock(&g_mu);
@@ -703,13 +817,20 @@ HRESULT WINAPI IDirectSoundBuffer_SetCurrentPosition(GPTR This, DWORD dwNewPosit
     if (dsound_trace())
         VT3_INFO("DirectSound: SetCurrentPosition 0x%08x to %u (playing %d)", (unsigned)This, (unsigned)dwNewPosition,
                  b->playing);
+    pthread_mutex_lock(&g_mu);
     b->pos = dwNewPosition;
     if (b->playing) {
         b->play_base = dwNewPosition;
         b->play_ns = now_ns();
     }
+    b->mix.gate = 0;                         /* a position jump starts a fresh fade */
+    b->mix.last_blk = UINT32_MAX;
+    pthread_mutex_unlock(&g_mu);
     return DS_OK;
 }
+
+/* The setters below run on a game thread while the mixer reads the same fields; they take g_mu
+ * so the mixer never sees a half-updated format, rate, volume or pan. */
 
 HRESULT WINAPI IDirectSoundBuffer_SetFormat(GPTR This, GPTR pcfxFormat)
 {
@@ -717,8 +838,10 @@ HRESULT WINAPI IDirectSoundBuffer_SetFormat(GPTR This, GPTR pcfxFormat)
     if (!b) return DSERR_UNSUPPORTED;
     const uint8_t *f = pcfxFormat ? d3d9_gmem(pcfxFormat, WFX_BYTES) : NULL;
     if (!f) return DSERR_INVALIDPARAM;
+    pthread_mutex_lock(&g_mu);
     memcpy(b->fmt, f, WFX_BYTES);
     b->freq = rd32(f, 4);
+    pthread_mutex_unlock(&g_mu);
     return DS_OK;
 }
 
@@ -727,7 +850,9 @@ HRESULT WINAPI IDirectSoundBuffer_SetVolume(GPTR This, INT lVolume)
     ds_buffer *b = buf_of(This);
     if (!b) return DSERR_UNSUPPORTED;
     if (lVolume > DSBVOLUME_MAX || lVolume < DSBVOLUME_MIN) return DSERR_INVALIDPARAM;
+    pthread_mutex_lock(&g_mu);
     b->volume = lVolume;
+    pthread_mutex_unlock(&g_mu);
     return DS_OK;
 }
 
@@ -736,7 +861,9 @@ HRESULT WINAPI IDirectSoundBuffer_SetPan(GPTR This, INT lPan)
     ds_buffer *b = buf_of(This);
     if (!b) return DSERR_UNSUPPORTED;
     if (lPan > DSBPAN_RIGHT || lPan < DSBPAN_LEFT) return DSERR_INVALIDPARAM;
+    pthread_mutex_lock(&g_mu);
     b->pan = lPan;
+    pthread_mutex_unlock(&g_mu);
     return DS_OK;
 }
 
@@ -744,9 +871,14 @@ HRESULT WINAPI IDirectSoundBuffer_SetFrequency(GPTR This, DWORD dwFrequency)
 {
     ds_buffer *b = buf_of(This);
     if (!b) return DSERR_UNSUPPORTED;
+    pthread_mutex_lock(&g_mu);
     if (dwFrequency == DSBFREQUENCY_ORIGINAL) dwFrequency = rd32(b->fmt, 4);
-    if (dwFrequency < DSBFREQUENCY_MIN || dwFrequency > DSBFREQUENCY_MAX) return DSERR_INVALIDPARAM;
+    if (dwFrequency < DSBFREQUENCY_MIN || dwFrequency > DSBFREQUENCY_MAX) {
+        pthread_mutex_unlock(&g_mu);
+        return DSERR_INVALIDPARAM;
+    }
     b->freq = dwFrequency;
+    pthread_mutex_unlock(&g_mu);
     return DS_OK;
 }
 
@@ -758,7 +890,7 @@ HRESULT WINAPI IDirectSoundBuffer_Stop(GPTR This)
         VT3_INFO("DirectSound: Stop 0x%08x (playing %d)", (unsigned)This, b->playing);
     pthread_mutex_lock(&g_mu);
     if (b->playing) {
-        b->pos = play_cursor(b);
+        b->pos = play_cursor_at(b, now_ns());
         b->playing = 0;
         b->looping = 0;                  /* the looping status belongs to the playback that Stop ends */
         active_remove_locked(b);

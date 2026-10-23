@@ -153,7 +153,7 @@ Type 4 (exponential scale) and type 2 (fixed coefficients) return
 | kernel32 file I/O | Read-only: CreateFileA (OPEN_EXISTING only), ReadFile, SetFilePointer, GetFileSize, CloseHandle. Case-insensitive per path component. WriteFile and overlapped I/O return "not implemented". |
 | kernel32 timers | Implemented: GetTickCount, timeGetTime, QueryPerformanceCounter/Frequency, Sleep. |
 | Direct3D 9 | **Sketch only.** `d3d9.h` has the IDirect3D9 (17) and IDirect3DDevice9 (119) vtables, checked slot by slot against the SDK. `Direct3DCreate9` logs and returns NULL. |
-| DirectSound | **Sketch only.** `dsound.h` has IDirectSound (11), IDirectSoundBuffer (21), and WAVEFORMATEX (packed, 18 bytes), all checked against the SDK. `DirectSoundCreate` returns DSERR_NODRIVER. |
+| DirectSound | Implemented (`dsound_stub.c`): buffers hold PCM in guest memory, the play cursor follows the wall clock, and a mixer thread renders every playing buffer to 48 kHz stereo through `vt3_audio.h` with interpolated resampling, volume, pan, and a 2 ms gate over blocks the game has not written. Layouts in `dsound.h` are checked against the SDK (`tests/sdk_layout_check.c`), and the mixer core against `tests/selftest.c`. |
 | DirectInput 8 | **Sketch only.** `dinput.h` has IDirectInput8A (11) and IDirectInputDevice8A (32), checked against the SDK. `DirectInput8Create` logs and returns E_NOTIMPL. |
 | Android | Not started. |
 
@@ -166,5 +166,4 @@ Unimplemented shim calls log a warning once per API name (`vt3s_unimpl`).
 - `kernel32_heap.c`: hash or size-class lookup. `HeapDestroy` does not return regions to the arena.
 - `shim_core.c`: the handle table and `g_last_error` are not thread-safe. Only the heap has a lock.
 - D3D9: vtable thunks in guest memory, the rest of the vertex formats, and a `Present` that calls `vt3_gfx_present` and `vt3_platform_swap`.
-- Audio: a DirectSound buffer adapter over `vt3_ringbuf`, and an output format check against the game's `SetFormat`.
 - Android: a GLES 3.0 backend, the SDL3 Android entry point, and a controller map for the Retroid.

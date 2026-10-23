@@ -21,6 +21,7 @@
 #include "vt3/vt3_renderer.h"
 #include "vt3shim/shim.h"
 #include "win32/dinput.h"
+#include "win32/dsound.h"
 #include "win32/kernel32.h"
 
 #include <errno.h>
@@ -102,6 +103,152 @@ static void test_ringbuf(void)
 
     vt3_rb_destroy(rb);
     printf("PASS ringbuf\n");
+}
+
+/* ---- DirectSound mixer --------------------------------------------------- */
+
+static void test_dsound_mixer(void)
+{
+    int32_t acc[512 * 2];                     /* holds the 300-frame render below */
+    ds_mix_state st;
+    double gl, gr;
+    uint32_t n;
+
+    /* The phase step is the source rate in Q32 frames against the 48 kHz output. */
+    CHECK(ds_mix_step(48000) == (1ull << 32), "step at 48 kHz: %llu", (unsigned long long)ds_mix_step(48000));
+    CHECK(ds_mix_step(24000) == (1ull << 31), "step at 24 kHz: %llu", (unsigned long long)ds_mix_step(24000));
+
+    /* Volume: 0 dB is unity, -10000 is silent, -600 is about -6 dB. */
+    CHECK(ds_mix_volume(0) == 1.0, "volume at 0 dB: %f", ds_mix_volume(0));
+    CHECK(ds_mix_volume(-10000) == 0.0, "volume at DSBVOLUME_MIN");
+    CHECK(fabs(ds_mix_volume(-600) - 0.5012) < 0.001, "volume at -6 dB: %f", ds_mix_volume(-600));
+
+    /* Pan: the far channel falls linearly, the near one stays at full. */
+    ds_mix_pan(0, &gl, &gr);
+    CHECK(gl == 1.0 && gr == 1.0, "pan centre: %f %f", gl, gr);
+    ds_mix_pan(-10000, &gl, &gr);
+    CHECK(gl == 1.0 && gr == 0.0, "pan full left: %f %f", gl, gr);
+    ds_mix_pan(10000, &gl, &gr);
+    CHECK(gl == 0.0 && gr == 1.0, "pan full right: %f %f", gl, gr);
+    ds_mix_pan(-5000, &gl, &gr);
+    CHECK(gl == 1.0 && gr == 0.5, "pan half left: %f %f", gl, gr);
+
+    /* 48 kHz stereo 16-bit passes through bit-exact: the interpolation fraction is always zero. */
+    static const int16_t pcm[16] = { 0, 1000, -1000, 20000, -20000, 12345, -12345, 32767,
+                                     111, -222, 333, -444, 555, -666, 777, -888 };
+    memset(acc, 0, sizeof acc);
+    st = (ds_mix_state){ 0, UINT32_MAX, VT3_MIX_GATE_MAX };
+    n = ds_mix_render(acc, 8, (const uint8_t *)pcm, sizeof pcm, 2, 16, 4, 0, NULL,
+                      ds_mix_step(48000), 1.0, 1.0, &st);
+    int exact = (n == 8);
+    for (int j = 0; j < 16; j++) exact &= (acc[j] == pcm[j]);
+    CHECK(exact, "48 kHz stereo must pass through bit-exact");
+
+    /* 24 kHz mono interpolates: each output frame sits half-way between the source samples. */
+    static const int16_t ramp[4] = { 0, 100, 200, 300 };
+    memset(acc, 0, sizeof acc);
+    st = (ds_mix_state){ 0, UINT32_MAX, VT3_MIX_GATE_MAX };
+    n = ds_mix_render(acc, 6, (const uint8_t *)ramp, sizeof ramp, 1, 16, 2, 0, NULL,
+                      ds_mix_step(24000), 1.0, 1.0, &st);
+    static const int32_t want[6] = { 0, 50, 100, 150, 200, 250 };
+    int interp = (n == 6);
+    for (int j = 0; j < 6; j++) interp &= (acc[2 * j] == want[j] && acc[2 * j + 1] == want[j]);
+    CHECK(interp, "24 kHz interpolation: got %d %d %d, want %d %d %d",
+          acc[0], acc[2], acc[4], want[0], want[1], want[2]);
+
+    /* 8-bit interpolates too: 0 -> 255 at half rate lands on the midpoint. */
+    static const uint8_t bytes8[2] = { 0x00, 0xFF };
+    memset(acc, 0, sizeof acc);
+    st = (ds_mix_state){ 0, UINT32_MAX, VT3_MIX_GATE_MAX };
+    n = ds_mix_render(acc, 2, bytes8, sizeof bytes8, 1, 8, 1, 0, NULL,
+                      ds_mix_step(24000), 1.0, 1.0, &st);
+    CHECK(n == 2 && acc[0] == -32768 && acc[2] == -128,
+          "8-bit half-rate interpolation: n=%u, %d %d", n, acc[0], acc[2]);
+
+    /* A block the game has not written keeps the gate shut: the old audio is never replayed
+     * (the repeats e8d1a37 removed), and Play starts with the gate closed, so the start of a
+     * sound is silent rather than a mid-waveform click. */
+    int16_t loud[128];
+    for (int i = 0; i < 128; i++) loud[i] = 10000;
+    uint8_t fresh[1] = { 0 };                     /* 256 bytes = one FRESH_BLOCK, unwritten */
+    memset(acc, 0, sizeof acc);
+    st = (ds_mix_state){ 0, UINT32_MAX, 0 };      /* as Play leaves it: gate closed */
+    n = ds_mix_render(acc, 32, (const uint8_t *)loud, sizeof loud, 1, 16, 2, 1, fresh,
+                      ds_mix_step(48000), 1.0, 1.0, &st);
+    int silent = (n == 32);
+    for (int j = 0; j < 32; j++) silent &= (acc[2 * j] == 0 && acc[2 * j + 1] == 0);
+    CHECK(silent, "a stale block with the gate closed must stay silent");
+    CHECK(st.gate == 0, "gate on a stale block: %d", st.gate);
+
+    /* Fade-in: fresh data ramps the gate up over 2 ms without a step larger than the ramp. */
+    fresh[0] = 1;
+    memset(acc, 0, sizeof acc);
+    n = ds_mix_render(acc, 128, (const uint8_t *)loud, sizeof loud, 1, 16, 2, 1, fresh,
+                      ds_mix_step(48000), 1.0, 1.0, &st);
+    int fade_in = (n == 128) && acc[0] > 0 && acc[0] < 200;
+    for (int j = 1; j < 128; j++) fade_in &= (acc[2 * j] >= acc[2 * (j - 1)]);
+    fade_in &= (acc[2 * 127] == 10000);
+    CHECK(fade_in, "fade-in: first %d, last %d", acc[0], acc[2 * 127]);
+
+    /* Fade-out: a block the game stops writing dips smoothly to silence instead of cutting. */
+    fresh[0] = 0;
+    memset(acc, 0, sizeof acc);
+    n = ds_mix_render(acc, 128, (const uint8_t *)loud, sizeof loud, 1, 16, 2, 1, fresh,
+                      ds_mix_step(48000), 1.0, 1.0, &st);
+    int fade_out = (n == 128) && acc[0] < 10000 && acc[0] > 9000;
+    for (int j = 1; j < 96; j++) fade_out &= (acc[2 * j] <= acc[2 * (j - 1)]);
+    for (int j = 96; j < 128; j++) fade_out &= (acc[2 * j] == 0);
+    CHECK(fade_out, "fade-out: first %d, at 95 %d", acc[0], acc[2 * 95]);
+    CHECK(st.gate == 0, "gate after fading out: %d", st.gate);
+
+    /* Leaving a block clears its mark, so each write plays exactly once. */
+    static const uint8_t ramp8[512] = { 0 };      /* 512 bytes = two blocks */
+    uint8_t fresh2[2] = { 1, 1 };
+    memset(acc, 0, sizeof acc);
+    st = (ds_mix_state){ 0, UINT32_MAX, VT3_MIX_GATE_MAX };
+    n = ds_mix_render(acc, 300, ramp8, sizeof ramp8, 1, 8, 1, 1, fresh2,
+                      ds_mix_step(48000), 1.0, 1.0, &st);
+    CHECK(n == 300 && fresh2[0] == 0 && fresh2[1] == 1 && st.last_blk == 1,
+          "block marks: n=%u, fresh %u %u, last %u", n, fresh2[0], fresh2[1], st.last_blk);
+
+    /* A non-looping buffer stops at its end; a looping one wraps and keeps its continuity. */
+    static const int16_t four[4] = { 100, 200, 300, 400 };
+    memset(acc, 0, sizeof acc);
+    st = (ds_mix_state){ 0, UINT32_MAX, VT3_MIX_GATE_MAX };
+    n = ds_mix_render(acc, 10, (const uint8_t *)four, sizeof four, 1, 16, 2, 0, NULL,
+                      ds_mix_step(48000), 1.0, 1.0, &st);
+    CHECK(n == 4, "a non-looping buffer must stop at its end: %u", n);
+    memset(acc, 0, sizeof acc);
+    st = (ds_mix_state){ 0, UINT32_MAX, VT3_MIX_GATE_MAX };
+    n = ds_mix_render(acc, 10, (const uint8_t *)four, sizeof four, 1, 16, 2, 1, NULL,
+                      ds_mix_step(48000), 1.0, 1.0, &st);
+    static const int32_t looped[10] = { 100, 200, 300, 400, 100, 200, 300, 400, 100, 200 };
+    int wrap = (n == 10);
+    for (int j = 0; j < 10; j++) wrap &= (acc[2 * j] == looped[j]);
+    CHECK(wrap, "a looping buffer must wrap");
+
+    /* Pan is applied per channel, and buffers sum into the accumulator. */
+    static const int16_t stereo[2] = { 1000, 2000 };
+    memset(acc, 0, sizeof acc);
+    st = (ds_mix_state){ 0, UINT32_MAX, VT3_MIX_GATE_MAX };
+    n = ds_mix_render(acc, 1, (const uint8_t *)stereo, sizeof stereo, 2, 16, 4, 0, NULL,
+                      ds_mix_step(48000), 1.0, 0.0, &st);
+    CHECK(n == 1 && acc[0] == 1000 && acc[1] == 0, "pan full right must silence the left");
+    st = (ds_mix_state){ 0, UINT32_MAX, VT3_MIX_GATE_MAX };
+    ds_mix_render(acc, 1, (const uint8_t *)stereo, sizeof stereo, 2, 16, 4, 0, NULL,
+                  ds_mix_step(48000), 1.0, 1.0, &st);
+    CHECK(acc[0] == 2000 && acc[1] == 2000, "buffers must sum: got %d %d", acc[0], acc[1]);
+
+    /* Six channels fold to stereo at -3 dB, LFE out: FL + 0.7071*(FC+BL), FR + 0.7071*(FC+BR).
+     * The sums are chosen away from exact integers so the truncating fold is deterministic. */
+    static const int16_t six[6] = { 1000, 2000, 3000, 9999, 5000, 6000 };
+    memset(acc, 0, sizeof acc);
+    st = (ds_mix_state){ 0, UINT32_MAX, VT3_MIX_GATE_MAX };
+    n = ds_mix_render(acc, 1, (const uint8_t *)six, sizeof six, 6, 16, 12, 0, NULL,
+                      ds_mix_step(48000), 1.0, 1.0, &st);
+    CHECK(n == 1 && acc[0] == 6656 && acc[1] == 8363, "surround fold: got %d %d", acc[0], acc[1]);
+
+    printf("PASS dsound mixer\n");
 }
 
 /* ---- heap --------------------------------------------------------------- */
@@ -605,6 +752,7 @@ int vt3_selftest_run(const char *adx_path)
 
     test_letterbox();
     test_ringbuf();
+    test_dsound_mixer();
     test_coefs();
     test_dxt_colour();
     test_heap();

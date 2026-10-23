@@ -32,8 +32,9 @@ static aaudio_data_callback_result_t data_callback(AAudioStream *stream, void *u
     size_t got = 0;
     if (atomic_load(&a->playing)) {
         got = vt3_rb_read(a->rb, audio, want);
-        /* A short read mid-stream means the writer fell behind; the rest of the buffer is silence. */
-        if (got < want) atomic_fetch_add(&a->underruns, 1);
+        /* Only a partial read counts: the writer fell behind mid-stream.
+         * An empty ring (startup, or after the sound ends) is silence. */
+        if (got > 0 && got < want) atomic_fetch_add(&a->underruns, 1);
         atomic_fetch_add(&a->played, got);
     }
     if (got < want) memset((uint8_t *)audio + got, 0, want - got);
@@ -99,7 +100,8 @@ void vt3_audio_close(vt3_audio *a)
 
 size_t vt3_audio_write(vt3_audio *a, const void *pcm, size_t bytes)
 {
-    return vt3_rb_write(a->rb, pcm, bytes);
+    size_t whole = bytes - (bytes % a->frame_bytes);   /* never split a frame across the ring */
+    return vt3_rb_write(a->rb, pcm, whole);
 }
 
 size_t vt3_audio_space(const vt3_audio *a)
