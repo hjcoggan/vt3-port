@@ -158,7 +158,16 @@ if(VT3_ANDROID)
     # vt3.c is about 100 MB. -O2 without debug info (the NDK adds -g; the library is stripped
     # anyway) compiles in 148 s at 5.7 GB peak, against 253 s and 7.6 GB for -O1 with it, and
     # the Retroid ran 2-4 fps faster in three rotated pairs.
-    set_source_files_properties(${VT3_GAME_DIR}/vt3.c PROPERTIES COMPILE_OPTIONS "-O2;-g0;-std=gnu11;-w;-ffp-contract=off")
+    set(VT3_PGO "" CACHE STRING "gen, or the path of a merged .profdata to use")
+    if(VT3_PGO STREQUAL "gen")
+        set_source_files_properties(${VT3_GAME_DIR}/vt3.c PROPERTIES COMPILE_OPTIONS "-O2;-g0;-std=gnu11;-w;-ffp-contract=off;-fprofile-generate")
+        target_compile_definitions(vt3android PRIVATE VT3_PGO_GEN)
+        target_link_options(vt3android PRIVATE -fprofile-generate)
+    elseif(VT3_PGO)
+        set_source_files_properties(${VT3_GAME_DIR}/vt3.c PROPERTIES COMPILE_OPTIONS "-O2;-g0;-std=gnu11;-w;-ffp-contract=off;-fprofile-use=${VT3_PGO};-Wno-profile-instr-unprofiled")
+    else()
+        set_source_files_properties(${VT3_GAME_DIR}/vt3.c PROPERTIES COMPILE_OPTIONS "-O2;-g0;-std=gnu11;-w;-ffp-contract=off")
+    endif()
     # The weak defaults in vt3shim must lose to the real renderer, platform and audio in vt3core, so
     # every member of both archives is linked in (as -all_load does on the desktop).
     target_link_libraries(vt3android PRIVATE "-Wl,--whole-archive" vt3shim vt3core "-Wl,--no-whole-archive"

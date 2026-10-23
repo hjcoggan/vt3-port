@@ -11,7 +11,9 @@
 #include <android/window.h>
 #include <android_native_app_glue.h>
 #include <stdio.h>
+#include <pthread.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 
 /* Defined in src/platform/platform_android.c */
@@ -45,8 +47,29 @@ static void apply_env_file(const char *path)
     fclose(f);
 }
 
+#ifdef VT3_PGO_GEN
+/* Profile-guided build, collecting: the app is force-stopped rather than exiting, so write the
+ * counters every 20 s. */
+int __llvm_profile_write_file(void);
+void __llvm_profile_set_filename(const char *name);
+static void *pgo_dump(void *arg)
+{
+    (void)arg;
+    __llvm_profile_set_filename(VT3_ANDROID_ROOT "/vt3.profraw");
+    for (;;) {
+        sleep(20);
+        __llvm_profile_write_file();
+    }
+    return NULL;
+}
+#endif
+
 void android_main(struct android_app *app)
 {
+#ifdef VT3_PGO_GEN
+    pthread_t pgo;
+    pthread_create(&pgo, NULL, pgo_dump, NULL);
+#endif
     vt3_platform_android_attach(app);
     apply_env_file(VT3_ANDROID_ROOT "/vt3.env");
     /* Full screen: the game draws over the whole panel, with no status bar (the activity has no Java). */
