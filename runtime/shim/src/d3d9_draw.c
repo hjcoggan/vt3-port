@@ -203,10 +203,12 @@ static void copy_vertices(uint8_t *dst, const uint8_t *src, uint32_t n, uint32_t
         if ((e[0] | (e[1] << 8)) != 0 || e[4] != DT_D3DCOLOR) continue;
         uint32_t off = e[2] | (e[3] << 8);
         if (off + 4 > stride) continue;     /* past the end of the vertex: nothing to swap */
+        /* Read the bytes from src: dst may be the renderer's write-combined ring, slow to read. */
         for (uint32_t v = 0; v < n; v++) {
             uint8_t *p = dst + (size_t)v * stride + off;
-            uint8_t t = p[0];
-            p[0] = p[2];
+            const uint8_t *q = src + (size_t)v * stride + off;
+            uint8_t t = q[0];
+            p[0] = q[2];
             p[2] = t;
         }
     }
@@ -795,7 +797,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     uint32_t nidx = nverts;
     /* Shader draws can have the renderer write the converted indices straight into its ring. The
      * fixed-function TL path builds its own vertex list and calls vt3_gfx_draw, so it uses scratch. */
-    int ring_indices = d->vs != 0;
+    int ring_indices = d->vs != 0 && a->prim != PRIM_TRIANGLEFAN;   /* the fan pass re-reads idx16 */
     int index_ring = 0;
     uint32_t index_ring_off = 0;
     if (a->indexed) {
@@ -858,7 +860,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         uint32_t fan_n = a->indexed ? nidx : nverts;
         uint32_t tris = fan_n >= 3 ? fan_n - 2 : 0;
         uint16_t *fan = NULL;
-        if (ring_indices)
+        if (d->vs != 0)
             fan = vt3_gfx_reserve_indices((size_t)(tris ? tris : 1) * 3u * sizeof *fan, &index_ring_off);
         if (fan) {
             index_ring = 1;
@@ -992,7 +994,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     if (needs_copy) {
         /* The expansion below needs room after the source, so a blended draw keeps its source in
          * scratch and only the expanded copy goes straight into the ring. */
-        if (!blend_indices) vring = vt3_gfx_reserve_vertices(bytes, &vring_off);
+        if (!blend_indices && !(multi && swap)) vring = vt3_gfx_reserve_vertices(bytes, &vring_off);
         vcopy = vring ? vring : vertex_scratch_reserve(scratch_need ? scratch_need : 1);
         if (!vcopy) { return E_OUTOFMEMORY_D3D9; }
         if (multi) {
