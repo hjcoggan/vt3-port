@@ -98,16 +98,26 @@ static inline vt_x80 vt_fld64(uint32_t a)
     return d;
 }
 
-/* Stores round to the width. Round-to-nearest - the only mode this game runs - is a plain
- * conversion; a directed mode still goes out to do it through fenv. */
+/* Stores round to the width. Round-to-nearest is a plain conversion and toward-zero a
+ * one-ulp fix-up; the other directed modes go out of line. */
 static inline void vt_fst32(uint32_t a, double x, uint32_t cw)
 {
-    if (((cw >> 10) & 3u) == 0u) {
-        float f = (float)x;
-        memcpy(vt_mem + a, &f, 4);
-    } else {
+    float f = (float)x;
+    uint32_t rc = (cw >> 10) & 3u;
+    if (rc == 3u) {
+        /* Toward zero, which the audio library decodes in: step the nearest float one ulp back
+         * toward zero when it overshot x. NaN compares false; an overflow to inf steps to FLT_MAX. */
+        if (fabs((double)f) > fabs(x)) {
+            uint32_t b;
+            memcpy(&b, &f, 4);
+            b--;
+            memcpy(&f, &b, 4);
+        }
+    } else if (rc != 0u) {
         vt_fst32_rc(a, x, cw);
+        return;
     }
+    memcpy(vt_mem + a, &f, 4);
 }
 static inline void vt_fst64(uint32_t a, double x, uint32_t cw)
 {

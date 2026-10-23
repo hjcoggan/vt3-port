@@ -59,6 +59,22 @@ static double atan2_x87(double y, double x)
     return r;
 }
 
+/* fstps under round-toward-zero (RC=3), the mode the game's audio library stores in. Prints
+ * the float's bits, so a store rounded the wrong way shows as an off-by-one. */
+static void fst32_chop(const char *k, double x)
+{
+    unsigned short chop = 0x0F7F, near = 0x037F;
+    float f;
+    __asm__ volatile("fldcw %2\n\tfldl %1\n\tfstps %0\n\tfldcw %3"
+                     : "=m"(f) : "m"(x), "m"(chop), "m"(near) : "st");
+    unsigned int b;
+    __builtin_memcpy(&b, &f, 4);
+    out_str(k);
+    out_str("=");
+    out_u32(b);
+    out_nl();
+}
+
 int vt_main(void)
 {
     scaled("add", da + db);
@@ -96,5 +112,12 @@ int vt_main(void)
     scaled("atan2_q4", atan2_x87(-1.0, 2.0));
     scaled("atan2_neg_x_axis", atan2_x87(0.0, -1.0));
     scaled("atan2_34", atan2_x87(3.0, 4.0));
+    fst32_chop("chop_third", 1.0 / 3.0);
+    fst32_chop("chop_neg_third", -1.0 / 3.0);
+    fst32_chop("chop_tenth", 0.1);
+    fst32_chop("chop_exact", 1.5);
+    fst32_chop("chop_huge", 1e39);
+    fst32_chop("chop_neg_huge", -1e39);
+    fst32_chop("chop_tiny", -1e-50);
     return cnt & 0x7F;
 }
