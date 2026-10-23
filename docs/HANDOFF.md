@@ -36,6 +36,12 @@ with `/tmp/vt3run.sh NAME SECS ENVFILE` and `python3 /tmp/vt3an.py LOG` (kept ou
 - Profile now (simpleperf, `ANDROID_SERIAL=c27c2f60`: a TV is also on adb): `fn_00421e90` (cloth
   solver) 12%, memcpy 9% (half the game's own copies, a quarter each d3d9_draw and the Vulkan draw),
   d3d9_draw 6%, vt_icall 3%, syscall/futex 4%.
+- Android `vt3.c` now compiles at `-O2 -g0` (`83b3972`): faster to build, less memory, 2-4 fps faster.
+- Profile-guided build, opt-in (about 2.5% more): `cmake ... -DVT3_PGO=gen`, install, play a match for
+  a minute, `adb pull /sdcard/Android/data/net.vt3port.game/files/vt3.profraw`, then
+  `$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-profdata merge -o vt3.profdata vt3.profraw` and
+  rebuild with `-DVT3_PGO=$PWD/vt3.profdata`. The profile holds the translated game's function names and
+  counts, so keep it out of the repo.
 - **Next for 120 fps:** a native NEON replacement of `fn_00421e90`. A quarter of its time is one
   data-dependent branch (spring stretched or not) that mispredicts. Needs a translator hook to swap
   in a native body, and a check mode that snapshots guest memory, runs both and compares (bit-exact
