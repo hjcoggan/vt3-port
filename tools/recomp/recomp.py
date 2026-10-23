@@ -66,14 +66,6 @@ NORETURN_IMPORTS = {'ExitProcess', 'ExitThread', 'TerminateProcess', 'abort', '_
 # before the instruction: the entry of the serve-angle function, the atan2 result before its call,
 # and the direction vector after it.
 TRACE_POINTS = {0x4825c0, 0x482624, 0x482629}
-# Guest functions that have a hand-written native implementation (tools/recomp/rt/vt3native.c).
-# Their translated body is emitted as fn_<addr>_tr, and fn_<addr> becomes a dispatcher that calls
-# vt_native_<addr> when vt_native_on is set. The native function returns 1 when it handled the
-# call, or 0 to run the translated body.
-NATIVE_OVERRIDES = {0x421e90}
-# Functions the native code calls through the translator (their addresses are fixed by the game
-# image). They must have external linkage for vt3native.c to see them.
-NATIVE_CALLEES = {0x6506a2, 0x6506a8}
 # Functions with a hand-written native replacement (rt/vt3native.c). Their translated body is
 # emitted as fn_<addr>_tr(), and fn_<addr>() becomes a dispatcher that calls the native body when
 # vt_native_on is set and falls back to the translated body when it returns 0.
@@ -2142,10 +2134,9 @@ def gen_function(an, entry, hard):
         tr = f"{fname(entry)}_tr"
         body = out[:]
         body[0] = f"void {tr}(vt3_cpu *c) {{"
-        hook = (f"  if (vt_native_on) {{ VT_SPILL(); "
-                f"if (vt_native_{entry:08x}(c)) return; VT_RELOAD(); }}")
-        out = [f"void {fname(entry)}(vt3_cpu *c) {{", "  VT_LOAD();", "  VT_FLAGS();", hook,
-               f"  {tr}(c);", "}"] + body
+        # Callers spill before a call, so the guest registers are in c on both paths.
+        out = [f"void {fname(entry)}(vt3_cpu *c) {{",
+               f"  if (vt_native_on && vt_native_{entry:08x}(c)) return;", f"  {tr}(c);", "}"] + body
     return out, len(order), unsup
 
 
