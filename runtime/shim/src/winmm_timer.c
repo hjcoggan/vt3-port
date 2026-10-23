@@ -38,7 +38,7 @@ static int thread_started;
 static void *timer_main(void *arg)
 {
     (void)arg;
-    pthread_mutex_lock(vt3s_gil());
+    vt3s_gil_lock();
     vt3s_thread_attach_host();
     vt3s_gil_acquired();
     for (;;) {

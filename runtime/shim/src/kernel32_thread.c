@@ -89,31 +89,59 @@ uint32_t vt3s_now_ms(void)
  * threshold is logged on release, so a thread that stalls shows which tid held the lock
  * over its gap. Runs with the lock held, except briefly between a pthread lock returning
  * and the acquired note. */
-static uint32_t g_gil_held_by;
+static uint32_t g_gil_held_by;       /* owner tid; atomic, read by gil_handoff's spin */
 static uint32_t g_gil_since_ms;
 static uint32_t g_gil_last_holder;
 
+/* Threads blocked on the lock itself, for the directed handoff. */
+static int g_gil_waiters;
+
 void vt3s_gil_acquired(void)
 {
-    g_gil_held_by = current()->tid;
+    __atomic_store_n(&g_gil_held_by, current()->tid, __ATOMIC_RELAXED);
     g_gil_since_ms = vt3s_now_ms();
 }
 
 void vt3s_gil_releasing(void)
 {
-    if (g_gil_held_by) {
-        g_gil_last_holder = g_gil_held_by;
+    uint32_t holder = __atomic_load_n(&g_gil_held_by, __ATOMIC_RELAXED);
+    if (holder) {
+        g_gil_last_holder = holder;
         int th = vt3s_slow_ms();
         if (th > 0) {
             uint32_t held = vt3s_now_ms() - g_gil_since_ms;
             if (held >= (uint32_t)th)
-                VT3_INFO("gil hold: tid %u held %u ms", g_gil_held_by, held);
+                VT3_INFO("gil hold: tid %u held %u ms", holder, held);
         }
     }
-    g_gil_held_by = 0;
+    __atomic_store_n(&g_gil_held_by, 0, __ATOMIC_RELAXED);
 }
 
-uint32_t vt3s_gil_holder(void) { return g_gil_held_by; }
+uint32_t vt3s_gil_holder(void) { return __atomic_load_n(&g_gil_held_by, __ATOMIC_RELAXED); }
+
+/* VT3_GIL_HANDOFF=1 switches gil_handoff from a timed unlock to a directed handoff. */
+static int handoff_on(void)
+{
+    static int on = -1;
+    int v = __atomic_load_n(&on, __ATOMIC_RELAXED);
+    if (v < 0) {
+        const char *s = getenv("VT3_GIL_HANDOFF");
+        v = s && atoi(s) != 0;
+        __atomic_store_n(&on, v, __ATOMIC_RELAXED);
+    }
+    return v;
+}
+
+/* Every real acquire of the guest lock goes through here, so gil_handoff can tell whether
+ * anybody is contending. pthread_cond_wait/timedwait re-acquire inside the call and are not
+ * counted. */
+void vt3s_gil_lock(void)
+{
+    int counted = handoff_on();
+    if (counted) __atomic_add_fetch(&g_gil_waiters, 1, __ATOMIC_RELAXED);
+    pthread_mutex_lock(&gil);
+    if (counted) __atomic_sub_fetch(&g_gil_waiters, 1, __ATOMIC_RELAXED);
+}
 
 /* A thread's wait for the lock itself, when it reaches the threshold. */
 static void gil_lock_waited(uint32_t tid, uint32_t t0)
@@ -171,7 +199,7 @@ DWORD vt3s_call_guest_nested(uint32_t fn, const uint32_t *args, uint32_t nargs)
 void vt3shim_thread_begin_main(void)
 {
     uint32_t t0 = vt3s_now_ms();
-    pthread_mutex_lock(&gil);
+    vt3s_gil_lock();
     gil_lock_waited(g_main.tid, t0);
     g_cur = &g_main;
     vt3s_gil_acquired();
@@ -274,7 +302,7 @@ static void *thread_main(void *arg)
 {
     vt3s_thread *t = arg;
     uint32_t t0 = vt3s_now_ms();
-    pthread_mutex_lock(&gil);
+    vt3s_gil_lock();
     gil_lock_waited(t->tid, t0);
     g_cur = t;
     vt3s_gil_acquired();
@@ -408,15 +436,39 @@ HANDLE WINAPI GetCurrentThread(void) { return VT3_PSEUDO_CURRENT_THREAD; }
 
 DWORD WINAPI GetCurrentThreadId(void) { return current()->tid; }
 
-/* Gives the guest lock to a waiting thread. A plain unlock and re-lock (even with sched_yield)
- * usually lets the same thread take it straight back, so a busy guest thread starves the others:
- * the futex wakes a waiter but the hot thread re-acquires first, so the audio writer and the winmm
- * timer can lose every handoff and stall for hundreds of ms while the lock churns between short
- * holds. The sleep opens the window for the woken waiter to take it. VT3_GIL_YIELD_US overrides the
- * 50 us default. 2000 us measured fewer audio-writer gaps in traces, but sounded worse on the
- * Retroid (more crackle) in a listening A/B, so the default stays at 50. */
+/* Gives the guest lock to a waiting thread. The default is a plain unlock and re-lock after a
+ * short sleep (even sched_yield did not help much): usually the same thread takes it straight
+ * back, so a busy guest thread starves the others. The futex wakes a waiter but the hot thread
+ * re-acquires first, so the audio writer and the winmm timer can lose every handoff and stall for
+ * hundreds of ms while the lock churns between short holds. The sleep opens the window for the
+ * woken waiter to take it. VT3_GIL_YIELD_US overrides the 50 us default. 2000 us measured fewer
+ * audio-writer gaps in traces, but sounded worse on the Retroid (more crackle) in a listening
+ * A/B, so the default stays at 50.
+ *
+ * VT3_GIL_HANDOFF=1 makes it directed instead: with nobody blocked on the lock there is nothing
+ * to hand off to, so it returns without unlocking at all. With waiters, it unlocks and spins on
+ * the recorded owner tid until another thread has the lock or 1 ms passes, then re-locks. */
 static void gil_handoff(void)
 {
+    if (handoff_on()) {
+        if (__atomic_load_n(&g_gil_waiters, __ATOMIC_RELAXED) == 0) return;
+        uint32_t me = current()->tid;
+        vt3s_gil_releasing();
+        pthread_mutex_unlock(&gil);
+        struct timespec t0, now;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (;;) {
+            uint32_t owner = vt3s_gil_holder();
+            if (owner && owner != me) break;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            if ((now.tv_sec - t0.tv_sec) * 1000000000L + (now.tv_nsec - t0.tv_nsec) >= 1000000L)
+                break;
+            sched_yield();
+        }
+        vt3s_gil_lock();
+        vt3s_gil_acquired();
+        return;
+    }
     static int yield_us = -1;
     if (yield_us < 0) {
         const char *s = getenv("VT3_GIL_YIELD_US");
@@ -429,7 +481,7 @@ static void gil_handoff(void)
         struct timespec pause = { 0, (long)yield_us * 1000L };
         nanosleep(&pause, NULL);
     }
-    pthread_mutex_lock(&gil);
+    vt3s_gil_lock();
     vt3s_gil_acquired();
 }
 
