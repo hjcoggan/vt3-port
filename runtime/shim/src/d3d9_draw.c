@@ -826,25 +826,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
             idx16 = index_scratch_reserve(nidx ? nidx : 1u);
             if (!idx16) return E_OUTOFMEMORY_D3D9;
         }
-        /* Branch-free first pass (vectorises): rebase every index and note any out of range.
-         * Only a buffer with a bad index takes the clamping pass below. */
-        uint32_t range = hi - lo, bad = 0;
         if (isz == 4) {
-            for (uint32_t i = 0; i < nidx; i++) {
-                uint32_t v;
-                memcpy(&v, ip + 4 * i, 4);
-                bad |= v - lo >= range;
-                idx16[i] = (uint16_t)(v - lo);
-            }
-        } else {
-            for (uint32_t i = 0; i < nidx; i++) {
-                uint16_t v;
-                memcpy(&v, ip + 2 * i, 2);
-                bad |= (uint32_t)v - lo >= range;
-                idx16[i] = (uint16_t)((uint32_t)v - lo);
-            }
-        }
-        if (bad && isz == 4) {
             for (uint32_t i = 0; i < nidx; i++) {
                 uint32_t v;
                 memcpy(&v, ip + 4 * i, 4);
@@ -854,7 +836,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
                 }
                 idx16[i] = (uint16_t)(v - lo);
             }
-        } else if (bad) {
+        } else {
             for (uint32_t i = 0; i < nidx; i++) {
                 uint16_t v16;
                 memcpy(&v16, ip + 2 * i, 2);
