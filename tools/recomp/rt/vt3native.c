@@ -37,8 +37,8 @@ static int native_ready;             /* the body works; set by the port below */
 static int in_check;
 
 /* Snapshot of everything the function can write: the guest process heap (256 MiB from
- * VT3_GUEST_HEAP_BASE), the image's writable sections, and 64 KiB either side of the entry
- * esp. The 64 KiB covers the function's 0x35c-byte frame and the calls it makes.
+ * VT3_GUEST_HEAP_BASE), the image's writable sections, and 64 KiB above the entry esp. The
+ * native body need not reproduce the translated body's dead stack frame below the entry esp.
  *
  * Input and result are copied separately. Checking runs the native body, saves its result,
  * restores the input, runs the translated body and compares the two results. */
@@ -104,9 +104,8 @@ static void build_regions(uint32_t esp)
 
     add_region(0x20000000u, 256u << 20);              /* guest process heap */
     add_writable_sections();
-    uint32_t lo = esp > STACK_PAD ? esp - STACK_PAD : 0;
     uint32_t hi = esp + STACK_PAD < esp ? 0xffffffffu : esp + STACK_PAD;
-    add_region(lo, hi - lo);
+    add_region(esp, hi - esp);
 
     size_t total = 0;
     for (int i = 0; i < nregions; i++) {
