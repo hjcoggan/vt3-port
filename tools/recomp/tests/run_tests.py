@@ -34,7 +34,11 @@ PREFIX = os.path.join(ROOT, 'wineprefix')
 # SDL3 from Homebrew: the runtime's vt3core (platform, renderer, input, audio) links against it,
 # as it does in the game build (dump/recomp/vt3_nocd/build_native.py).
 SDL = subprocess.run(['brew', '--prefix', 'sdl3'], capture_output=True, text=True, check=True).stdout.strip()
+# vt3core carries the Vulkan backend on the desktop too (Homebrew's loader and headers).
+VK = subprocess.run(['brew', '--prefix', 'vulkan-loader'], capture_output=True, text=True).stdout.strip() or '/opt/homebrew'
+VKH = subprocess.run(['brew', '--prefix', 'vulkan-headers'], capture_output=True, text=True).stdout.strip() or '/opt/homebrew'
 SDL_LINK = ['-L', os.path.join(SDL, 'lib'), '-lSDL3', '-Wl,-rpath,' + os.path.join(SDL, 'lib'),
+            '-L', os.path.join(VK, 'lib'), '-lvulkan', '-Wl,-rpath,' + os.path.join(VK, 'lib'),
             '-framework', 'OpenGL']
 
 BASE_CFLAGS = ['-fno-stack-protector', '-fno-builtin', '-fno-math-errno', '-fno-tree-loop-distribute-patterns',
@@ -83,22 +87,30 @@ def wine_env():
     return env
 
 
+def cmake_sources(name, keep):
+    """The .c files runtime/CMakeLists.txt lists for add_library(NAME STATIC ...), with set(VAR ...)
+    lists expanded (the core library's are; the desktop branch wins, as in build_native.py)."""
+    text = open(os.path.join(REPO_RUNTIME, 'CMakeLists.txt')).read()
+    variables = {}
+    for m in re.finditer(r'set\((\w+)\s+((?:[^()]|\([^()]*\))*?)\)', text, re.S):
+        variables[m.group(1)] = m.group(2).split()
+    block = text[text.index(f'add_library({name} STATIC'):]
+    block = block[:block.index(')')]
+    entries = []
+    for tok in block.split()[2:]:
+        m = re.fullmatch(r'\$\{(\w+)\}', tok)
+        entries += variables.get(m.group(1), []) if m else [tok]
+    return [os.path.join(REPO_RUNTIME, p) for p in entries if p.endswith('.c') and keep(p)]
+
+
 def shim_sources():
     """The shim sources that runtime/CMakeLists.txt builds into vt3shim. Single source of truth."""
-    text = open(os.path.join(REPO_RUNTIME, 'CMakeLists.txt')).read()
-    block = text[text.index('add_library(vt3shim STATIC'):]
-    block = block[:block.index(')')]
-    return [os.path.join(REPO_RUNTIME, p.strip()) for p in block.splitlines()
-            if p.strip().endswith('.c') and 'shim/src/' in p]
+    return cmake_sources('vt3shim', lambda p: 'shim/src/' in p)
 
 
 def core_sources():
     """The vt3core sources (platform, renderer, audio, input, ADX) that CMake builds, as the game links them."""
-    text = open(os.path.join(REPO_RUNTIME, 'CMakeLists.txt')).read()
-    block = text[text.index('add_library(vt3core STATIC'):]
-    block = block[:block.index(')')]
-    return [os.path.join(REPO_RUNTIME, p.strip()) for p in block.splitlines()
-            if p.strip().endswith('.c') and p.strip().startswith('src/')]
+    return cmake_sources('vt3core', lambda p: p.startswith('src/'))
 
 
 def build_runtime(objdir):
@@ -123,7 +135,7 @@ def build_runtime(objdir):
         adapters,
     ] + core_sources() + shim_src
     incs = ['-I', RT, '-I', os.path.join(REPO_RUNTIME, 'include'), '-I', os.path.join(shim, 'include'),
-            '-I', os.path.join(SDL, 'include')]
+            '-I', os.path.join(SDL, 'include'), '-I', os.path.join(VKH, 'include')]
     objs = []
     for src in sources:
         obj = os.path.join(objdir, os.path.basename(src).replace('.c', '.o'))
