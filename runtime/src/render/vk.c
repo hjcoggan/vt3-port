@@ -1179,6 +1179,9 @@ static void stats_log(void)
     g_stats.t0 = now;
 }
 
+/* Bumped as each frame opens; the constant dedup only reuses slots from the current frame. */
+static uint32_t g_frame_serial;
+
 static int ensure_frame(void)
 {
     if (g.open) return 0;
@@ -1203,6 +1206,7 @@ static int ensure_frame(void)
     free_dead(f);
     vkResetDescriptorPool(g.dev, f->pool, 0);
     f->vb_used = f->ib_used = f->ubo_used = 0;
+    g_frame_serial++;
 
     VkDescriptorSetAllocateInfo sai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
     sai.descriptorPool = f->pool;
@@ -1827,28 +1831,68 @@ static void vk_draw_program_impl(const vt3_draw *d)
      * forces it to the full range, so this is always safe). Registers the game never wrote
      * read as zero, and this ring slot is fresh per draw - previously we always memcpy'd the
      * full 4 KB vertex + 4 KB pixel blocks, ~1.8 MB per frame at 210 draws. */
-    if (f->ubo_used + 2u * UBO_SLOT > UBO_RING) { VT3_WARN_ONCE("vk: uniform ring full, draw dropped"); return; }
-    uint32_t vs_off = f->ubo_base + f->ubo_used;
-    uint32_t ps_off = vs_off + UBO_SLOT;
-    f->ubo_used += 2u * UBO_SLOT;
-    uint8_t *vsb = g.ubo_ptr + vs_off, *psb = g.ubo_ptr + ps_off;
     uint32_t vs_n = d->vs_const_max * 16u;   /* d->vs_const_max ≤ 256 */
     uint32_t ps_n = d->ps_const_max * 16u;   /* d->ps_const_max ≤ 224 */
-    if (d->vsc) memcpy(vsb, d->vsc, vs_n);
-    else memset(vsb, 0, vs_n);
-    memset(vsb + vs_n, 0, VS_BLOCK_BYTES - vs_n);
-    if (d->psc) memcpy(psb, d->psc, ps_n);
-    else memset(psb, 0, ps_n);
-    memset(psb + ps_n, 0, PS_BLOCK_BYTES - ps_n);
-    /* vsi[i] holds the bool constants b0..b15 as ints, and vsb4[i >> 2][i & 3] (ivec4 vsb4[4])
-     * lives after vsi[16], at offset 4096 + 256; the two runs are the same 16 values. Stores,
-     * not the 32 four-byte memcpys this used to be. */
-    int32_t *vsi = (int32_t *)(vsb + 4096u), *vsb4 = (int32_t *)(vsb + 4096u + 256u);
-    for (int i = 0; i < 16; i++) { int32_t v = d->vsb[i] != 0; vsi[i] = v; vsb4[i] = v; }
-    int32_t *psi = (int32_t *)(psb + 4096u), *psb4 = (int32_t *)(psb + 4096u + 256u);
-    for (int i = 0; i < 16; i++) { int32_t v = d->psb[i] != 0; psi[i] = v; psb4[i] = v; }
-    *(int32_t *)(psb + 4416u) = d->state.alpha_test ? d->state.alpha_func : 0;
-    *(float *)(psb + 4420u) = (float)d->state.alpha_ref;
+    int32_t vbool[16], pbool[16];
+    for (int i = 0; i < 16; i++) { vbool[i] = d->vsb[i] != 0; pbool[i] = d->psb[i] != 0; }
+    int32_t at[2];
+    at[0] = d->state.alpha_test ? d->state.alpha_func : 0;
+    float at_ref = (float)d->state.alpha_ref;
+    memcpy(&at[1], &at_ref, 4);
+    /* Consecutive draws often carry the same constants (one mesh drawn in several passes): reuse the
+     * slot the last draw filled this frame when its inputs match. The comparison is against a cached
+     * copy, never the uncached ring. VT3_UBO_DEDUP=0 turns it off, for an A/B. */
+    static int dedup = -1;
+    if (dedup < 0) { const char *e = getenv("VT3_UBO_DEDUP"); dedup = !e || atoi(e) != 0; }
+    static uint32_t last_serial = ~0u, last_vs_off, last_ps_off, last_vs_n = ~0u, last_ps_n = ~0u;
+    static int last_vs_null, last_ps_null;
+    static int32_t last_vbool[16], last_pbool[16], last_at[2];
+    static uint8_t last_vsc[4096], last_psc[4096];
+    int same_frame = dedup && last_serial == g_frame_serial;
+    int vs_hit = same_frame && last_vs_n == vs_n && last_vs_null == !d->vsc &&
+                 !memcmp(last_vbool, vbool, sizeof vbool) && (!d->vsc || !memcmp(last_vsc, d->vsc, vs_n));
+    int ps_hit = same_frame && last_ps_n == ps_n && last_ps_null == !d->psc &&
+                 !memcmp(last_pbool, pbool, sizeof pbool) && !memcmp(last_at, at, sizeof at) &&
+                 (!d->psc || !memcmp(last_psc, d->psc, ps_n));
+    uint32_t need = (vs_hit ? 0u : UBO_SLOT) + (ps_hit ? 0u : UBO_SLOT);
+    if (f->ubo_used + need > UBO_RING) { VT3_WARN_ONCE("vk: uniform ring full, draw dropped"); return; }
+    uint32_t vs_off = last_vs_off, ps_off = last_ps_off;
+    if (!vs_hit) {
+        vs_off = f->ubo_base + f->ubo_used;
+        f->ubo_used += UBO_SLOT;
+        uint8_t *vsb = g.ubo_ptr + vs_off;
+        if (d->vsc) memcpy(vsb, d->vsc, vs_n);
+        else memset(vsb, 0, vs_n);
+        /* vsi[i] holds the bool constants b0..b15 as ints, and vsb4[i >> 2][i & 3] (ivec4 vsb4[4])
+         * lives after vsi[16], at offset 4096 + 256; the two runs are the same 16 values. */
+        memcpy(vsb + 4096u, vbool, sizeof vbool);
+        memcpy(vsb + 4096u + 256u, vbool, sizeof vbool);
+        if (dedup) {
+            last_vs_off = vs_off; last_vs_n = vs_n; last_vs_null = !d->vsc;
+            memcpy(last_vbool, vbool, sizeof vbool);
+            if (d->vsc) memcpy(last_vsc, d->vsc, vs_n);
+        }
+    }
+    if (!ps_hit) {
+        ps_off = f->ubo_base + f->ubo_used;
+        f->ubo_used += UBO_SLOT;
+        uint8_t *psb = g.ubo_ptr + ps_off;
+        if (d->psc) memcpy(psb, d->psc, ps_n);
+        else memset(psb, 0, ps_n);
+        memcpy(psb + 4096u, pbool, sizeof pbool);
+        memcpy(psb + 4096u + 256u, pbool, sizeof pbool);
+        memcpy(psb + 4416u, at, sizeof at);
+        if (dedup) {
+            last_ps_off = ps_off; last_ps_n = ps_n; last_ps_null = !d->psc;
+            memcpy(last_pbool, pbool, sizeof pbool);
+            memcpy(last_at, at, sizeof at);
+            if (d->psc) memcpy(last_psc, d->psc, ps_n);
+        }
+    }
+    last_serial = g_frame_serial;
+    /* Past const_max the shader never reads (relative addressing already set it to the full
+     * range), so the tails are left as they are: zeroing them was up to 8 KB of writes a draw into
+     * the uncached ring. */
 
     VkDescriptorSet set1 = alloc_set1(f, p->cube_mask, p->sampler_mask, d->samplers,
                                      d->samp_min, d->samp_mag, d->samp_addr_u, d->samp_addr_v, d->samp_addr_w);
