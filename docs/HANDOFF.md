@@ -14,6 +14,33 @@ Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one rend
 - Menus, tournament flow, serving, rallies, scoring all work on both. Mac audio is clean.
 - Court shadows are fixed on both backends (below). The .app now bundles the Vulkan loader.
 
+## Performance and audio (session of 2026-10-24)
+
+Retroid, Exhibition match, 60 s windows, rotated runs (a single window swings about 5 fps with the
+venue and opponent, so compare rotated runs or env switches in one APK, never single runs). Run
+with `/tmp/vt3run.sh NAME SECS ENVFILE` and `python3 /tmp/vt3an.py LOG` (kept outside the repo).
+
+- Now: **88-98 fps median with safepoints off, 73-93 with the default 8 ms safepoints**; GPU 4-5.6 ms
+  a frame, so the limit is CPU. Before this session: 75-80 fps.
+- Landed: SSE registers in locals (`ae97d87`), toward-zero float stores inline (`450c695`),
+  zero-copy vertex ring (`90f9c69`), getenv off the per-draw path, guest load/store helpers inline,
+  API 29 build, the nested-call stack word in the TEB instead of TLS, directed lock handoff on by
+  default, loop safepoints (re-translate vt3.c to get `VT_SAFEPOINT`).
+- Measured and dropped (do not retry as is): vectorised index rebasing (faster in the profile,
+  slower on the device: the Vulkan ring is uncached and the next draw's recording got slower),
+  static vertex buffers on the GPU (`exp/vb-cache`), the DirectSound cursor hold (`exp/ds-hold`),
+  safepoints gated on missing Presents.
+- Profile now (simpleperf, `ANDROID_SERIAL=c27c2f60`: a TV is also on adb): `fn_00421e90` (cloth
+  solver) 12%, memcpy 9% (half the game's own copies, a quarter each d3d9_draw and the Vulkan draw),
+  d3d9_draw 6%, vt_icall 3%, syscall/futex 4%.
+- **Next for 120 fps:** a native NEON replacement of `fn_00421e90`. A quarter of its time is one
+  data-dependent branch (spring stretched or not) that mispredicts. Needs a translator hook to swap
+  in a native body, and a check mode that snapshots guest memory, runs both and compares (bit-exact
+  needs the same operation order and `-ffp-contract=off`). The decompile is about 700 lines.
+- **Audio:** the remaining dropouts happen between ordinary frames: the audio writer gets the lock
+  about once a frame. Safepoints trade about 10% of match frame rate for about 4x less gated
+  silence. The owner decides by ear (`VT3_SAFEPOINT_MS=0` in vt3.env turns them off).
+
 ## Performance (session of 2026-10-18)
 
 In-match frame rate, averaged over a full rally. The Mac figures come from one fixed scripted match
