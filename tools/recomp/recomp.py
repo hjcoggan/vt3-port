@@ -2115,7 +2115,32 @@ def gen_function(an, entry, hard):
             # the code after it is not translated, so stop loudly instead of falling through.
             out.append(f'vt_unsupported_at(0x{nxt:x}u, "returned from a call that does not return");')
     out.append("}")
-    return out, len(order), unsup
+    return promote_xmm(out), len(order), unsup
+
+
+XMM_REF = re.compile(r'c->xmm\[([0-7])\]')
+
+
+def promote_xmm(out):
+    """Keep the SSE registers a function uses in locals, the way VT_LOAD keeps the GPRs.
+
+    Through c->xmm every SSE instruction is a load and store of the CPU struct, and a guest
+    store (a typed uint32_t write) may alias it, so the compiler reloads after each one. As
+    locals they live in host vector registers. The locals are written back wherever the GPRs
+    are (VT_SPILL: every call, return and tail jump) and re-read wherever they are (VT_RELOAD:
+    after every call), so callees and the host see exactly the state they saw before."""
+    used = sorted({int(n) for line in out for n in XMM_REF.findall(line)})
+    if not used:
+        return out
+    spill = " ".join(f"c->xmm[{n}] = vx{n};" for n in used)
+    reload = " ".join(f"vx{n} = c->xmm[{n}];" for n in used)
+    body = []
+    for line in out[3:]:
+        line = XMM_REF.sub(r'vx\1', line)
+        line = line.replace("VT_SPILL();", "VT_SPILL(); " + spill).replace("VT_RELOAD();", "VT_RELOAD(); " + reload)
+        body.append(line)
+    decl = "  " + " ".join(f"vt_xmm vx{n} = c->xmm[{n}];" for n in used)
+    return out[:3] + [decl] + body
 
 
 def write_module(img, an, out_dir, name, allow_unsup, log):
