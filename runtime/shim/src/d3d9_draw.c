@@ -203,10 +203,12 @@ static void copy_vertices(uint8_t *dst, const uint8_t *src, uint32_t n, uint32_t
         if ((e[0] | (e[1] << 8)) != 0 || e[4] != DT_D3DCOLOR) continue;
         uint32_t off = e[2] | (e[3] << 8);
         if (off + 4 > stride) continue;     /* past the end of the vertex: nothing to swap */
+        /* Read the bytes from src: dst may be the renderer's write-combined ring, slow to read. */
         for (uint32_t v = 0; v < n; v++) {
             uint8_t *p = dst + (size_t)v * stride + off;
-            uint8_t t = p[0];
-            p[0] = p[2];
+            const uint8_t *q = src + (size_t)v * stride + off;
+            uint8_t t = q[0];
+            p[0] = q[2];
             p[2] = t;
         }
     }
@@ -793,6 +795,11 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     uint32_t first_v = 0, count_v = 0;
     uint16_t *idx16 = NULL;
     uint32_t nidx = nverts;
+    /* Shader draws can have the renderer write the converted indices straight into its ring. The
+     * fixed-function TL path builds its own vertex list and calls vt3_gfx_draw, so it uses scratch. */
+    int ring_indices = d->vs != 0 && a->prim != PRIM_TRIANGLEFAN;   /* the fan pass re-reads idx16 */
+    int index_ring = 0;
+    uint32_t index_ring_off = 0;
     if (a->indexed) {
         const uint8_t *ibase = NULL;
         uint32_t fmt = 0;
@@ -809,8 +816,14 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         const uint8_t *ip = ibase + (size_t)a->start * isz;
         uint32_t lo = a->min_vertex, hi = a->min_vertex + a->num_vertices;
         if (hi <= lo) return S_OK;
-        idx16 = index_scratch_reserve(nidx ? nidx : 1u);
-        if (!idx16) return E_OUTOFMEMORY_D3D9;
+        if (ring_indices)
+            idx16 = vt3_gfx_reserve_indices((size_t)nidx * sizeof *idx16, &index_ring_off);
+        if (idx16) {
+            index_ring = 1;
+        } else {
+            idx16 = index_scratch_reserve(nidx ? nidx : 1u);
+            if (!idx16) return E_OUTOFMEMORY_D3D9;
+        }
         if (isz == 4) {
             for (uint32_t i = 0; i < nidx; i++) {
                 uint32_t v;
@@ -846,7 +859,15 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     if (a->prim == PRIM_TRIANGLEFAN) {
         uint32_t fan_n = a->indexed ? nidx : nverts;
         uint32_t tris = fan_n >= 3 ? fan_n - 2 : 0;
-        uint16_t *fan = fan_scratch_reserve((size_t)(tris ? tris : 1) * 3u);
+        uint16_t *fan = NULL;
+        if (d->vs != 0)
+            fan = vt3_gfx_reserve_indices((size_t)(tris ? tris : 1) * 3u * sizeof *fan, &index_ring_off);
+        if (fan) {
+            index_ring = 1;
+        } else {
+            fan = fan_scratch_reserve((size_t)(tris ? tris : 1) * 3u);
+            index_ring = 0;
+        }
         if (!fan) { return E_OUTOFMEMORY_D3D9; }
         for (uint32_t t = 0; t < tris; t++) {
             uint32_t k[3] = { 0, t + 1, t + 2 };
@@ -949,15 +970,15 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
 
     /* Whether the vertex bytes need a shadow copy: a D3DCOLOR element must be byte-swapped
      * (cannot touch the source buffer), multiple streams must be gathered into one, or the
-     * Adreno UBYTE4 blend-indices must be expanded to float4. Anything else can be handed to
-     * the renderer straight from the locked buffer, which copies it into the frame's vertex
-     * ring within the same call - no second copy, no per-draw malloc. */
-    int blend_indices = 0;
+     * Adreno UBYTE4 blend-indices must be expanded to float4. Wherever we do have to copy, the
+     * scratch copy goes into the frame's ring when the backend has one, so the renderer does
+     * not copy the same bytes a second time. Anything else is handed to the renderer straight
+     * from the locked buffer and it copies into its ring within the same call. */
+    int idx_k = -1;
     for (int k = 0; k < lay.count; k++)
-        if (lay.attr[k].location == 2 && lay.attr[k].type == VT3_VT_UBYTE && lay.attr[k].components == 4) {
-            blend_indices = 1;
-            break;
-        }
+        if (lay.attr[k].location == 2 && lay.attr[k].type == VT3_VT_UBYTE && lay.attr[k].components == 4)
+            idx_k = k;
+    int blend_indices = idx_k >= 0;
     int needs_copy = swap || multi;
 
     /* Vertex bytes for the referenced range. Indexed: [first, first + count); plain: the vertices. */
@@ -967,8 +988,14 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     size_t expanded_bytes = blend_indices ? (size_t)nv * (stride + 12u) : 0u;
     size_t scratch_need = (needs_copy ? bytes : 0u) + expanded_bytes;
     uint8_t *vcopy = NULL;
+    uint8_t *vring = NULL;
+    uint32_t vring_off = 0;
+    int vertex_ring = 0;
     if (needs_copy) {
-        vcopy = vertex_scratch_reserve(scratch_need ? scratch_need : 1);
+        /* The expansion below needs room after the source, so a blended draw keeps its source in
+         * scratch and only the expanded copy goes straight into the ring. */
+        if (!blend_indices && !(multi && swap)) vring = vt3_gfx_reserve_vertices(bytes, &vring_off);
+        vcopy = vring ? vring : vertex_scratch_reserve(scratch_need ? scratch_need : 1);
         if (!vcopy) { return E_OUTOFMEMORY_D3D9; }
         if (multi) {
             for (uint32_t v = 0; v < nv; v++)
@@ -979,6 +1006,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         } else {
             copy_vertices(vcopy, vbase + (size_t)v0 * stride, nv, stride, dc);
         }
+        vertex_ring = vring != NULL;
     } else {
         vcopy = (uint8_t *)vbase + (size_t)v0 * stride;   /* renderer copies into its ring within the call */
     }
@@ -1057,23 +1085,27 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
      * are present and correct (the CPU skinning verifier reads them fine), so expand the 4 index
      * bytes into a float4 in this per-draw copy and lengthen the stride by 12; the shader then gets
      * its bone indices on every driver. */
-    int idx_k = -1;
-    for (int k = 0; k < lay.count; k++)
-        if (lay.attr[k].location == 2 && lay.attr[k].type == VT3_VT_UBYTE && lay.attr[k].components == 4)
-            idx_k = k;
     vt3_vlayout rlay = lay;
     uint32_t rstride = (uint32_t)lay.stride;
     const uint8_t *draw_vertices = vcopy;
     if (idx_k >= 0) {
         int ioff = lay.attr[idx_k].offset;
         rstride = (uint32_t)lay.stride + 12u;
-        /* Convert directly from the locked source for simple streams; swapped / merged sources
+        /* Convert straight into the ring when it has room; otherwise swapped / merged sources
          * stay in the first scratch region while the expanded draw data occupies the tail. */
-        uint8_t *scratch = vertex_scratch_reserve(scratch_need ? scratch_need : 1);
-        size_t expanded_offset = (vcopy == g_vertex_scratch) ? bytes : 0u;
-        uint8_t *expanded = scratch ? scratch + expanded_offset : NULL;
-        if (!expanded || expanded_bytes > g_vertex_scratch_cap - expanded_offset) {
-            return E_OUTOFMEMORY_D3D9;
+        uint32_t expanded_off = 0;
+        uint8_t *expanded = vt3_gfx_reserve_vertices(expanded_bytes, &expanded_off);
+        if (expanded) {
+            vertex_ring = 1;
+            vring_off = expanded_off;
+        } else {
+            uint8_t *scratch = vertex_scratch_reserve(scratch_need ? scratch_need : 1);
+            size_t expanded_offset = (vcopy == g_vertex_scratch) ? bytes : 0u;
+            expanded = scratch ? scratch + expanded_offset : NULL;
+            if (!expanded || expanded_bytes > g_vertex_scratch_cap - expanded_offset) {
+                return E_OUTOFMEMORY_D3D9;
+            }
+            vertex_ring = 0;
         }
         {
             for (uint32_t v = 0; v < nv; v++) {
@@ -1101,7 +1133,15 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     dd.layout = (idx_k >= 0 && rlay.stride != lay.stride) ? &rlay : &lay;
     dd.vertices = draw_vertices;
     dd.vertex_bytes = (uint32_t)nv * (uint32_t)dd.layout->stride;
+    if (vertex_ring) {
+        dd.vertex_ring = 1;
+        dd.vertex_offset = vring_off;
+    }
     dd.indices = use_idx ? idx16 : NULL;
+    if (use_idx && index_ring) {
+        dd.index_ring = 1;
+        dd.index_offset = index_ring_off;
+    }
     dd.count = use_idx ? nidx : nverts;
     dd.prim = prim_list == PRIM_TRIANGLESTRIP ? VT3_PRIM_TRIANGLESTRIP : VT3_PRIM_TRIANGLELIST;
     dd.vsc = vsc;

@@ -1744,6 +1744,35 @@ static void vk_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_te
     vkCmdDraw(cb, count, 1, 0, 0);
 }
 
+/* Reserves n bytes in this frame's vertex ring and returns where to write them. d3d9_draw uses
+ * this to fill the ring directly, so a draw that has to build or reorder its vertices does not
+ * copy them into scratch and then into the ring. Offset 0 is a real slot, so the caller keeps a
+ * separate flag rather than testing the offset. */
+static void *vk_reserve_vertices(size_t n, uint32_t *offset)
+{
+    if (ensure_frame() != 0) return NULL;
+    vk_frame *f = &g.fr[g.cur];
+    uint32_t bytes = ((uint32_t)n + 15u) & ~15u;
+    if (f->vb_used + bytes > VB_RING) { VT3_WARN_ONCE("vk: vertex ring full, draw dropped"); return NULL; }
+    uint32_t off = f->vb_base + f->vb_used;
+    f->vb_used += bytes;
+    if (offset) *offset = off;
+    return g.vb_ptr + off;
+}
+
+/* The index ring equivalent of vk_reserve_vertices. */
+static void *vk_reserve_indices(size_t n, uint32_t *offset)
+{
+    if (ensure_frame() != 0) return NULL;
+    vk_frame *f = &g.fr[g.cur];
+    uint32_t bytes = ((uint32_t)n + 15u) & ~15u;
+    if (f->ib_used + bytes > IB_RING) { VT3_WARN_ONCE("vk: index ring full, draw dropped"); return NULL; }
+    uint32_t off = f->ib_base + f->ib_used;
+    f->ib_used += bytes;
+    if (offset) *offset = off;
+    return g.ib_ptr + off;
+}
+
 static void vk_draw_program_impl(const vt3_draw *d);
 
 static void vk_draw_program(const vt3_draw *d)
@@ -1759,7 +1788,7 @@ static void vk_draw_program(const vt3_draw *d)
 
 static void vk_draw_program_impl(const vt3_draw *d)
 {
-    if (!d->prog || d->prog > PROG_MAX || !d->layout || !d->vertices || ensure_frame() != 0) return;
+    if (!d->prog || d->prog > PROG_MAX || !d->layout || (!d->vertices && !d->vertex_ring) || ensure_frame() != 0) return;
     vk_prog *p = &g.progs[d->prog - 1];
     if (!p->used) return;
     for (int n = 0; n < VT3_MAX_SAMPLERS; n++) {
@@ -1768,19 +1797,29 @@ static void vk_draw_program_impl(const vt3_draw *d)
     if (ensure_pass() != 0) return;
     vk_frame *f = &g.fr[g.cur];
 
-    /* Vertices, then indices, in the frame's rings. */
-    uint32_t vbytes = (d->vertex_bytes + 15u) & ~15u;
-    if (f->vb_used + vbytes > VB_RING) { VT3_WARN_ONCE("vk: vertex ring full, draw dropped"); return; }
-    uint32_t voff = f->vb_base + f->vb_used;
-    memcpy(g.vb_ptr + voff, d->vertices, d->vertex_bytes);
-    f->vb_used += vbytes;
+    /* Vertices, then indices, in the frame's rings. d3d9_draw may already have reserved the slots
+     * and written them (vertex_ring / index_ring); the plain-pointer path still copies here. */
+    uint32_t voff;
+    if (d->vertex_ring) {
+        voff = d->vertex_offset;
+    } else {
+        uint32_t vbytes = (d->vertex_bytes + 15u) & ~15u;
+        if (f->vb_used + vbytes > VB_RING) { VT3_WARN_ONCE("vk: vertex ring full, draw dropped"); return; }
+        voff = f->vb_base + f->vb_used;
+        memcpy(g.vb_ptr + voff, d->vertices, d->vertex_bytes);
+        f->vb_used += vbytes;
+    }
     uint32_t ioff = 0;
     if (d->indices) {
-        uint32_t ibytes = (d->count * 2u + 15u) & ~15u;
-        if (f->ib_used + ibytes > IB_RING) { VT3_WARN_ONCE("vk: index ring full, draw dropped"); return; }
-        ioff = f->ib_base + f->ib_used;
-        memcpy(g.ib_ptr + ioff, d->indices, d->count * 2u);
-        f->ib_used += ibytes;
+        if (d->index_ring) {
+            ioff = d->index_offset;
+        } else {
+            uint32_t ibytes = (d->count * 2u + 15u) & ~15u;
+            if (f->ib_used + ibytes > IB_RING) { VT3_WARN_ONCE("vk: index ring full, draw dropped"); return; }
+            ioff = f->ib_base + f->ib_used;
+            memcpy(g.ib_ptr + ioff, d->indices, d->count * 2u);
+            f->ib_used += ibytes;
+        }
     }
 
     /* The constant blocks, std140 as the translator declares them. Only copy the range each
@@ -2718,6 +2757,8 @@ const vt3_gfx_ops vt3_gfx_vk = {
     .prog_create = vk_prog_create,
     .prog_destroy = vk_prog_destroy,
     .draw_program = vk_draw_program,
+    .reserve_vertices = vk_reserve_vertices,
+    .reserve_indices = vk_reserve_indices,
     .readback = vk_readback,
     .clear_depth = vk_clear_depth,
     .set_scissor = vk_set_scissor,

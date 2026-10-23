@@ -136,6 +136,20 @@ __attribute__((weak)) void vt3_gfx_draw_program(const vt3_draw *d)
     (void)d;
 }
 
+__attribute__((weak)) void *vt3_gfx_reserve_vertices(size_t n, uint32_t *offset)
+{
+    (void)n;
+    (void)offset;
+    return NULL;
+}
+
+__attribute__((weak)) void *vt3_gfx_reserve_indices(size_t n, uint32_t *offset)
+{
+    (void)n;
+    (void)offset;
+    return NULL;
+}
+
 __attribute__((weak)) int vt3_gfx_prog_create(vt3_prog *out, const char *vs_src, const char *ps_src,
                                               char *err, size_t errcap)
 {

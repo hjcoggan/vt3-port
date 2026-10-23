@@ -107,9 +107,13 @@ typedef struct vt3_rstate {
 typedef struct vt3_draw {
     vt3_prog prog;
     const vt3_vlayout *layout;
-    const void *vertices;       /* vertex buffer contents */
+    const void *vertices;       /* vertex buffer contents, or the ring slot when vertex_ring */
     uint32_t vertex_bytes;
-    const uint16_t *indices;    /* NULL = non-indexed */
+    uint32_t vertex_offset;     /* buffer offset of the vertices when vertex_ring is set */
+    int vertex_ring;            /* vertices were reserved and written in the frame's ring */
+    const uint16_t *indices;    /* NULL = non-indexed, or the ring slot when index_ring */
+    uint32_t index_offset;      /* buffer offset of the indices when index_ring is set */
+    int index_ring;             /* indices were reserved and written in the frame's index ring */
     uint32_t count;             /* vertices, or indices when indexed */
     vt3_prim prim;
     const float *vsc;           /* 256 x vec4, NULL = zeros */
@@ -143,6 +147,11 @@ typedef struct vt3_gfx_ops {
     int  (*prog_create)(vt3_prog *out, const char *vs_src, const char *ps_src, char *err, size_t errcap);
     void (*prog_destroy)(vt3_prog p);
     void (*draw_program)(const vt3_draw *d);
+    /* Reserve n bytes in the frame's vertex/index ring and return a writable pointer; *offset is
+     * the buffer offset to pass back in vt3_draw. NULL when the backend copies submitted bytes
+     * itself (GL) or the ring is full, in which case the caller keeps its own scratch copy. */
+    void *(*reserve_vertices)(size_t n, uint32_t *offset);
+    void *(*reserve_indices)(size_t n, uint32_t *offset);
     void (*readback)(uint8_t *rgba);        /* logical size, RGBA8, top row first */
     void (*clear_depth)(float depth);
     void (*set_scissor)(int enable, vt3_rect r);   /* logical pixels, top-left origin */
@@ -170,6 +179,8 @@ void vt3_gfx_present(int drawable_w, int drawable_h);
 int  vt3_gfx_prog_create(vt3_prog *out, const char *vs_src, const char *ps_src, char *err, size_t errcap);
 void vt3_gfx_prog_destroy(vt3_prog p);
 void vt3_gfx_draw_program(const vt3_draw *d);
+void *vt3_gfx_reserve_vertices(size_t n, uint32_t *offset);
+void *vt3_gfx_reserve_indices(size_t n, uint32_t *offset);
 void vt3_gfx_readback(uint8_t *rgba);
 void vt3_gfx_clear_depth(float depth);
 /* Render targets: -1 when the renderer has none. Handles of targets come from vt3_gfx_rt_create. */
