@@ -66,6 +66,13 @@ NORETURN_IMPORTS = {'ExitProcess', 'ExitThread', 'TerminateProcess', 'abort', '_
 # before the instruction: the entry of the serve-angle function, the atan2 result before its call,
 # and the direction vector after it.
 TRACE_POINTS = {0x4825c0, 0x482624, 0x482629}
+# Functions with a hand-written native replacement (rt/vt3native.c). Their translated body is
+# emitted as fn_<addr>_tr(), and fn_<addr>() becomes a dispatcher that calls the native body when
+# vt_native_on is set and falls back to the translated body when it returns 0.
+NATIVE_OVERRIDES = {0x421e90}
+# Translated functions the native code calls directly (D3DXVec3Normalize, D3DXPlaneFromPoints).
+# Their definitions are emitted non-static so vt3native.c can call them.
+NATIVE_EXPORTS = {0x6506a2, 0x6506a8}
 
 
 class TranslateError(Exception):
@@ -2118,7 +2125,20 @@ def gen_function(an, entry, hard):
             # the code after it is not translated, so stop loudly instead of falling through.
             out.append(f'vt_unsupported_at(0x{nxt:x}u, "returned from a call that does not return");')
     out.append("}")
-    return promote_xmm(out), len(order), unsup
+    out = promote_xmm(out)
+    if entry in NATIVE_OVERRIDES:
+        # Keep the translated body under its own name. fn_<entry> is the dispatcher the module
+        # table names: it gives the native body the first chance, and if that returns 0 it calls
+        # the translated body. The native body must reproduce the function's ret (it does not
+        # return to the dispatcher, which is why the dispatcher only sees a 1).
+        tr = f"{fname(entry)}_tr"
+        body = out[:]
+        body[0] = f"void {tr}(vt3_cpu *c) {{"
+        hook = (f"  if (vt_native_on) {{ VT_SPILL(); "
+                f"if (vt_native_{entry:08x}(c)) return; VT_RELOAD(); }}")
+        out = [f"void {fname(entry)}(vt3_cpu *c) {{", "  VT_LOAD();", "  VT_FLAGS();", hook,
+               f"  {tr}(c);", "}"] + body
+    return out, len(order), unsup
 
 
 XMM_REF = re.compile(r'c->xmm\[([0-7])\]')
@@ -2167,7 +2187,9 @@ def write_module(img, an, out_dir, name, allow_unsup, log):
             body.extend([f"void {fname(entry)}(vt3_cpu *c) {{",
                          f"  vt_die_at(0x{entry:x}u, 0u); /* entry did not decode: {e} */",
                          "}"])
-    decl = [f"static void {fname(a)}(vt3_cpu *c);" for a in fns]
+    decl = [f"void {fname(a)}(vt3_cpu *c);" if a in NATIVE_EXPORTS or a in NATIVE_OVERRIDES
+            else f"static void {fname(a)}(vt3_cpu *c);" for a in fns]
+    decl += [f"void {fname(a)}_tr(vt3_cpu *c);" for a in fns if a in NATIVE_OVERRIDES]
     fn_tab = [f"  {{0x{a:08x}u, {fname(a)}, \"sub_{a:08x}\"}}," for a in fns]
     imp_tab = [f"  {{0x{slot:08x}u, \"{dll}\", \"{nm}\"}}," for slot, dll, nm in img.imports]
     head = [

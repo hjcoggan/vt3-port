@@ -147,6 +147,7 @@ if(VT3_ANDROID)
         src/platform/android_entry.c
         ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c
         ${VT3_RT_DIR}/vt3rt.c
+        ${VT3_RT_DIR}/vt3native.c
         ${VT3_RT_DIR}/vt3simd.c
         ${VT3_RT_DIR}/vt3fpu.c
         ${VT3_ADAPTERS}

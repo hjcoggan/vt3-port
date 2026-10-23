@@ -117,7 +117,7 @@ def main():
     sdl = sdl_prefix()
     vk = vulkan_prefix()
     translated = os.path.join(OUT, 'vt3.c')
-    sources = [os.path.join(RT, s) for s in ('vt3rt.c', 'vt3main.c', 'vt3simd.c', 'vt3fpu.c')]
+    sources = [os.path.join(RT, s) for s in ('vt3rt.c', 'vt3native.c', 'vt3main.c', 'vt3simd.c', 'vt3fpu.c')]
     sources.append(adapters)
     sources += core_src
     sources += shim_src

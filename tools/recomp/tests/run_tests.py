@@ -129,6 +129,7 @@ def build_runtime(objdir):
         sys.exit(f"adapter generation failed:\n{r.stdout.decode()}{r.stderr.decode()}")
     sources = [
         os.path.join(RT, 'vt3rt.c'),
+        os.path.join(RT, 'vt3native.c'),
         os.path.join(RT, 'vt3main.c'),
         os.path.join(RT, 'vt3simd.c'),
         os.path.join(RT, 'vt3fpu.c'),
