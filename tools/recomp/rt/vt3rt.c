@@ -201,9 +201,11 @@ void vt_icall(vt3_cpu *c, uint32_t target)
     }
     /* A shim may call guest code (window procedures). Record this frame's stack pointer so the
      * nested call starts below it. */
-    uint32_t saved_sp = vt3shim_guest_sp_swap(c->esp);
+    uint32_t sp_slot = c->fs_base + VT3SHIM_TEB_GUEST_SP, saved_sp;
+    memcpy(&saved_sp, vt_mem + sp_slot, 4);
+    memcpy(vt_mem + sp_slot, &c->esp, 4);
     e->fn(c);
-    vt3shim_guest_sp_swap(saved_sp);
+    memcpy(vt_mem + sp_slot, &saved_sp, 4);
     if (msg_kind == 1 && c->eax) vt_trace_msg("returned", msg_arg);
 }
 

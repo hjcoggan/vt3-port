@@ -21,9 +21,11 @@ void vt3shim_thread_begin_main(void);
 /* Sets the main thread's guest stack top and TEB, so shim code can call guest code on it. */
 void vt3shim_set_main_teb(uint32_t stack_top, uint32_t teb);
 
-/* The translator calls this around each shim or guest function it dispatches, with the guest
- * stack pointer at that point. Returns the previous value, to restore after the call. */
-uint32_t vt3shim_guest_sp_swap(uint32_t sp);
+/* TEB offset where the translator keeps the guest stack pointer of the shim call in progress,
+ * saving and restoring it around each dispatch, so a nested call starts below the live guest
+ * frames. Past the end of the real x86 TEB, so the game never touches it; a plain guest-memory
+ * word rather than a thread-local, which costs a TLS lookup on every import call on Android. */
+#define VT3SHIM_TEB_GUEST_SP 0xFFCu
 
 /* Creates the process heap inside the guest arena. Returns 0 on success. */
 int  vt3shim_init(void);
