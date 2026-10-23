@@ -266,7 +266,9 @@ static void fill_rstate(const d3d9_device *d, vt3_rstate *s)
     s->alpha_blend = d->rs[27] != 0;
     s->src_blend = d->rs[19] ? (int)d->rs[19] : 2;
     s->dst_blend = d->rs[20] ? (int)d->rs[20] : 1;
-    s->depth_test = d->rs[7] != 0 && !getenv("VT3_NO_ZTEST");   /* debug: VT3_NO_ZTEST=1 ignores the depth test */
+    static int no_ztest = -1;   /* debug: VT3_NO_ZTEST=1 ignores the depth test */
+    if (no_ztest < 0) no_ztest = getenv("VT3_NO_ZTEST") != NULL;
+    s->depth_test = d->rs[7] != 0 && !no_ztest;
     s->depth_write = d->rs[14] != 0;
     s->depth_func = d->rs[23] ? (int)d->rs[23] : 4;
     s->cull = d->rs[22] ? (int)d->rs[22] : 3;
@@ -824,7 +826,25 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
             idx16 = index_scratch_reserve(nidx ? nidx : 1u);
             if (!idx16) return E_OUTOFMEMORY_D3D9;
         }
+        /* Branch-free first pass (vectorises): rebase every index and note any out of range.
+         * Only a buffer with a bad index takes the clamping pass below. */
+        uint32_t range = hi - lo, bad = 0;
         if (isz == 4) {
+            for (uint32_t i = 0; i < nidx; i++) {
+                uint32_t v;
+                memcpy(&v, ip + 4 * i, 4);
+                bad |= v - lo >= range;
+                idx16[i] = (uint16_t)(v - lo);
+            }
+        } else {
+            for (uint32_t i = 0; i < nidx; i++) {
+                uint16_t v;
+                memcpy(&v, ip + 2 * i, 2);
+                bad |= (uint32_t)v - lo >= range;
+                idx16[i] = (uint16_t)((uint32_t)v - lo);
+            }
+        }
+        if (bad && isz == 4) {
             for (uint32_t i = 0; i < nidx; i++) {
                 uint32_t v;
                 memcpy(&v, ip + 4 * i, 4);
@@ -834,10 +854,11 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
                 }
                 idx16[i] = (uint16_t)(v - lo);
             }
-        } else {
+        } else if (bad) {
             for (uint32_t i = 0; i < nidx; i++) {
-                uint32_t v;
-                memcpy(&v, ip + 2 * i, 2);
+                uint16_t v16;
+                memcpy(&v16, ip + 2 * i, 2);
+                uint32_t v = v16;
                 if (v < lo || v >= hi) {
                     if (warned_once(&g_warn_idx) == 0) VT3_WARN("draw: index %u outside [%u,%u), clamped", v, lo, hi);
                     v = lo;

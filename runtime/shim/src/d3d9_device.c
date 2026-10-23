@@ -471,7 +471,7 @@ HRESULT WINAPI IDirect3DDevice9_GetFVF(GPTR This, GPTR pFVF)
 HRESULT WINAPI IDirect3DDevice9_SetTexture(GPTR This, DWORD Stage, GPTR pTexture)
 {
     d3d9_device *d = DEV(This);
-    if (getenv("VT3_PIXEL_TEX") && d3d9_pixel_watch) {   /* the bindings of the watched frame, in order */
+    if (d3d9_pixel_watch && getenv("VT3_PIXEL_TEX")) {   /* the bindings of the watched frame, in order */
         d3d9_texture *t = d3d9_texture_of(pTexture);
         VT3_INFO("SetTexture stage %u tex 0x%x gl %u (%ux%u) before draw %d caller 0x%08x", (unsigned)Stage,
                  (unsigned)pTexture, t ? (unsigned)t->gl : 0u, t ? t->w : 0u, t ? t->h : 0u, d3d9_frame_draws,
