@@ -96,16 +96,14 @@ static uint32_t g_gil_last_holder;
 /* Threads blocked on the lock itself, for the directed handoff. */
 static int g_gil_waiters;
 
-/* Loop back edges in the translated code test this (VT_SAFEPOINT in vt3rt.h). Set while some
- * thread is counted as waiting for the lock, so a long stretch of pure guest code - a menu load
- * that held the lock for up to 456 ms - lends it out instead of starving the audio writer. */
+/* Loop back edges in the translated code test this (VT_SAFEPOINT in vt3rt.h), so a long stretch
+ * of pure guest code - a menu load held the lock for up to 456 ms - lends the lock out instead of
+ * starving the audio writer. Only the ticker below sets it, and only once the lock has been held
+ * SAFEPOINT_HOLD_MS without a break while somebody waits: set on every waiter instead, it fired at
+ * nearly every back edge and the match ran at 11 fps. */
+#define SAFEPOINT_HOLD_MS 4u
 volatile int vt3shim_safepoint_req;
 static int g_gil_wake_pending;
-static void safepoint_update(void)
-{
-    vt3shim_safepoint_req = __atomic_load_n(&g_gil_waiters, __ATOMIC_RELAXED) +
-                            __atomic_load_n(&g_gil_wake_pending, __ATOMIC_RELAXED) > 0;
-}
 
 /* A timed condition wait that expires re-takes the lock inside pthread_cond_timedwait, which no
  * count sees (the winmm timer fired 100-360 ms late this way). The earliest such deadline is kept
@@ -121,15 +119,17 @@ static void *safepoint_ticker(void *arg)
     const struct timespec tick = { 0, 1000000L };
     for (;;) {
         nanosleep(&tick, NULL);
+        if (!vt3s_gil_holder() || vt3s_now_ms() - g_gil_since_ms < SAFEPOINT_HOLD_MS) continue;
         int64_t d = __atomic_load_n(&g_gil_timed_deadline, __ATOMIC_RELAXED);
-        if (!d || !vt3s_gil_holder()) continue;
-        struct timespec now;
-        clock_gettime(CLOCK_REALTIME, &now);
-        if (ts_ns(&now) < d) continue;
-        if (__atomic_compare_exchange_n(&g_gil_timed_deadline, &d, 0, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
-            __atomic_add_fetch(&g_gil_wake_pending, 1, __ATOMIC_RELAXED);
-            safepoint_update();
+        if (d) {
+            struct timespec now;
+            clock_gettime(CLOCK_REALTIME, &now);
+            if (ts_ns(&now) >= d &&
+                __atomic_compare_exchange_n(&g_gil_timed_deadline, &d, 0, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+                __atomic_add_fetch(&g_gil_wake_pending, 1, __ATOMIC_RELAXED);
         }
+        if (__atomic_load_n(&g_gil_waiters, __ATOMIC_RELAXED) + __atomic_load_n(&g_gil_wake_pending, __ATOMIC_RELAXED))
+            vt3shim_safepoint_req = 1;
     }
     return NULL;
 }
@@ -178,9 +178,9 @@ static int handoff_on(void)
 void vt3s_gil_lock(void)
 {
     int counted = handoff_on();
-    if (counted) { __atomic_add_fetch(&g_gil_waiters, 1, __ATOMIC_RELAXED); safepoint_update(); }
+    if (counted) __atomic_add_fetch(&g_gil_waiters, 1, __ATOMIC_RELAXED);
     pthread_mutex_lock(&gil);
-    if (counted) { __atomic_sub_fetch(&g_gil_waiters, 1, __ATOMIC_RELAXED); safepoint_update(); }
+    if (counted) __atomic_sub_fetch(&g_gil_waiters, 1, __ATOMIC_RELAXED);
 }
 
 /* Threads in a condition wait re-acquire the lock inside pthread_cond_wait, so vt3s_gil_lock never
@@ -209,7 +209,6 @@ int vt3s_gil_cond_wait(const struct timespec *deadline)
         int p = __atomic_load_n(&g_gil_wake_pending, __ATOMIC_RELAXED);
         while (p > 0 && !__atomic_compare_exchange_n(&g_gil_wake_pending, &p, p - 1, 0,
                                                      __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
-        safepoint_update();
     }
     return rc;
 }
@@ -219,7 +218,6 @@ void vt3s_gil_broadcast(void)
     if (handoff_on()) {
         __atomic_store_n(&g_gil_wake_pending, __atomic_load_n(&g_gil_cond_waiters, __ATOMIC_RELAXED),
                          __ATOMIC_RELAXED);
-        safepoint_update();
     }
     pthread_cond_broadcast(&gcond);
 }
@@ -560,7 +558,6 @@ void vt3shim_safepoint(void)
 {
     vt3shim_safepoint_req = 0;
     gil_handoff();
-    safepoint_update();
 }
 
 BOOL WINAPI SwitchToThread(void)
