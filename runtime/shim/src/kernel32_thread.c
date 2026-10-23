@@ -99,9 +99,10 @@ static int g_gil_waiters;
 /* Loop back edges in the translated code test this (VT_SAFEPOINT in vt3rt.h), so a long stretch
  * of pure guest code - a menu load held the lock for up to 456 ms - lends the lock out instead of
  * starving the audio writer. Only the ticker below sets it, and only once the lock has been held
- * SAFEPOINT_HOLD_MS without a break while somebody waits: set on every waiter instead, it fired at
- * nearly every back edge and the match ran at 11 fps. */
-#define SAFEPOINT_HOLD_MS 4u
+ * g_safepoint_ms without a break while somebody waits: set on every waiter instead, it fired at
+ * nearly every back edge and the match ran at 11 fps; at 4 ms it cost 15-30 fps. The game's audio
+ * ring holds 128 ms, so lending the lock every 16 ms is enough. */
+static uint32_t g_safepoint_ms = 16;   /* VT3_SAFEPOINT_MS overrides */
 volatile int vt3shim_safepoint_req;
 static int g_gil_wake_pending;
 
@@ -119,7 +120,7 @@ static void *safepoint_ticker(void *arg)
     const struct timespec tick = { 0, 1000000L };
     for (;;) {
         nanosleep(&tick, NULL);
-        if (!vt3s_gil_holder() || vt3s_now_ms() - g_gil_since_ms < SAFEPOINT_HOLD_MS) continue;
+        if (!vt3s_gil_holder() || vt3s_now_ms() - g_gil_since_ms < g_safepoint_ms) continue;
         int64_t d = __atomic_load_n(&g_gil_timed_deadline, __ATOMIC_RELAXED);
         if (d) {
             struct timespec now;
@@ -167,7 +168,9 @@ static int handoff_on(void)
         v = s && atoi(s) != 0;
         __atomic_store_n(&on, v, __ATOMIC_RELAXED);
         pthread_t th;
-        if (v && pthread_create(&th, NULL, safepoint_ticker, NULL) == 0) pthread_detach(th);
+        const char *ms = getenv("VT3_SAFEPOINT_MS");
+        if (ms) g_safepoint_ms = (uint32_t)atoi(ms);
+        if (v && g_safepoint_ms && pthread_create(&th, NULL, safepoint_ticker, NULL) == 0) pthread_detach(th);
     }
     return v;
 }
