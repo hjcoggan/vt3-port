@@ -230,7 +230,7 @@ build except that `../dump/recomp/vt3_nocd/vt3.c` predates the rep-movs fast pat
 ```bash
 ANDROID_NDK=/opt/homebrew/share/android-ndk cmake -S runtime -B ../dump/android/cmake-arm64-main \
   -DCMAKE_TOOLCHAIN_FILE=/opt/homebrew/share/android-ndk/build/cmake/android.toolchain.cmake \
-  -DANDROID_PLATFORM=android-26 -DANDROID_ABI=arm64-v8a \
+  -DANDROID_PLATFORM=android-29 -DANDROID_ABI=arm64-v8a \
   -DVT3_GAME_DIR="/Users/heath/Virtua Tennis 3/dump/recomp/vt3_nocd" -G Ninja
 cmake --build ../dump/android/cmake-arm64-main --target vt3android -j 8   # 5-10 min: huge vt3.c
 /opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-strip \

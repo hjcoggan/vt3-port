@@ -95,7 +95,7 @@ def android(exe):
     cm = os.path.join(BUILD, "android", "cmake")
     run(["cmake", "-S", os.path.join(REPO, "runtime"), "-B", cm, "-G", "Ninja",
          "-DCMAKE_TOOLCHAIN_FILE=" + os.path.join(build_apk.NDK, "build", "cmake", "android.toolchain.cmake"),
-         "-DANDROID_PLATFORM=android-26", "-DANDROID_ABI=arm64-v8a", "-DCMAKE_BUILD_TYPE=Release",
+         "-DANDROID_PLATFORM=android-29", "-DANDROID_ABI=arm64-v8a", "-DCMAKE_BUILD_TYPE=Release",
          "-DVT3_GAME_DIR=" + game])
     print("Compiling the translated game. This takes 5 to 15 minutes.")
     run(["cmake", "--build", cm, "--target", "vt3android"])
