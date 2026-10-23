@@ -155,7 +155,10 @@ if(VT3_ANDROID)
     target_include_directories(vt3android PRIVATE ${VT3_RT_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${ANDROID_NDK}/sources/android/native_app_glue)
     target_compile_options(vt3android PRIVATE -O2 -std=gnu11 -w -ffp-contract=off ${VT3_ANDROID_FASTCALL})
-    set_source_files_properties(${VT3_GAME_DIR}/vt3.c PROPERTIES COMPILE_OPTIONS "-O1;-std=gnu11;-w;-ffp-contract=off")
+    # vt3.c is about 100 MB. -O2 without debug info (the NDK adds -g; the library is stripped
+    # anyway) compiles in 148 s at 5.7 GB peak, against 253 s and 7.6 GB for -O1 with it, and
+    # the Retroid ran 2-4 fps faster in three rotated pairs.
+    set_source_files_properties(${VT3_GAME_DIR}/vt3.c PROPERTIES COMPILE_OPTIONS "-O2;-g0;-std=gnu11;-w;-ffp-contract=off")
     # The weak defaults in vt3shim must lose to the real renderer, platform and audio in vt3core, so
     # every member of both archives is linked in (as -all_load does on the desktop).
     target_link_libraries(vt3android PRIVATE "-Wl,--whole-archive" vt3shim vt3core "-Wl,--no-whole-archive"
