@@ -131,30 +131,10 @@ void vt3s_unimpl(const char *api)
     VT3_WARN("unimplemented: %s", api);
 }
 
-int vt3s_guest_range_ok(GPTR p, DWORD bytes)
-{
-    if (p == 0) return 0;
-    uint64_t end = (uint64_t)p + bytes;
-    return end <= vt3_guest_size();
-}
-
-void vt3s_store_u32(GPTR p, uint32_t v)
-{
-    if (!vt3s_guest_range_ok(p, 4)) return;
-    memcpy(vt3_g2h(p), &v, 4);
-}
-
 void vt3s_store_u64(GPTR p, uint64_t v)
 {
     if (!vt3s_guest_range_ok(p, 8)) return;
     memcpy(vt3_g2h(p), &v, 8);
-}
-
-uint32_t vt3s_load_u32(GPTR p)
-{
-    uint32_t v = 0;
-    if (vt3s_guest_range_ok(p, 4)) memcpy(&v, vt3_g2h(p), 4);
-    return v;
 }
 
 const char *vt3s_game_root(void)

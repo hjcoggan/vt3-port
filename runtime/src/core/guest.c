@@ -4,12 +4,12 @@
 #include <stdint.h>
 #include <sys/mman.h>
 
-static uint8_t *g_base;
-static size_t g_size;
+uint8_t *vt3_guest_base_;   /* exported for the shim's inline accessors (vt3_guest.h) */
+size_t vt3_guest_size_;
 
 int vt3_guest_init(size_t bytes)
 {
-    if (g_base) return 0;
+    if (vt3_guest_base_) return 0;
     if (bytes == 0 || bytes > 0xFFFFFFFFu) {
         VT3_ERROR("guest arena: size %zu is outside the 32-bit guest space", bytes);
         return -1;
@@ -21,35 +21,35 @@ int vt3_guest_init(size_t bytes)
         VT3_ERROR("guest arena: mmap of %zu bytes failed", bytes);
         return -1;
     }
-    g_base = (uint8_t *)p;
-    g_size = bytes;
-    VT3_INFO("guest arena: %zu MiB at host %p", bytes >> 20, (void *)g_base);
+    vt3_guest_base_ = (uint8_t *)p;
+    vt3_guest_size_ = bytes;
+    VT3_INFO("guest arena: %zu MiB at host %p", bytes >> 20, (void *)vt3_guest_base_);
     return 0;
 }
 
 void vt3_guest_shutdown(void)
 {
-    if (!g_base) return;
-    munmap(g_base, g_size);
-    g_base = NULL;
-    g_size = 0;
+    if (!vt3_guest_base_) return;
+    munmap(vt3_guest_base_, vt3_guest_size_);
+    vt3_guest_base_ = NULL;
+    vt3_guest_size_ = 0;
 }
 
 size_t vt3_guest_size(void)
 {
-    return g_size;
+    return vt3_guest_size_;
 }
 
 void *vt3_g2h(vt3_gaddr a)
 {
-    if (!g_base || a == 0 || (size_t)a >= g_size) return NULL;
-    return g_base + a;
+    if (!vt3_guest_base_ || a == 0 || (size_t)a >= vt3_guest_size_) return NULL;
+    return vt3_guest_base_ + a;
 }
 
 vt3_gaddr vt3_h2g(const void *p)
 {
-    if (!g_base || !p) return 0;
-    uintptr_t off = (uintptr_t)p - (uintptr_t)g_base;
-    if (off >= g_size) return 0;
+    if (!vt3_guest_base_ || !p) return 0;
+    uintptr_t off = (uintptr_t)p - (uintptr_t)vt3_guest_base_;
+    if (off >= vt3_guest_size_) return 0;
     return (vt3_gaddr)off;
 }

@@ -25,6 +25,10 @@ int   vt3_guest_init(size_t bytes);
 void  vt3_guest_shutdown(void);
 size_t vt3_guest_size(void);
 
+/* The arena itself, for hot inline accessors. Set by vt3_guest_init only; read-only elsewhere. */
+extern uint8_t *vt3_guest_base_;
+extern size_t   vt3_guest_size_;
+
 /* Translate. Returns NULL / 0 for addresses outside the arena. */
 void     *vt3_g2h(vt3_gaddr a);
 vt3_gaddr vt3_h2g(const void *p);

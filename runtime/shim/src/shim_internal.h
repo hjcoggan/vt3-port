@@ -5,6 +5,9 @@
 #include "win32/types.h"
 
 #include <pthread.h>
+#include <string.h>
+
+#include "vt3/vt3_guest.h"
 
 /* File object behind a VT3S_H_FILE handle. std is set for the console handles,
  * which CloseHandle must not close. */
@@ -47,11 +50,24 @@ extern int vt3s_guest_ctx_on;
  * like return addresses into the game's code, nearest first, written as hex into buf. */
 void vt3s_guest_backtrace(char *buf, size_t size);
 
-/* Guest memory access helpers. Return 0 / do nothing for NULL or out of range. */
-int      vt3s_guest_range_ok(GPTR p, DWORD bytes);
-void     vt3s_store_u32(GPTR p, uint32_t v);
+/* Guest memory access helpers. Return 0 / do nothing for NULL or out of range.
+ *
+* Inline: a shim call makes several of these, and out of line they were ~2% of match CPU. */
+static inline int vt3s_guest_range_ok(GPTR p, DWORD bytes)
+{
+    return p != 0 && (uint64_t)p + bytes <= vt3_guest_size_;
+}
+static inline void vt3s_store_u32(GPTR p, uint32_t v)
+{
+    if (vt3s_guest_range_ok(p, 4)) memcpy(vt3_guest_base_ + p, &v, 4);
+}
 void     vt3s_store_u64(GPTR p, uint64_t v);
-uint32_t vt3s_load_u32(GPTR p);
+static inline uint32_t vt3s_load_u32(GPTR p)
+{
+    uint32_t v = 0;
+    if (vt3s_guest_range_ok(p, 4)) memcpy(&v, vt3_guest_base_ + p, 4);
+    return v;
+}
 
 /* Game root for file paths. Never NULL: "." if unset. */
 const char *vt3s_game_root(void);
