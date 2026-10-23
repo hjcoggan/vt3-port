@@ -21,22 +21,6 @@ __attribute__((weak)) uint32_t vt3shim_fn_token(const char *name)
     return 0;
 }
 
-void *d3d9_gmem(GPTR p, DWORD bytes)
-{
-    if (!vt3s_guest_range_ok(p, bytes)) return NULL;
-    return vt3_g2h(p);
-}
-
-uint32_t d3d9_rd(GPTR p, uint32_t off)
-{
-    return vt3s_load_u32(p + off);
-}
-
-void d3d9_wr(GPTR p, uint32_t off, uint32_t v)
-{
-    vt3s_store_u32(p + off, v);
-}
-
 static int host_index_of(GPTR obj, uint32_t kind)
 {
     if (!vt3s_guest_range_ok(obj, D3D9_OBJ_SIZE)) return -1;
@@ -44,12 +28,6 @@ static int host_index_of(GPTR obj, uint32_t kind)
     uint32_t idx = d3d9_rd(obj, D3D9_OFF_HOST);
     if (idx >= D3D9_MAX_HOST || g_d3d9_host[idx].kind != kind) return -1;
     return (int)idx;
-}
-
-d3d9_host *d3d9_host_of(GPTR obj, uint32_t kind)
-{
-    int i = host_index_of(obj, kind);
-    return i < 0 ? NULL : &g_d3d9_host[i];
 }
 
 /* ---- vtables -------------------------------------------------------------- */

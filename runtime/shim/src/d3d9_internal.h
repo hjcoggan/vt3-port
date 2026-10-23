@@ -51,15 +51,24 @@ typedef struct d3d9_host {
 
 extern d3d9_host g_d3d9_host[D3D9_MAX_HOST];
 
-/* Guest memory helpers. Pointers are checked against the arena. */
-void *d3d9_gmem(GPTR p, DWORD bytes);                 /* NULL when out of range */
-uint32_t d3d9_rd(GPTR p, uint32_t off);               /* 0 when out of range */
-void d3d9_wr(GPTR p, uint32_t off, uint32_t v);       /* no-op when out of range */
+/* Guest memory helpers. Pointers are checked against the arena. Inline: every D3D9 method goes
+ * through them, with d3d9_host_of (about 2% of Retroid match CPU out of line). */
+static inline void *d3d9_gmem(GPTR p, DWORD bytes)   /* NULL when out of range */
+{
+    return vt3s_guest_range_ok(p, bytes) ? vt3_guest_base_ + p : NULL;
+}
+static inline uint32_t d3d9_rd(GPTR p, uint32_t off) { return vt3s_load_u32(p + off); }   /* 0 when out of range */
+static inline void d3d9_wr(GPTR p, uint32_t off, uint32_t v) { vt3s_store_u32(p + off, v); }   /* no-op when out of range */
 
 /* Objects. */
 GPTR d3d9_obj_new(uint32_t kind, void *data, GPTR parent);     /* picks the vtable for kind */
 GPTR d3d9_new_stub(uint32_t kind, GPTR parent);                /* E_NOTIMPL methods, no data */
-d3d9_host *d3d9_host_of(GPTR obj, uint32_t kind);             /* NULL unless kind matches */
+static inline d3d9_host *d3d9_host_of(GPTR obj, uint32_t kind)   /* NULL unless kind matches */
+{
+    if (!vt3s_guest_range_ok(obj, D3D9_OBJ_SIZE) || d3d9_rd(obj, D3D9_OFF_KIND) != kind) return NULL;
+    uint32_t idx = d3d9_rd(obj, D3D9_OFF_HOST);
+    return idx < D3D9_MAX_HOST && g_d3d9_host[idx].kind == kind ? &g_d3d9_host[idx] : NULL;
+}
 void d3d9_obj_free(GPTR obj);
 void dsound_free(uint32_t kind, void *data);                   /* host data of a DirectSound object (dsound_stub.c) */
 void d3dx_obj_free(uint32_t kind, void *data);                 /* host data of an ID3DX object (d3dx9_compile.c) */
