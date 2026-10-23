@@ -117,6 +117,16 @@ void vt3_gfx_draw_program(const vt3_draw *d)
     if (g_ops && g_ops->draw_program && d && d->count) g_ops->draw_program(d);
 }
 
+void *vt3_gfx_reserve_vertices(size_t n, uint32_t *offset)
+{
+    return (g_ops && g_ops->reserve_vertices) ? g_ops->reserve_vertices(n, offset) : NULL;
+}
+
+void *vt3_gfx_reserve_indices(size_t n, uint32_t *offset)
+{
+    return (g_ops && g_ops->reserve_indices) ? g_ops->reserve_indices(n, offset) : NULL;
+}
+
 void vt3_gfx_readback(uint8_t *rgba)
 {
     if (g_ops && g_ops->readback) g_ops->readback(rgba);
