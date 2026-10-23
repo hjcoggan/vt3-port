@@ -186,12 +186,16 @@ recompilation of `vt3.c`), and `rep movs` translating to `memmove` instead of a 
    without Homebrew's SDL3/Vulkan/MoltenVK to prove it launches there.
 7. Vulkan memory is about 128 MB host-visible (two frames of rings): watch it on the Retroid.
    MoltenVK logs "Metal does not support disabling primitive restart" (harmless).
-8. Frame rate on the Retroid: **~39 fps average in play** (measured from the log ring buffer across
-   a run: 38.6 before this session's mip work, 39.5 after — so the mip chain is not a cost; the older
-   "53-55 fps" figure in previous handoffs predates this session's renderer commits and is not
-   reproducible here). Venue and opponent are random per run, so compare within one build only, and
-   check `Thermal Status` first (it was 0 while measuring). The GPU is not the wait (3.5 ms/frame,
-   fence wait ~0.01 ms), so the stall is CPU-side (loading).
+8. Frame rate on the Retroid (2026-10-24): **~80-90 fps median in an Exhibition match**, 9-12
+   frames a second over 20 ms. The GPU takes ~4-5.6 ms a frame, so the limit is CPU. Profile
+   (simpleperf, before the SSE work): `fn_00421e90` (cloth solver, mostly SSE) 26.7%, memcpy 8.9%
+   (vk_draw_program_impl 31% of it, d3d9_draw 17%, the game's own copies the rest), d3d9_draw
+   8.5%, vt_fst32_rc 3.7% (the CRI audio thread stores with RC = toward zero; now inline).
+   `ae97d87` keeps SSE registers in locals: on the Mac it cut the cloth solver from 17% to 7% of
+   the game thread, and on the Retroid it measured 81/90 fps against 79/59 for the same runtime
+   without it (noisy: venue and opponent vary). The runs: `/tmp/vt3run.sh NAME SECS ENVFILE`, then
+   `python3 /tmp/vt3an.py /tmp/vt3_NAME/logcat.txt` (both outside the repo). Compare within one
+   sitting and check `Thermal Status` first.
 9. Route flake: the Tournament route sometimes never reaches a match (about 59-62 textures at the
    last key, no error), more often while a build is using the CPU. Rerun.
 
@@ -281,6 +285,7 @@ the GLSL.
 | `VT3_DS_NO_GATE=1` | Pin the stale-block gate open: the mixer ignores the fresh marks, so an unwritten block replays the previous lap (the pre-e8d1a37 behaviour: 128 ms repeats and clicks) instead of fading to silence. A/B experiment for what the gate itself contributes. |
 | `VT3_TRACE_SLOW=ms` | Slow-call trace with that threshold in ms: every guest-lock hold that long at release ("gil hold: tid T held N ms"), a thread's wait for the lock itself ("gil acquire"), ReadFile/CreateFileA calls that long with the current holder's tid, winmm timers firing that long past due ("timer late"), and texture create/upload/convert ops that long. This is what traced the menu gargle to the guest lock; the default build logs none of it. |
 | `VT3_GIL_YIELD_US=us` | Sleep in `gil_handoff` after releasing the guest lock (default 50). 2000 measured better in traces but sounded worse on the Retroid. Wider means the waiters (audio writer, winmm timer) win the lock; 50 us measured much worse for audio, 0 starves waiters for seconds. |
+| `VT3_GIL_HANDOFF=1` | Directed guest-lock handoff: `gil_handoff` keeps the lock when nobody waits for it, and otherwise unlocks and spins until another thread holds it (at most 1 ms). Threads in a condition wait count as waiters from the broadcast that wakes them. Retroid: frames over 20 ms 9-11/s -> 5-6/s, longest frame 33-38 -> 25 ms, median unchanged. Off until it passes a listening test. |
 | `VT3_TRACE_READS=1` | Log every ReadFile of 4 KB or more with its file offset. |
 | `VT3_INPUT_SCRIPT` | `t:KEY` absolute, `wN[@T]:KEY` quiet wait, `rN:KEY` repeat. |
 | `VT3_TOUCH`, `VT3_TOUCH_FORCE`, `VT3_TOUCH_SCALE`, `VT3_TOUCH_ALPHA`, `VT3_TOUCH_COLOR`, `VT3_TOUCH_DEBUG` | On-screen touch controls (Android; `VT3_TOUCH=1` also draws them on the desktop for a layout check). See `docs/TOUCH_CONTROLS.md`. |
