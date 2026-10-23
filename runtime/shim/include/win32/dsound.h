@@ -111,6 +111,10 @@ typedef struct ds_mix_state {
     uint64_t phase;      /* Q32 source frame index, absolute from the buffer's start */
     uint32_t last_blk;   /* FRESH_BLOCK block the last frame read, or UINT32_MAX */
     int32_t gate;        /* Q15 output gate: 0 silent, VT3_MIX_GATE_MAX full */
+    uint32_t dip_frames; /* trace: output frames rendered below full gate (cleared by the reader) */
+    uint32_t stale_events; /* trace: transitions of the gate to closed (cleared by the reader) */
+    uint32_t stale_blk;    /* trace: FRESH_BLOCK block where the last stale transition happened */
+    int32_t stale;         /* trace: 1 while the gate is closed on stale data */
 } ds_mix_state;
 
 /* Q32 phase step for rate_hz source frames per second against the 48 kHz output. */

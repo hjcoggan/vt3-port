@@ -68,6 +68,15 @@ void vt3s_heap_module_shutdown(void);
 pthread_mutex_t *vt3s_gil(void);
 pthread_cond_t *vt3s_gcond(void);
 uint32_t vt3s_current_tid(void);
+
+/* VT3_TRACE_SLOW=<ms>: threshold in ms for the slow-hold/slow-call trace, 0 when off
+ * (shim_core.c). */
+int vt3s_slow_ms(void);
+/* Guest-lock hold tracking for that trace: called around every gil acquire and release.
+ * A hold that reaches the threshold is logged on release with the holder's tid. */
+void  vt3s_gil_acquired(void);
+void  vt3s_gil_releasing(void);
+uint32_t vt3s_gil_holder(void);   /* tid holding the gil right now, 0 when free */
 uint32_t vt3s_now_ms(void);
 vt3s_thread *vt3s_thread_attach_host(void);
 DWORD vt3s_call_guest(uint32_t stack_top, uint32_t teb, uint32_t fn, const uint32_t *args, uint32_t nargs);

@@ -66,6 +66,8 @@ typedef struct ds_buffer {
     uint32_t lock_off;           /* where the last Lock began: the Unlock writes start here */
     uint8_t *fresh;              /* one flag per FRESH_BLOCK bytes: set when the game writes it, cleared once played */
     ds_mix_state mix;            /* resampler state; only the mixer thread reads it, and Play/SetCurrentPosition reset it under g_mu */
+    uint32_t n_locks, n_plays;   /* trace: how often the game wrote and played this buffer */
+    uint32_t obj;                /* guest object id, as the per-event trace prints it */
 } ds_buffer;
 
 /* ---- output mixer ----------------------------------------------------------
@@ -86,6 +88,17 @@ static ds_buffer *g_active[MIX_MAX_ACTIVE];
 static int g_nactive;
 static vt3_audio *g_out;
 static uint64_t g_mix_next_ns;
+static size_t g_ring_bytes;      /* trace: output ring size, to report its fill */
+static uint32_t g_resyncs;       /* trace: wall-clock resyncs of the mixer timeline */
+
+/* VT3_DS_NO_GATE=1 pins the stale-block gate open: the mixer ignores the fresh marks
+ * entirely (A/B experiment for whether the gate is what gargles a sound). */
+static int ds_no_gate(void)
+{
+    static int on = -1;
+    if (on < 0) on = getenv("VT3_DS_NO_GATE") != NULL;
+    return on;
+}
 
 /* ---- guest memory and time ------------------------------------------------ */
 
@@ -268,8 +281,8 @@ uint32_t ds_mix_render(int32_t *acc, uint32_t frames, const uint8_t *data, uint3
          * since the mixer last played it is stale: its gate fades to silence instead of
          * cutting to it (a click) or replaying the old audio (the repeats e8d1a37 removed). */
         int32_t target = VT3_MIX_GATE_MAX;
+        uint32_t blk = (uint32_t)((f * (uint64_t)align) / FRESH_BLOCK);
         if (fresh) {
-            uint32_t blk = (uint32_t)((f * (uint64_t)align) / FRESH_BLOCK);
             if (blk != st->last_blk) {
                 if (st->last_blk != UINT32_MAX) __atomic_store_n(&fresh[st->last_blk], 0, __ATOMIC_RELAXED);
                 st->last_blk = blk;
@@ -278,10 +291,18 @@ uint32_t ds_mix_render(int32_t *acc, uint32_t frames, const uint8_t *data, uint3
              * once the flag is. A missed mark only extends the dip by one ramp. */
             if (!__atomic_load_n(&fresh[blk], __ATOMIC_ACQUIRE)) target = 0;
         }
+        /* Trace: count each continuous stretch of stale silence once, at the block that
+         * caused it, so a per-second summary can be aligned with the game's write times. */
+        if (target == 0) {
+            if (!st->stale) { st->stale = 1; st->stale_events++; st->stale_blk = blk; }
+        } else {
+            st->stale = 0;
+        }
         int32_t gate = st->gate;
         if (gate < target)      { gate += MIX_GATE_STEP; if (gate > target) gate = target; }
         else if (gate > target) { gate -= MIX_GATE_STEP; if (gate < target) gate = target; }
         st->gate = gate;
+        if (gate < VT3_MIX_GATE_MAX) st->dip_frames++;   /* trace: frames below full gate */
 
         if (gate) {
             uint32_t f2 = f + 1 < src_frames ? f + 1 : (looping ? 0 : f);
@@ -343,7 +364,7 @@ static void mix_buffer_locked(ds_buffer *b, int32_t *acc, uint32_t frames, uint6
     gl *= gain;
     gr *= gain;
     uint32_t done = ds_mix_render(acc, frames, data, b->bytes, nch, bits, align, b->looping,
-                                  b->fresh, ds_mix_step(hz), gl, gr, &b->mix);
+                                  ds_no_gate() ? NULL : b->fresh, ds_mix_step(hz), gl, gr, &b->mix);
     if (done < frames) {                             /* the buffer ran out mid-chunk */
         b->playing = 0;
         b->pos = 0;
@@ -381,7 +402,10 @@ static void *mix_thread(void *arg)
         nanosleep(&ts, NULL);
         pthread_mutex_lock(&g_mu);
         uint64_t now = now_ns();
-        if (now > g_mix_next_ns + 50000000u) g_mix_next_ns = now - 10000000u;   /* 50 ms behind: resync */
+        if (now > g_mix_next_ns + 50000000u) {
+            g_mix_next_ns = now - 10000000u;
+            g_resyncs++;                              /* more than 50 ms behind the read timeline: resync */
+        }
         uint64_t due = now > g_mix_next_ns ? (now - g_mix_next_ns) * MIX_RATE / 1000000000u : 0;
         uint64_t space = vt3_audio_space(g_out) / (MIX_CH * sizeof(int16_t));
         uint64_t frames = due < space ? due : space;
@@ -405,8 +429,31 @@ static void *mix_thread(void *arg)
             if (trace) {
                 window_peak = peak > window_peak ? peak : window_peak;
                 if (now - window_ns >= 1000000000u) {
-                    VT3_INFO("audio: %d playing, peak %d in the last second, underruns %u", g_nactive,
-                             (int)window_peak, (unsigned)vt3_audio_underruns(g_out));
+                    uint64_t space = vt3_audio_space(g_out);
+                    uint64_t used_ms = (g_ring_bytes > space ? g_ring_bytes - space : 0) * 1000u /
+                                       ((uint64_t)MIX_RATE * MIX_CH * sizeof(int16_t));
+                    VT3_INFO("audio: %d playing, peak %d in the last second, underruns %u, ring %llu ms, gap %lld ms, resync %u, t=%llu ms",
+                             g_nactive, (int)window_peak, (unsigned)vt3_audio_underruns(g_out),
+                             (unsigned long long)used_ms,
+                             (long long)((now - g_mix_next_ns) / 1000000u), g_resyncs,
+                             (unsigned long long)(now / 1000000u % 100000u));
+                    for (int i = 0; i < g_nactive; i++) {
+                        ds_buffer *b = g_active[i];
+                        uint32_t pnow = play_cursor_at(b, now);
+                        uint32_t pmix = play_cursor_at(b, g_mix_next_ns);
+                        uint32_t behind = (pnow + b->bytes - pmix) % (b->bytes ? b->bytes : 1);
+                        VT3_INFO("audio:   0x%08x %u B %u Hz x%u ch %u bit loop %d playing %d, "
+                                 "locks %u plays %u, below-full gate %u ms, stale %u events at byte %u, "
+                                 "read-behind %u ms",
+                                 b->obj, b->bytes, (unsigned)rd32(b->fmt, 4),
+                                 (unsigned)fmt16(b->fmt, 2), (unsigned)fmt16(b->fmt, 14),
+                                 b->looping, b->playing, b->n_locks, b->n_plays,
+                                 b->mix.dip_frames / (MIX_RATE / 1000u),
+                                 b->mix.stale_events, b->mix.stale_blk * FRESH_BLOCK,
+                                 behind * 1000u / (buf_bps(b) ? buf_bps(b) : 1u));
+                        b->mix.dip_frames = 0;
+                        b->mix.stale_events = 0;
+                    }
                     window_ns = now;
                     window_peak = 0;
                 }
@@ -430,7 +477,23 @@ static void mixer_start_once(void)
         VT3_WARN("DirectSound: no audio device; playback stays silent");
         return;
     }
+    g_ring_bytes = ring;
     g_mix_next_ns = now_ns();
+    /* Prime the ring with silence to a 30 ms cushion. Without it the cushion is however
+     * much the mixer managed to write before the device's first callback drained the ring:
+     * measured 40 ms when the callback started late and 4-12 ms when it started promptly,
+     * and in the thin case any jitter became an audible partial read (underrun). The
+     * prime runs before the mixer thread starts, so this is still the ring's only writer. */
+    {
+        uint8_t zeros[4096];
+        size_t prime = ring * 3u / 4u, left = prime;
+        memset(zeros, 0, sizeof zeros);
+        while (left) {
+            size_t n = left < sizeof zeros ? left : sizeof zeros;
+            vt3_audio_write(g_out, zeros, n);
+            left -= n;
+        }
+    }
     pthread_t th;
     if (pthread_create(&th, NULL, mix_thread, NULL) != 0) {
         VT3_WARN("DirectSound: could not start the mixer; playback stays silent");
@@ -472,6 +535,7 @@ static GPTR buffer_new(GPTR parent, uint32_t bytes, const uint8_t *fmt)
     b->volume = DSBVOLUME_MAX;
     b->mix.last_blk = UINT32_MAX;
     GPTR obj = d3d9_obj_new(D3D9_KIND_DSBUFFER, b, parent);
+    if (obj) b->obj = obj;
     if (!obj) {
         HeapFree(GetProcessHeap(), 0, b->storage);
         free(b->fresh);
@@ -773,6 +837,7 @@ HRESULT WINAPI IDirectSoundBuffer_Lock(GPTR This, DWORD dwOffset, DWORD dwBytes,
                  (unsigned long long)(now_ns() / 1000000u % 100000u), (unsigned long long)((uintptr_t)pthread_self() % 1000u));
     if (!b->bytes || off >= b->bytes || n > b->bytes) return DSERR_INVALIDPARAM;
     b->lock_off = off;
+    b->n_locks++;
     uint32_t n1 = n, n2 = 0;
     if (off + n > b->bytes) {                     /* the region wraps past the end of the buffer */
         n1 = b->bytes - off;
@@ -797,6 +862,7 @@ HRESULT WINAPI IDirectSoundBuffer_Play(GPTR This, DWORD dwReserved1, DWORD dwPri
         VT3_INFO("DirectSound: Play 0x%08x (%u bytes, flags 0x%x, pos %u)", (unsigned)This, (unsigned)b->bytes,
                  (unsigned)dwFlags, (unsigned)b->pos);
     pthread_mutex_lock(&g_mu);
+    b->n_plays++;
     b->looping = (dwFlags & DSBPLAY_LOOPING) != 0;
     if (!b->playing) {
         b->playing = 1;

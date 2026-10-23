@@ -659,8 +659,10 @@ static void test_dinput8_xbox360_controls(void)
      *   LB/RB/LT/RT   -> Button 4 (offset 52, slot 8 = 0x856060 -> raw 0x20000000): Instruct COM Partner / Incoming Mail
      *   RB/RT         -> DIK_LMENU (0x38 -> raw 0x800 -> action 0x400000): World Tour Tour Calendar
      *   Start         -> Button 7 (offset 55, slot 9 = 0x856062 -> raw 0x20): Pause / Open Main Menu
-     *   Back          -> Button 6 (offset 54) AND DIK_V (0x2F -> raw 0x2000): Change Camera View
-     *   Button 1 (offset 49, slot 7 = 0x85605e -> raw 0x10 = Pause match) must remain 0 for all face/shoulder buttons.
+     *   Back          -> Button 6 (offset 54) AND Button 1 (offset 49, VT3_SELECT = slot 7 -> raw 0x10):
+     *                     Change Camera View, the game's own pad slot for it (no DIK_V bridge: 0x2F
+     *                     routes to Instruct COM Partner, not Change Camera)
+     *   Button 1 (offset 49, slot 7 = 0x85605e -> raw 0x10) must remain 0 for all face/shoulder buttons.
      */
     vt3_input_init();
 
@@ -722,12 +724,13 @@ static void test_dinput8_xbox360_controls(void)
     CHECK(pad_buf[48 + 7] == 0x80, "Xbox 360 Start must map to DI button 7 (Pause)");
     vt3_input_set_pad_button(VT3_BTN_START, 0);
 
-    /* Back -> DI button 6 AND keyboard DIK_V (0x2F, Change camera). */
+    /* Back -> DI button 6 AND DI button 1 (the game's Change Camera slot, VT3_SELECT). The old
+     * DIK_V bridge is gone deliberately (7bb73cb): the game sends 0x2F to Instruct COM Partner. */
     vt3_input_set_pad_button(VT3_BTN_BACK, 1);
     IDirectInputDevice8A_GetDeviceState(dev_pad, 80, state_pad);
     IDirectInputDevice8A_GetDeviceState(dev_kb, 256, state_kb);
-    CHECK(pad_buf[48 + 6] == 0x80 && kb_buf[0x2F] == 0x80,
-          "Xbox 360 Back must map to DI button 6 and DIK_V (0x2F, Change camera)");
+    CHECK(pad_buf[48 + 6] == 0x80 && pad_buf[48 + 1] == 0x80 && kb_buf[0x2F] == 0,
+          "Xbox 360 Back must map to DI button 6 and button 1 (Change camera), not DIK_V");
     vt3_input_set_pad_button(VT3_BTN_BACK, 0);
 
     /* D-pad -> POV hat centidegrees; Left stick -> X (0), Y (8) as read by FUN_004018c0. */

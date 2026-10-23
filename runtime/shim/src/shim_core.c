@@ -85,6 +85,18 @@ void vt3s_guest_backtrace(char *buf, size_t size)
     }
 }
 
+/* VT3_TRACE_SLOW=<ms> read once: the threshold for the slow-hold / slow-call trace. */
+int vt3s_slow_ms(void)
+{
+    static int ms = -1;
+    if (ms < 0) {
+        const char *s = getenv("VT3_TRACE_SLOW");
+        ms = s ? atoi(s) : 0;
+        if (ms < 0) ms = 0;
+    }
+    return ms;
+}
+
 void vt3s_set_last_error(DWORD err)
 {
     g_last_error = err;

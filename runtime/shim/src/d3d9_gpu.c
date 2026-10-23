@@ -5,6 +5,7 @@
  * device runs headless: it records state and skips drawing.
  */
 #include "d3d9_internal.h"
+#include "shim_internal.h"
 #include "vt3/vt3_input.h"
 #include "vt3/vt3_log.h"
 #include "vt3/vt3_platform.h"
@@ -13,6 +14,30 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+/* VT3_TRACE_SLOW: texture operations are the loader's bulk work and run with the guest lock
+ * held, so the slow ones are what stalls every other guest thread (the audio writer among
+ * them). slow_start returns 0 when the trace is off, making the pair free. */
+struct slow_op { const char *what; struct timespec t0; };
+
+static int slow_start(struct slow_op *s, const char *what)
+{
+    if (vt3s_slow_ms() <= 0) return 0;
+    s->what = what;
+    clock_gettime(CLOCK_MONOTONIC, &s->t0);
+    return 1;
+}
+
+static void slow_end(struct slow_op *s, uint32_t w, uint32_t h, uint32_t fmt)
+{
+    struct timespec t1;
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    long long ms = (long long)(t1.tv_sec - s->t0.tv_sec) * 1000 + (t1.tv_nsec - s->t0.tv_nsec) / 1000000;
+    if (ms >= vt3s_slow_ms())
+        VT3_INFO("slow tex %s: %ux%u fmt 0x%x took %lld ms (gil holder tid %u)",
+                 s->what, (unsigned)w, (unsigned)h, (unsigned)fmt, ms, vt3s_gil_holder());
+}
 
 static int g_gpu_ok;
 static int g_plat_ok;
@@ -261,7 +286,11 @@ vt3_tex d3d9_gpu_tex_create(uint32_t w, uint32_t h, uint32_t fmt)
     }
     vt3_tex t = 0;
     vt3_input_note_load();   /* loading activity, for the input script's quiet waits */
-    if (vt3_gfx_tex_create(&t, (int)w, (int)h, tf) != 0) {
+    struct slow_op op;
+    int timed = slow_start(&op, "create gl");
+    int gfx_rc = vt3_gfx_tex_create(&t, (int)w, (int)h, tf);
+    if (timed) slow_end(&op, w, h, fmt);
+    if (gfx_rc != 0) {
         static int warned_create;
         if (!warned_create) {
             warned_create = 1;
@@ -281,12 +310,19 @@ void d3d9_gpu_tex_upload(vt3_tex t, const uint8_t *src, uint32_t pitch, uint32_t
 {
     if (!g_gpu_ok || !t || !src || w == 0 || h == 0) return;
     if (fmt == D3DFMT_CHK_A8R8G8B8 || fmt == D3DFMT_CHK_X8R8G8B8 || fmt == D3DFMT_CHK_A8) {
+        struct slow_op op;
+        int timed = slow_start(&op, "upload gl");
         vt3_gfx_tex_upload(t, src, (int)pitch, (int)w, (int)h);
+        if (timed) slow_end(&op, w, h, fmt);
         return;
     }
     uint8_t *bgra = malloc((size_t)w * h * 4);
     if (!bgra) return;
-    if (d3d9_to_bgra(fmt, src, pitch, w, h, bgra) == 0) {
+    struct slow_op conv;
+    int conv_timed = slow_start(&conv, "convert");
+    int conv_ok = d3d9_to_bgra(fmt, src, pitch, w, h, bgra) == 0;
+    if (conv_timed) slow_end(&conv, w, h, fmt);
+    if (conv_ok) {
         if (getenv("VT3_TRACE_TEX")) {   /* average of the level: a black or empty texture shows here */
             double sum[4] = {0, 0, 0, 0};
             size_t n = (size_t)w * h;
@@ -311,7 +347,10 @@ void d3d9_gpu_tex_upload(vt3_tex t, const uint8_t *src, uint32_t pitch, uint32_t
                 fclose(f);
             }
         }
+        struct slow_op up;
+        int up_timed = slow_start(&up, "upload gl");
         vt3_gfx_tex_upload(t, bgra, (int)(w * 4), (int)w, (int)h);
+        if (up_timed) slow_end(&up, w, h, fmt);
     }
     free(bgra);
 }

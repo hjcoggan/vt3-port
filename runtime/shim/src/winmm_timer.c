@@ -40,6 +40,7 @@ static void *timer_main(void *arg)
     (void)arg;
     pthread_mutex_lock(vt3s_gil());
     vt3s_thread_attach_host();
+    vt3s_gil_acquired();
     for (;;) {
         uint32_t now = vt3s_now_ms();
 
@@ -48,9 +49,12 @@ static void *timer_main(void *arg)
          * one-shot timer is switched off. Then the callback may kill this timer or re-arm into the
          * same slot. The loop never reads the slot again after the callback, so it cannot switch
          * off a timer that the callback just re-armed. */
+        int slow = vt3s_slow_ms();
         for (int i = 0; i < VT3_MAX_TIMERS; i++) {
             struct vt3_timer *t = &timers[i];
             if (!t->active || (int32_t)(now - t->next) < 0) continue;
+            if (slow > 0 && (int32_t)(now - t->next) >= slow)
+                VT3_INFO("timer late: id %u, %d ms past due", t->id, (int32_t)(now - t->next));
             struct vt3_timer f = *t;
             if (f.flags & TIME_PERIODIC) t->next += f.period ? f.period : 1u;
             else t->active = 0;
@@ -75,7 +79,9 @@ static void *timer_main(void *arg)
             any = 1;
         }
         if (!any) {
+            vt3s_gil_releasing();
             pthread_cond_wait(vt3s_gcond(), vt3s_gil());
+            vt3s_gil_acquired();
             continue;
         }
         now = vt3s_now_ms();
@@ -86,7 +92,9 @@ static void *timer_main(void *arg)
         deadline.tv_sec += wait / 1000u;
         deadline.tv_nsec += (long)(wait % 1000u) * 1000000L;
         if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
+        vt3s_gil_releasing();
         pthread_cond_timedwait(vt3s_gcond(), vt3s_gil(), &deadline);
+        vt3s_gil_acquired();
     }
     return NULL;
 }

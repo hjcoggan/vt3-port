@@ -85,6 +85,47 @@ uint32_t vt3s_now_ms(void)
     return (uint32_t)((uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u);
 }
 
+/* VT3_TRACE_SLOW: who holds the guest lock and for how long. Every hold that reaches the
+ * threshold is logged on release, so a thread that stalls shows which tid held the lock
+ * over its gap. Runs with the lock held, except briefly between a pthread lock returning
+ * and the acquired note. */
+static uint32_t g_gil_held_by;
+static uint32_t g_gil_since_ms;
+static uint32_t g_gil_last_holder;
+
+void vt3s_gil_acquired(void)
+{
+    g_gil_held_by = current()->tid;
+    g_gil_since_ms = vt3s_now_ms();
+}
+
+void vt3s_gil_releasing(void)
+{
+    if (g_gil_held_by) {
+        g_gil_last_holder = g_gil_held_by;
+        int th = vt3s_slow_ms();
+        if (th > 0) {
+            uint32_t held = vt3s_now_ms() - g_gil_since_ms;
+            if (held >= (uint32_t)th)
+                VT3_INFO("gil hold: tid %u held %u ms", g_gil_held_by, held);
+        }
+    }
+    g_gil_held_by = 0;
+}
+
+uint32_t vt3s_gil_holder(void) { return g_gil_held_by; }
+
+/* A thread's wait for the lock itself, when it reaches the threshold. */
+static void gil_lock_waited(uint32_t tid, uint32_t t0)
+{
+    int th = vt3s_slow_ms();
+    if (th <= 0) return;
+    uint32_t waited = vt3s_now_ms() - t0;
+    if (waited >= (uint32_t)th)
+        VT3_INFO("gil acquire: tid %u waited %u ms (holder had been tid %u)",
+                 tid, waited, g_gil_last_holder);
+}
+
 void vt3shim_set_guest_call(vt3shim_guest_call_fn fn) { guest_call = fn; }
 
 DWORD vt3s_call_guest(uint32_t stack_top, uint32_t teb, uint32_t fn, const uint32_t *args, uint32_t nargs)
@@ -129,8 +170,11 @@ DWORD vt3s_call_guest_nested(uint32_t fn, const uint32_t *args, uint32_t nargs)
  * waits. */
 void vt3shim_thread_begin_main(void)
 {
+    uint32_t t0 = vt3s_now_ms();
     pthread_mutex_lock(&gil);
+    gil_lock_waited(g_main.tid, t0);
     g_cur = &g_main;
+    vt3s_gil_acquired();
 }
 
 /* Give a new thread its guest stack and TEB. Caller holds the lock. */
@@ -173,7 +217,11 @@ vt3s_thread *vt3s_thread_attach_host(void)
 static void honor_suspend(void)
 {
     vt3s_thread *t = current();
-    while (t->suspend_count) pthread_cond_wait(&gcond, &gil);
+    while (t->suspend_count) {
+        vt3s_gil_releasing();
+        pthread_cond_wait(&gcond, &gil);
+        vt3s_gil_acquired();
+    }
 }
 
 /* Wait with the guest lock released until pred(arg) holds, or ms expires. ms == INFINITE
@@ -209,11 +257,11 @@ static int wait_until_body(vt3s_pred pred, void *arg, DWORD ms)
         if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
     }
     while (!pred(arg)) {
-        if (ms == INFINITE) {
-            pthread_cond_wait(&gcond, &gil);
-        } else if (pthread_cond_timedwait(&gcond, &gil, &deadline) == ETIMEDOUT) {
-            return pred(arg);
-        }
+        vt3s_gil_releasing();
+        int rc = ms == INFINITE ? pthread_cond_wait(&gcond, &gil)
+                                : pthread_cond_timedwait(&gcond, &gil, &deadline);
+        vt3s_gil_acquired();
+        if (rc == ETIMEDOUT) return pred(arg);
     }
     return 1;
 }
@@ -225,14 +273,22 @@ static int never(void *arg) { (void)arg; return 0; }
 static void *thread_main(void *arg)
 {
     vt3s_thread *t = arg;
+    uint32_t t0 = vt3s_now_ms();
     pthread_mutex_lock(&gil);
+    gil_lock_waited(t->tid, t0);
     g_cur = t;
-    while (t->suspend_count) pthread_cond_wait(&gcond, &gil);
+    vt3s_gil_acquired();
+    while (t->suspend_count) {
+        vt3s_gil_releasing();
+        pthread_cond_wait(&gcond, &gil);
+        vt3s_gil_acquired();
+    }
     uint32_t args[1] = {t->param};
     DWORD rc = vt3s_call_guest(t->stack_top, t->teb, t->entry, args, 1);
     t->exit_code = rc;
     t->finished = 1;
     pthread_cond_broadcast(&gcond);
+    vt3s_gil_releasing();
     pthread_mutex_unlock(&gil);
     return NULL;
 }
@@ -294,6 +350,7 @@ void WINAPI ExitThread(DWORD code)
     t->exit_code = code;
     t->finished = 1;
     pthread_cond_broadcast(&gcond);
+    vt3s_gil_releasing();
     pthread_mutex_unlock(&gil);
     pthread_exit(NULL);
 }
@@ -352,14 +409,28 @@ HANDLE WINAPI GetCurrentThread(void) { return VT3_PSEUDO_CURRENT_THREAD; }
 DWORD WINAPI GetCurrentThreadId(void) { return current()->tid; }
 
 /* Gives the guest lock to a waiting thread. A plain unlock and re-lock (even with sched_yield)
- * usually lets the same thread take it straight back, so a busy guest thread starves the others
- * for seconds. The short sleep is long enough for a waiter to take the lock. */
+ * usually lets the same thread take it straight back, so a busy guest thread starves the others:
+ * the futex wakes a waiter but the hot thread re-acquires first, so the audio writer and the winmm
+ * timer can lose every handoff and stall for hundreds of ms while the lock churns between short
+ * holds. The sleep opens the window for the woken waiter to take it. Measured on the Retroid with
+ * the menu route: 50 us lost most handoffs (below-full gate 3.5-6.2 s a minute, write gaps up to
+ * 382 ms) and 2000 us cut that to 0.3-0.9 s with no gaps above 200 ms. VT3_GIL_YIELD_US overrides. */
 static void gil_handoff(void)
 {
+    static int yield_us = -1;
+    if (yield_us < 0) {
+        const char *s = getenv("VT3_GIL_YIELD_US");
+        yield_us = s ? atoi(s) : 2000;
+        if (yield_us < 0) yield_us = 0;
+    }
+    vt3s_gil_releasing();
     pthread_mutex_unlock(&gil);
-    struct timespec pause = { 0, 50000 };   /* 50 us */
-    nanosleep(&pause, NULL);
+    if (yield_us > 0) {
+        struct timespec pause = { 0, (long)yield_us * 1000L };
+        nanosleep(&pause, NULL);
+    }
     pthread_mutex_lock(&gil);
+    vt3s_gil_acquired();
 }
 
 BOOL WINAPI SwitchToThread(void)

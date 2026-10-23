@@ -19,6 +19,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 
@@ -193,6 +194,9 @@ HANDLE WINAPI CreateFileA(LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATT
         oflags |= O_CREAT | (disposition == CREATE_NEW ? O_EXCL : 0);
     }
 
+    int slow = vt3s_slow_ms();
+    struct timespec cs0, cs1;
+    if (slow > 0) clock_gettime(CLOCK_MONOTONIC, &cs0);
     int fd = open(path, oflags, 0644);
     if (fd < 0) {
         int err = errno;
@@ -209,6 +213,12 @@ HANDLE WINAPI CreateFileA(LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATT
     f->fd = fd;
     struct stat st;
     f->size = (fstat(fd, &st) == 0) ? (int64_t)st.st_size : 0;
+    if (slow > 0) {
+        clock_gettime(CLOCK_MONOTONIC, &cs1);
+        long long cms = (long long)(cs1.tv_sec - cs0.tv_sec) * 1000 + (cs1.tv_nsec - cs0.tv_nsec) / 1000000;
+        if (cms >= slow)
+            VT3_INFO("slow create: %s took %lld ms (gil holder tid %u)", path, cms, vt3s_gil_holder());
+    }
 
     HANDLE h = vt3s_handle_new(VT3S_H_FILE, f);
     if (!h) {
@@ -250,10 +260,23 @@ BOOL WINAPI ReadFile(HANDLE hf, LPVOID buffer, DWORD bytes, LPDWORD bytes_read, 
     static int trace_reads = -1;   /* VT3_TRACE_READS=1 logs each read of 4 KB or more with its file offset */
     if (trace_reads < 0) trace_reads = getenv("VT3_TRACE_READS") != NULL;
     off_t at = trace_reads && bytes >= 4096 ? lseek(f->fd, 0, SEEK_CUR) : 0;
+    int slow = vt3s_slow_ms();
+    struct timespec rs0, rs1;
+    if (slow > 0) clock_gettime(CLOCK_MONOTONIC, &rs0);
     ssize_t r = bytes ? read(f->fd, vt3_g2h(buffer), bytes) : 0;
     if (trace_reads && bytes >= 4096)
         VT3_INFO("ReadFile: handle 0x%08x offset %lld bytes %u got %ld", (unsigned)hf, (long long)at,
                  (unsigned)bytes, (long)r);
+    if (slow > 0) {
+        clock_gettime(CLOCK_MONOTONIC, &rs1);
+        long long rms = (long long)(rs1.tv_sec - rs0.tv_sec) * 1000 + (rs1.tv_nsec - rs0.tv_nsec) / 1000000;
+        if (rms >= slow) {
+            char bt[256];
+            vt3s_guest_backtrace(bt, sizeof bt);
+            VT3_INFO("slow read: tid %u bytes %u took %lld ms (gil holder tid %u) guest %s",
+                     vt3s_current_tid(), (unsigned)bytes, rms, vt3s_gil_holder(), bt);
+        }
+    }
     if (r < 0) {
         vt3s_set_last_error((DWORD)errno);
         return FALSE;

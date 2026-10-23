@@ -139,11 +139,40 @@ recompilation of `vt3.c`), and `rep movs` translating to `memmove` instead of a 
      quad/shader than the in-play blur (VSes `dce123fc`, `4a2fc5d6`, `cd2adbf0`, `80d94c77`: all
      `vs_pos = vi0; vo_T0.xy = vi1.xy; gl_Position = (x, -y, z, w)`, i.e. FVF `0x102`).
    - The NaN fix did not help (it is in the build).
-3. **Android audio** needs a listen with e8d1a37 (see above). The menu gargle/crackle itself is
-   fixed this session (interpolated resampling and 2 ms gate ramps, see the Fixed table), so what
-   remains is the listening check on both platforms. Android stutter during loading is probably
-   CPU load: the game's audio writer is starved. Raising the writer thread's priority is the next
-   lever.
+3. **Menu gargle: root cause found (2026-10-23 session), game-side stall is the remainder.**
+   Everything the game plays - music and menu SFX alike - streams through ONE 73728-byte,
+   48 kHz 6-channel looping DirectSound buffer; there are no secondary buffers. The game's
+   single audio-writer thread stalls for 100-300 ms during menu loads (Retroid; 40-113 ms on the
+   Mac), and on wake its stream writer SKIPS the region it could not write: 11-16% of Locks start
+   17-70 ms past where the previous write ended. Skipped blocks then go a full 128 ms lap without
+   a write, so the mixer inevitably reads them unmarked: with the gate, a 2 ms fade to silence
+   and back (the gargle); with `VT3_DS_NO_GATE=1`, a 128 ms stale repeat and clicks (e8d1a37's
+   original artefact). No shim timing lever can recover content the game never wrote - measured:
+   raising the writer thread's priority (a since-removed `VT3_DS_WRITER_PRIO` experiment) left writer-gap percentiles unchanged (the thread is blocked on guest
+   locks, not CPU-starved; the worst stalls show the whole process idle), and a true 96 ms
+   read-behind (the since-removed `VT3_DS_MIX_LAG=96` experiment) left stale counts unchanged too. Device numbers, 57 s menu
+   session each: gate on 654 stale events / 130-427 ms of below-full gate per second / 12 of 26
+   blips shredded; no-gate 16 of 26 blips shredded; underruns 0 throughout, so the sink (AAudio,
+   ring, mixer cadence) is healthy. The gate stays the default because it keeps e8d1a37's
+   no-repeat property. **Found and measured (2026-10-23): the stall is the runtime's own guest
+   lock (gil).** All guest threads (main/loader, audio writer, winmm timer thread) serialize on
+   one pthread mutex held across whole stretches of guest code; at the release points the busy
+   main thread re-won the unfair futex almost every time. The new `VT3_TRACE_SLOW=ms` trace on
+   the Retroid: 74-77% of write gaps >=30 ms are covered by gil holds (the worst gaps 94-100%,
+   tid 1), the winmm timer fires 100-360 ms late inside the same windows, and no slow file read
+   or single texture op explains them (converts <=23 ms; the big holds are chains of 8-17 ms
+   holds with sub-ms re-acquires - the writer loses every handoff). Fix: `gil_handoff` now
+   sleeps `VT3_GIL_YIELD_US` (default 2000 us) so the woken waiter can take the lock; A/B with
+   otherwise identical env: below-full gate 3501 -> 866 ms per minute, write gaps p99 120 ->
+   40 ms, gaps >=100 ms 36 -> 2, writes 1841 -> 2923 per minute. The mixer also primes the
+   device ring with 30 ms of silence at start: the cushion used to be however much the mixer
+   wrote before the device's first callback drained it (measured 40 ms or 4-12 ms depending on
+   startup timing; in the thin case a few partial reads a minute), and is now deterministic
+   (ring 40 ms, 0 underruns, no resyncs). Remaining: the worst menu loads still hold the gil in
+   one unbroken 100-456 ms run (pure guest code with no shim call to hand off at), so gate dips
+   persist at loads at a lower level. Trace recipe: `VT3_TRACE_AUDIO=1` in `vt3.env`, drive menus, then read the
+   per-second `stale N events at byte B` lines against the Lock timeline; `VT3_DUMP_AUDIO` captures
+   the mix for envelope analysis (bursts with internal 1 ms zeros = shredded blips). |
 4. **Net: fixed this session** (see Fixed table). `04d62fa` fixed the missing U/V `WRAP` address mode
    so the 24x4 tiled net mesh renders across the full court, and the row above fixes the sampler LOD
    that clamped every sample to mip 0 (the coarse/scrambled grid). Both verified on the Retroid
@@ -248,7 +277,11 @@ the GLSL.
 | `VT3_VK_DEBUG=1` | Validation messages into the log (desktop Vulkan). |
 | `VT3_SKIN_CHECK=N`, `VT3_PIXEL=...`, `VT3_DUMP_TEX=dir`, `VT3_TRACE_NAN`, `VT3_TRACE_RTSEQ`, `_STRETCH`, `_FPS` | As before: CPU skinning check, pixel watch, texture dump, NaN uploads, target sequence, copies, frame rate. |
 | `VT3_SKIP_MESH`, `VT3_SKIP_TARGET=WxH`, `VT3_NO_VSM`, `VT3_SKIN_NOCULL`, `VT3_SKIN_FLIPCULL` | State experiments. |
-| `VT3_TRACE_AUDIO`, `VT3_DUMP_AUDIO=file` | Audio trace; raw s16 stereo 48 kHz dump of the mix. |
+| `VT3_TRACE_AUDIO`, `VT3_DUMP_AUDIO=file` | Audio trace; raw s16 stereo 48 kHz dump of the mix. With the trace on, the once-a-second line also carries `t=` (wall clock, for aligning with dumps), ring fill, mixer-timeline gap, resync count and underruns, and one per-buffer line: size/format/loop, cumulative Lock/Play counts, milliseconds below-full gate, stale events (transitions of the stale-block gate) with the byte they hit, and the mixer's read-behind versus the game's play cursor. See the "Menu gargle" note under Open issues. |
+| `VT3_DS_NO_GATE=1` | Pin the stale-block gate open: the mixer ignores the fresh marks, so an unwritten block replays the previous lap (the pre-e8d1a37 behaviour: 128 ms repeats and clicks) instead of fading to silence. A/B experiment for what the gate itself contributes. |
+| `VT3_TRACE_SLOW=ms` | Slow-call trace with that threshold in ms: every guest-lock hold that long at release ("gil hold: tid T held N ms"), a thread's wait for the lock itself ("gil acquire"), ReadFile/CreateFileA calls that long with the current holder's tid, winmm timers firing that long past due ("timer late"), and texture create/upload/convert ops that long. This is what traced the menu gargle to the guest lock; the default build logs none of it. |
+| `VT3_GIL_YIELD_US=us` | Sleep in `gil_handoff` after releasing the guest lock (default 2000). Wider means the waiters (audio writer, winmm timer) win the lock; 50 us measured much worse for audio, 0 starves waiters for seconds. |
+| `VT3_TRACE_READS=1` | Log every ReadFile of 4 KB or more with its file offset. |
 | `VT3_INPUT_SCRIPT` | `t:KEY` absolute, `wN[@T]:KEY` quiet wait, `rN:KEY` repeat. |
 | `VT3_TOUCH`, `VT3_TOUCH_FORCE`, `VT3_TOUCH_SCALE`, `VT3_TOUCH_ALPHA`, `VT3_TOUCH_COLOR`, `VT3_TOUCH_DEBUG` | On-screen touch controls (Android; `VT3_TOUCH=1` also draws them on the desktop for a layout check). See `docs/TOUCH_CONTROLS.md`. |
 
