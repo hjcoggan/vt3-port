@@ -206,6 +206,13 @@ void vt_stx(uint32_t a, vt_xmm v);
     eax = c->eax; ecx = c->ecx; edx = c->edx; ebx = c->ebx; \
     esp = c->esp; ebp = c->ebp; esi = c->esi; edi = c->edi; } while (0)
 
+/* Loop back edges test this: the shim sets it while another guest thread waits for the guest
+ * lock (VT3_GIL_HANDOFF=1), and vt3shim_safepoint lends the lock out. Registers stay in locals:
+ * the other thread runs on its own context, and the call is a compiler barrier for memory. */
+extern volatile int vt3shim_safepoint_req;
+void vt3shim_safepoint(void);
+#define VT_SAFEPOINT() do { if (__builtin_expect(vt3shim_safepoint_req, 0)) vt3shim_safepoint(); } while (0)
+
 #define FST(i) (c->fp[(c->ftop + (uint32_t)(i)) & 7u])
 #define FPUSH(v) do { vt_x80 vt_t_ = (v); c->ftop = (c->ftop - 1u) & 7u; c->fp[c->ftop] = vt_t_; } while (0)
 #define FPOP() do { c->ftop = (c->ftop + 1u) & 7u; } while (0)

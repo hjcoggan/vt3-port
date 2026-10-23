@@ -1048,9 +1048,12 @@ class FnGen:
         self.entry = entry
         self.unsupported = []
 
-    def branch(self, t):
+    def branch(self, t, src=None):
         if t != self.entry and t in self.an.E:
             return f"{{ VT_SPILL(); {fname(t)}(c); return; }}"
+        if src is not None and t <= src:
+            # A loop's back edge: a safepoint where a long guest loop can lend out the guest lock.
+            return f"{{ VT_SAFEPOINT(); goto L_{t:x}; }}"
         return f"goto L_{t:x};"
 
     def gen(self, ins):
@@ -1071,23 +1074,23 @@ class FnGen:
         if mn == 'jmp':
             op = ins.ops[0]
             if op.kind == 'imm':
-                return [self.branch(op.imm & M32)]
+                return [self.branch(op.imm & M32, ins.addr)]
             tb = self.an.tables.get(ins.addr)
             if tb is not None and tb.bad:
                 raise Unsupported(f"jump table ({tb.bad})")
             if tb is not None:
-                cases = "".join(f" case 0x{t:x}u: {self.branch(t)}" for t in tb.targets)
+                cases = "".join(f" case 0x{t:x}u: {self.branch(t, ins.addr)}" for t in tb.targets)
                 return [f"{{ uint32_t t = {val(op, 4)}; switch (t) {{{cases} "
                         f"default: vt_die_at(0x{ins.addr:x}u, t); }} }}"]
             return [f"{{ uint32_t t = {val(op, 4)}; VT_SPILL(); vt_icall(c, t); return; }}"]
         if is_jcc(mn):
-            return [f"if ({CC[mn[1:]]}) {self.branch(ins.ops[0].imm & M32)}"]
+            return [f"if ({CC[mn[1:]]}) {self.branch(ins.ops[0].imm & M32, ins.addr)}"]
         if mn in LOOPS:
             cond = {'loop': 'ecx != 0', 'loope': 'ecx != 0 && zf', 'loopz': 'ecx != 0 && zf',
                     'loopne': 'ecx != 0 && !zf', 'loopnz': 'ecx != 0 && !zf'}[mn]
-            return [f"ecx -= 1u;", f"if ({cond}) {self.branch(ins.ops[0].imm & M32)}"]
+            return [f"ecx -= 1u;", f"if ({cond}) {self.branch(ins.ops[0].imm & M32, ins.addr)}"]
         if mn in ('jecxz', 'jcxz'):
-            return [f"if (ecx == 0) {self.branch(ins.ops[0].imm & M32)}"]
+            return [f"if (ecx == 0) {self.branch(ins.ops[0].imm & M32, ins.addr)}"]
         return plain(ins)
 
 

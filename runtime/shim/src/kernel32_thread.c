@@ -96,6 +96,44 @@ static uint32_t g_gil_last_holder;
 /* Threads blocked on the lock itself, for the directed handoff. */
 static int g_gil_waiters;
 
+/* Loop back edges in the translated code test this (VT_SAFEPOINT in vt3rt.h). Set while some
+ * thread is counted as waiting for the lock, so a long stretch of pure guest code - a menu load
+ * that held the lock for up to 456 ms - lends it out instead of starving the audio writer. */
+volatile int vt3shim_safepoint_req;
+static int g_gil_wake_pending;
+static void safepoint_update(void)
+{
+    vt3shim_safepoint_req = __atomic_load_n(&g_gil_waiters, __ATOMIC_RELAXED) +
+                            __atomic_load_n(&g_gil_wake_pending, __ATOMIC_RELAXED) > 0;
+}
+
+/* A timed condition wait that expires re-takes the lock inside pthread_cond_timedwait, which no
+ * count sees (the winmm timer fired 100-360 ms late this way). The earliest such deadline is kept
+ * here (CLOCK_REALTIME ns, the condition's clock; 0 = none, approximate with several waiters), and
+ * a 1 ms ticker marks one pending waiter once it passes while the lock is held. */
+static int64_t g_gil_timed_deadline;
+
+static int64_t ts_ns(const struct timespec *t) { return (int64_t)t->tv_sec * 1000000000LL + t->tv_nsec; }
+
+static void *safepoint_ticker(void *arg)
+{
+    (void)arg;
+    const struct timespec tick = { 0, 1000000L };
+    for (;;) {
+        nanosleep(&tick, NULL);
+        int64_t d = __atomic_load_n(&g_gil_timed_deadline, __ATOMIC_RELAXED);
+        if (!d || !vt3s_gil_holder()) continue;
+        struct timespec now;
+        clock_gettime(CLOCK_REALTIME, &now);
+        if (ts_ns(&now) < d) continue;
+        if (__atomic_compare_exchange_n(&g_gil_timed_deadline, &d, 0, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+            __atomic_add_fetch(&g_gil_wake_pending, 1, __ATOMIC_RELAXED);
+            safepoint_update();
+        }
+    }
+    return NULL;
+}
+
 void vt3s_gil_acquired(void)
 {
     __atomic_store_n(&g_gil_held_by, current()->tid, __ATOMIC_RELAXED);
@@ -128,6 +166,8 @@ static int handoff_on(void)
         const char *s = getenv("VT3_GIL_HANDOFF");
         v = s && atoi(s) != 0;
         __atomic_store_n(&on, v, __ATOMIC_RELAXED);
+        pthread_t th;
+        if (v && pthread_create(&th, NULL, safepoint_ticker, NULL) == 0) pthread_detach(th);
     }
     return v;
 }
@@ -138,9 +178,9 @@ static int handoff_on(void)
 void vt3s_gil_lock(void)
 {
     int counted = handoff_on();
-    if (counted) __atomic_add_fetch(&g_gil_waiters, 1, __ATOMIC_RELAXED);
+    if (counted) { __atomic_add_fetch(&g_gil_waiters, 1, __ATOMIC_RELAXED); safepoint_update(); }
     pthread_mutex_lock(&gil);
-    if (counted) __atomic_sub_fetch(&g_gil_waiters, 1, __ATOMIC_RELAXED);
+    if (counted) { __atomic_sub_fetch(&g_gil_waiters, 1, __ATOMIC_RELAXED); safepoint_update(); }
 }
 
 /* Threads in a condition wait re-acquire the lock inside pthread_cond_wait, so vt3s_gil_lock never
@@ -148,27 +188,39 @@ void vt3s_gil_lock(void)
  * VT3_GIL_HANDOFF=1 a broadcast marks every thread then waiting as pending, and each one clears its
  * mark when its wait returns holding the lock, so gil_handoff sees them as waiters meanwhile. */
 static int g_gil_cond_waiters;
-static int g_gil_wake_pending;
 
 int vt3s_gil_cond_wait(const struct timespec *deadline)
 {
     int on = handoff_on();
-    if (on) __atomic_add_fetch(&g_gil_cond_waiters, 1, __ATOMIC_RELAXED);
+    int64_t mine = 0;
+    if (on) {
+        __atomic_add_fetch(&g_gil_cond_waiters, 1, __ATOMIC_RELAXED);
+        if (deadline) {
+            mine = ts_ns(deadline);
+            int64_t d = __atomic_load_n(&g_gil_timed_deadline, __ATOMIC_RELAXED);
+            while ((d == 0 || mine < d) && !__atomic_compare_exchange_n(&g_gil_timed_deadline, &d, mine, 0,
+                                                                       __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
+        }
+    }
     int rc = deadline ? pthread_cond_timedwait(&gcond, &gil, deadline) : pthread_cond_wait(&gcond, &gil);
     if (on) {
         __atomic_sub_fetch(&g_gil_cond_waiters, 1, __ATOMIC_RELAXED);
+        if (mine) __atomic_compare_exchange_n(&g_gil_timed_deadline, &mine, 0, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
         int p = __atomic_load_n(&g_gil_wake_pending, __ATOMIC_RELAXED);
         while (p > 0 && !__atomic_compare_exchange_n(&g_gil_wake_pending, &p, p - 1, 0,
                                                      __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
+        safepoint_update();
     }
     return rc;
 }
 
 void vt3s_gil_broadcast(void)
 {
-    if (handoff_on())
+    if (handoff_on()) {
         __atomic_store_n(&g_gil_wake_pending, __atomic_load_n(&g_gil_cond_waiters, __ATOMIC_RELAXED),
                          __ATOMIC_RELAXED);
+        safepoint_update();
+    }
     pthread_cond_broadcast(&gcond);
 }
 
@@ -502,6 +554,13 @@ static void gil_handoff(void)
     }
     vt3s_gil_lock();
     vt3s_gil_acquired();
+}
+
+void vt3shim_safepoint(void)
+{
+    vt3shim_safepoint_req = 0;
+    gil_handoff();
+    safepoint_update();
 }
 
 BOOL WINAPI SwitchToThread(void)
