@@ -148,7 +148,9 @@ HRESULT WINAPI IDirect3DDevice9_Present(GPTR This, GPTR src_rect, GPTR dst_rect,
     d3d9_device *d = DEV(This);
     if (!d) return D3DERR_CHK_INVALIDCALL;
     d3d9_gpu_present();
-    if (getenv("VT3_TRACE_FRAMES")) VT3_INFO("frame: %d draws", d3d9_frame_draws);
+    static int trace_frames = -1;
+    if (trace_frames < 0) trace_frames = getenv("VT3_TRACE_FRAMES") != NULL;
+    if (trace_frames) VT3_INFO("frame: %d draws", d3d9_frame_draws);
     d3d9_frame_draws = 0;
     {   /* VT3_PIXEL_AFTER=<s>: the draw path watches pixels during the first frame after that time */
         static double after = -2.0, t0 = -1.0;
