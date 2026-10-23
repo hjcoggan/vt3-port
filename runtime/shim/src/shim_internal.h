@@ -71,6 +71,14 @@ void vt3s_heap_module_shutdown(void);
 pthread_mutex_t *vt3s_gil(void);
 pthread_cond_t *vt3s_gcond(void);
 uint32_t vt3s_current_tid(void);
+/* Takes the guest lock, counting the caller as a waiter under VT3_GIL_HANDOFF=1 so a directed
+ * handoff can see it. Use this for every real acquire; cond waits re-acquire internally. */
+void vt3s_gil_lock(void);
+/* Condition wait on the guest lock (deadline NULL = no timeout; returns the pthread result) and
+ * the broadcast that wakes such waits. Both feed VT3_GIL_HANDOFF's waiter count. */
+struct timespec;
+int  vt3s_gil_cond_wait(const struct timespec *deadline);
+void vt3s_gil_broadcast(void);
 
 /* VT3_TRACE_SLOW=<ms>: threshold in ms for the slow-hold/slow-call trace, 0 when off
  * (shim_core.c). */
