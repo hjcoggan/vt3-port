@@ -100,9 +100,10 @@ static int g_gil_waiters;
  * of pure guest code - a menu load held the lock for up to 456 ms - lends the lock out instead of
  * starving the audio writer. Only the ticker below sets it, and only once the lock has been held
  * g_safepoint_ms without a break while somebody waits: set on every waiter instead, it fired at
- * nearly every back edge and the match ran at 11 fps; at 4 ms it cost 15-30 fps. The game's audio
- * ring holds 128 ms, so lending the lock every 16 ms is enough. */
-static uint32_t g_safepoint_ms = 16;   /* VT3_SAFEPOINT_MS overrides */
+ * nearly every back edge and the match ran at 11 fps; at 4 ms it cost 15-30 fps. Retroid sweep
+ * (handoff on): 8 ms halved gated audio silence against no safepoints (1.5-1.7 against 2.9-3.9
+ * s/min) for about 5% of the match frame rate; 32 ms was no different from off. */
+static uint32_t g_safepoint_ms = 8;   /* VT3_SAFEPOINT_MS overrides; 0 turns safepoints off */
 volatile int vt3shim_safepoint_req;
 static int g_gil_wake_pending;
 
@@ -158,14 +159,14 @@ void vt3s_gil_releasing(void)
 
 uint32_t vt3s_gil_holder(void) { return __atomic_load_n(&g_gil_held_by, __ATOMIC_RELAXED); }
 
-/* VT3_GIL_HANDOFF=1 switches gil_handoff from a timed unlock to a directed handoff. */
+/* gil_handoff is a directed handoff unless VT3_GIL_HANDOFF=0, which restores the timed unlock. */
 static int handoff_on(void)
 {
     static int on = -1;
     int v = __atomic_load_n(&on, __ATOMIC_RELAXED);
     if (v < 0) {
         const char *s = getenv("VT3_GIL_HANDOFF");
-        v = s && atoi(s) != 0;
+        v = !s || atoi(s) != 0;   /* on unless VT3_GIL_HANDOFF=0 */
         __atomic_store_n(&on, v, __ATOMIC_RELAXED);
         pthread_t th;
         const char *ms = getenv("VT3_SAFEPOINT_MS");
