@@ -18,34 +18,29 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* The translated bodies the dispatcher and check mode call. Optional so a test translation,
- * which has no native overrides or D3DX exports, still links. Mach-O needs weak_import rather
- * than weak for an undefined symbol to be allowed at link time. */
-#if defined(__APPLE__)
-#define VT3_OPTIONAL_FN __attribute__((weak_import))
-#else
-#define VT3_OPTIONAL_FN __attribute__((weak))
-#endif
-extern void fn_00421e90_tr(vt3_cpu *c) VT3_OPTIONAL_FN;
-extern void fn_006506a2(vt3_cpu *c) VT3_OPTIONAL_FN;   /* D3DXVec3Normalize */
-extern void fn_006506a8(vt3_cpu *c) VT3_OPTIONAL_FN;   /* D3DXPlaneFromPoints */
+extern size_t vt3_guest_size_;   /* runtime/src/core/guest.c */
+/* Translated functions in vt3.c (the translator exports them for this file). */
+extern void fn_00421e90_tr(vt3_cpu *c);
+extern void fn_006506a2(vt3_cpu *c);   /* D3DXVec3Normalize */
+extern void fn_006506a8(vt3_cpu *c);   /* D3DXPlaneFromPoints */
 
 /* vt3native.c is the one place the native body lives. */
 static int native_body(vt3_cpu *c);
+static void native_init(void);
 
-int vt_native_on = 0;
+/* On until the first call reads VT3_NATIVE: Android loads vt3.env after constructors run. */
+int vt_native_on = 1;
 
 enum { NATIVE_OFF, NATIVE_ON, NATIVE_CHECK };
-static int native_mode = NATIVE_OFF;
+static int native_mode = -1;
 static int checks_left;
 static int checks_done, checks_matched;
-static int native_ready = 1;         /* the hand-written body below is present */
 static int in_check;
 
-/* Snapshot of everything the function can write: the guest process heap (256 MiB from
- * VT3_GUEST_HEAP_BASE), the image's writable sections, and 64 KiB either side of the entry
- * esp. The lower stack padding is restored before the translated run, but is not compared:
- * the native body need not reproduce the translated body's dead frame.
+/* Snapshot of everything the function can write: the guest heap (from VT3_GUEST_HEAP_BASE up
+ * to 1 GiB, so about 2 GiB of host memory while checking), the image's writable sections, and
+ * 64 KiB either side of the entry esp. The lower stack padding is restored before the
+ * translated run, but is not compared: the native body need not reproduce the dead frame.
  *
  * Input and result are copied separately. Checking runs the native body, saves its result,
  * restores the input, runs the translated body and compares the two results. */
@@ -111,7 +106,9 @@ static void build_regions(uint32_t esp)
     if (regions_built) return;
     regions_built = 1;
 
-    add_region(0x20000000u, 256u << 20);              /* guest process heap */
+    /* The guest heap: the shim allocates from 0x20000000 up (cloth buffers sit past 0x33000000). */
+    uint64_t top = vt3_guest_size_ < 0x40000000u ? vt3_guest_size_ : 0x40000000u;
+    add_region(0x20000000u, (uint32_t)(top - 0x20000000u));
     add_writable_sections();
     uint32_t lo = esp > STACK_PAD ? esp - STACK_PAD : 0;
     uint32_t hi = esp + STACK_PAD < esp ? 0xffffffffu : esp + STACK_PAD;
@@ -252,33 +249,23 @@ static int check_call(vt3_cpu *c)
 
 int vt_native_00421e90(vt3_cpu *c)
 {
+    if (native_mode < 0) native_init();
     if (native_mode == NATIVE_CHECK) return check_call(c);
     if (native_mode == NATIVE_ON) return native_body(c);
     return 0;
 }
 
-/* A build with no native body (the translator self-tests) links the default below. */
-__attribute__((weak)) int vt_native_00421e90_off(vt3_cpu *c)
-{
-    (void)c;
-    return 0;
-}
-
-__attribute__((constructor)) static void native_init(void)
+static void native_init(void)
 {
     const char *s = getenv("VT3_NATIVE");
+    native_mode = NATIVE_OFF;
+    vt_native_on = 0;
     if (!s || !*s || strcmp(s, "0") == 0) return;
     int check = strcmp(s, "check") == 0;
     const char *n = getenv("VT3_NATIVE_CHECKS");
     checks_left = n && *n ? atoi(n) : 50;
     native_mode = check ? NATIVE_CHECK : NATIVE_ON;
     vt_native_on = 1;
-    if (check && (!fn_00421e90_tr || !native_ready)) {
-        fprintf(stderr, "vt3 native: %s unavailable; staying on the translated body\n",
-                !fn_00421e90_tr ? "translated body" : "native body");
-        native_mode = NATIVE_OFF;
-        vt_native_on = 0;
-    }
 }
 
 /* ---------------------------------------------------------------------------------------------
@@ -566,7 +553,7 @@ static void cloth_tail_vertex(cloth_ctx *s, uint32_t pos_addr)
     v[0].z = cloth_point_xyz(&m[0], 8, source);
     v[1].x = cloth_point_yzx(&m[1], 0, source);
     v[1].y = cloth_point_xyz(&m[1], 4, source);
-    v[1].z = cloth_point_xyz(&m[1], 8, source);
+    v[1].z = cloth_point_yzx(&m[1], 8, source);
     v[2].x = cloth_point_yzx(&m[2], 0, source);
     v[2].y = cloth_point_yzx(&m[2], 4, source);
     v[2].z = cloth_point_yzx(&m[2], 8, source);
@@ -576,7 +563,10 @@ static void cloth_tail_vertex(cloth_ctx *s, uint32_t pos_addr)
     cloth_v4 result = cloth_blend4(v, w);
 
     /* These four fourth-component temporaries are not initialized by the translated tail
-     * path. It really does read the stale guest-frame slots, and the resulting W is stored. */
+     * path. It really does read the stale guest-frame slots, and the resulting W is stored.
+     * Outside check mode the slots hold whatever an earlier call left, so W can drift from the
+     * translated run; W never feeds X/Y/Z (springs, collisions and planes use it only for W,
+     * and the vertex buffer gets X/Y/Z), so the output is unchanged. */
     float w0 = rdf32g(s->frame + 0x328);
     float w1 = rdf32g(s->frame + 0x2d8);
     float w2 = rdf32g(s->frame + 0x2c8);
@@ -692,8 +682,6 @@ static void cloth_collide(vt3_cpu *c, uint32_t frame, uint32_t pos, uint32_t col
 
 static int native_body(vt3_cpu *c)
 {
-    if (!fn_006506a2 || !fn_006506a8) return 0;
-
     const uint32_t entry_esp = c->esp;
     const uint32_t saved_ebx = c->ebx, saved_ebp = c->ebp;
     const uint32_t saved_esi = c->esi, saved_edi = c->edi;
