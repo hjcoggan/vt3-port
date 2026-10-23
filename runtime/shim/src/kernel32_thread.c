@@ -143,6 +143,35 @@ void vt3s_gil_lock(void)
     if (counted) __atomic_sub_fetch(&g_gil_waiters, 1, __ATOMIC_RELAXED);
 }
 
+/* Threads in a condition wait re-acquire the lock inside pthread_cond_wait, so vt3s_gil_lock never
+ * counts them - yet they are exactly the audio writer and the timer thread, woken by an event. Under
+ * VT3_GIL_HANDOFF=1 a broadcast marks every thread then waiting as pending, and each one clears its
+ * mark when its wait returns holding the lock, so gil_handoff sees them as waiters meanwhile. */
+static int g_gil_cond_waiters;
+static int g_gil_wake_pending;
+
+int vt3s_gil_cond_wait(const struct timespec *deadline)
+{
+    int on = handoff_on();
+    if (on) __atomic_add_fetch(&g_gil_cond_waiters, 1, __ATOMIC_RELAXED);
+    int rc = deadline ? pthread_cond_timedwait(&gcond, &gil, deadline) : pthread_cond_wait(&gcond, &gil);
+    if (on) {
+        __atomic_sub_fetch(&g_gil_cond_waiters, 1, __ATOMIC_RELAXED);
+        int p = __atomic_load_n(&g_gil_wake_pending, __ATOMIC_RELAXED);
+        while (p > 0 && !__atomic_compare_exchange_n(&g_gil_wake_pending, &p, p - 1, 0,
+                                                     __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
+    }
+    return rc;
+}
+
+void vt3s_gil_broadcast(void)
+{
+    if (handoff_on())
+        __atomic_store_n(&g_gil_wake_pending, __atomic_load_n(&g_gil_cond_waiters, __ATOMIC_RELAXED),
+                         __ATOMIC_RELAXED);
+    pthread_cond_broadcast(&gcond);
+}
+
 /* A thread's wait for the lock itself, when it reaches the threshold. */
 static void gil_lock_waited(uint32_t tid, uint32_t t0)
 {
@@ -247,7 +276,7 @@ static void honor_suspend(void)
     vt3s_thread *t = current();
     while (t->suspend_count) {
         vt3s_gil_releasing();
-        pthread_cond_wait(&gcond, &gil);
+        vt3s_gil_cond_wait(NULL);
         vt3s_gil_acquired();
     }
 }
@@ -286,8 +315,7 @@ static int wait_until_body(vt3s_pred pred, void *arg, DWORD ms)
     }
     while (!pred(arg)) {
         vt3s_gil_releasing();
-        int rc = ms == INFINITE ? pthread_cond_wait(&gcond, &gil)
-                                : pthread_cond_timedwait(&gcond, &gil, &deadline);
+        int rc = vt3s_gil_cond_wait(ms == INFINITE ? NULL : &deadline);
         vt3s_gil_acquired();
         if (rc == ETIMEDOUT) return pred(arg);
     }
@@ -308,14 +336,14 @@ static void *thread_main(void *arg)
     vt3s_gil_acquired();
     while (t->suspend_count) {
         vt3s_gil_releasing();
-        pthread_cond_wait(&gcond, &gil);
+        vt3s_gil_cond_wait(NULL);
         vt3s_gil_acquired();
     }
     uint32_t args[1] = {t->param};
     DWORD rc = vt3s_call_guest(t->stack_top, t->teb, t->entry, args, 1);
     t->exit_code = rc;
     t->finished = 1;
-    pthread_cond_broadcast(&gcond);
+    vt3s_gil_broadcast();
     vt3s_gil_releasing();
     pthread_mutex_unlock(&gil);
     return NULL;
@@ -377,7 +405,7 @@ void WINAPI ExitThread(DWORD code)
     }
     t->exit_code = code;
     t->finished = 1;
-    pthread_cond_broadcast(&gcond);
+    vt3s_gil_broadcast();
     vt3s_gil_releasing();
     pthread_mutex_unlock(&gil);
     pthread_exit(NULL);
@@ -389,7 +417,7 @@ DWORD WINAPI ResumeThread(HANDLE h)
     if (!t) { vt3s_set_last_error(ERROR_INVALID_HANDLE); return 0xFFFFFFFFu; }
     DWORD prev = t->suspend_count;
     if (t->suspend_count) t->suspend_count--;
-    pthread_cond_broadcast(&gcond);
+    vt3s_gil_broadcast();
     vt3s_set_last_error(ERROR_SUCCESS);
     return prev;
 }
@@ -451,7 +479,8 @@ DWORD WINAPI GetCurrentThreadId(void) { return current()->tid; }
 static void gil_handoff(void)
 {
     if (handoff_on()) {
-        if (__atomic_load_n(&g_gil_waiters, __ATOMIC_RELAXED) == 0) return;
+        if (__atomic_load_n(&g_gil_waiters, __ATOMIC_RELAXED) +
+            __atomic_load_n(&g_gil_wake_pending, __ATOMIC_RELAXED) == 0) return;
         uint32_t me = current()->tid;
         vt3s_gil_releasing();
         pthread_mutex_unlock(&gil);
@@ -596,7 +625,7 @@ void WINAPI LeaveCriticalSection(LPVOID cs)
     vt3s_store_u32(cs + CS_LOCKCOUNT, vt3s_load_u32(cs + CS_LOCKCOUNT) - 1u);
     if (rec <= 1u) {
         vt3s_store_u32(cs + CS_OWNER, 0u);
-        pthread_cond_broadcast(&gcond);
+        vt3s_gil_broadcast();
     }
 }
 
@@ -643,7 +672,7 @@ BOOL WINAPI SetEvent(HANDLE h)
     struct vt3s_sync *s = vt3s_handle_get(h, VT3S_H_SYNC);
     if (!s || s->is_mutex) { vt3s_set_last_error(ERROR_INVALID_HANDLE); return FALSE; }
     s->signaled = 1;
-    pthread_cond_broadcast(&gcond);
+    vt3s_gil_broadcast();
     return TRUE;
 }
 
@@ -662,7 +691,7 @@ BOOL WINAPI PulseEvent(HANDLE h)
     if (!s || s->is_mutex) { vt3s_set_last_error(ERROR_INVALID_HANDLE); return FALSE; }
     s->gen++;
     s->signaled = 0;
-    pthread_cond_broadcast(&gcond);
+    vt3s_gil_broadcast();
     return TRUE;
 }
 
@@ -675,7 +704,7 @@ BOOL WINAPI ReleaseMutex(HANDLE h)
         return FALSE;
     }
     if (--s->count == 0) s->owner = 0;
-    pthread_cond_broadcast(&gcond);
+    vt3s_gil_broadcast();
     return TRUE;
 }
 

@@ -80,7 +80,7 @@ static void *timer_main(void *arg)
         }
         if (!any) {
             vt3s_gil_releasing();
-            pthread_cond_wait(vt3s_gcond(), vt3s_gil());
+            vt3s_gil_cond_wait(NULL);
             vt3s_gil_acquired();
             continue;
         }
@@ -93,7 +93,7 @@ static void *timer_main(void *arg)
         deadline.tv_nsec += (long)(wait % 1000u) * 1000000L;
         if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
         vt3s_gil_releasing();
-        pthread_cond_timedwait(vt3s_gcond(), vt3s_gil(), &deadline);
+        vt3s_gil_cond_wait(&deadline);
         vt3s_gil_acquired();
     }
     return NULL;
@@ -129,7 +129,7 @@ MMRESULT WINAPI timeSetEvent(UINT delay, UINT resolution, LPVOID proc, DWORD use
         pthread_detach(th);
         thread_started = 1;
     } else {
-        pthread_cond_broadcast(vt3s_gcond());
+        vt3s_gil_broadcast();
     }
     return slot->id;
 }
@@ -139,7 +139,7 @@ MMRESULT WINAPI timeKillEvent(UINT id)
     for (int i = 0; i < VT3_MAX_TIMERS; i++) {
         if (timers[i].active && timers[i].id == id) {
             timers[i].active = 0;
-            pthread_cond_broadcast(vt3s_gcond());
+            vt3s_gil_broadcast();
             return TIMERR_NOERROR;
         }
     }
