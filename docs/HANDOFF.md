@@ -161,14 +161,14 @@ recompilation of `vt3.c`), and `rep movs` translating to `memmove` instead of a 
    the Retroid: 74-77% of write gaps >=30 ms are covered by gil holds (the worst gaps 94-100%,
    tid 1), the winmm timer fires 100-360 ms late inside the same windows, and no slow file read
    or single texture op explains them (converts <=23 ms; the big holds are chains of 8-17 ms
-   holds with sub-ms re-acquires - the writer loses every handoff). Fix: `gil_handoff` now
-   sleeps `VT3_GIL_YIELD_US` (default 2000 us) so the woken waiter can take the lock; A/B with
-   otherwise identical env: below-full gate 3501 -> 866 ms per minute, write gaps p99 120 ->
-   40 ms, gaps >=100 ms 36 -> 2, writes 1841 -> 2923 per minute. The mixer also primes the
-   device ring with 30 ms of silence at start: the cushion used to be however much the mixer
-   wrote before the device's first callback drained it (measured 40 ms or 4-12 ms depending on
-   startup timing; in the thin case a few partial reads a minute), and is now deterministic
-   (ring 40 ms, 0 underruns, no resyncs). Remaining: the worst menu loads still hold the gil in
+   holds with sub-ms re-acquires - the writer loses every handoff). Tried and **reverted after a
+   listening A/B on the Retroid (2026-10-23)**: `gil_handoff` sleeping 2000 us instead of 50 us
+   (traces improved: below-full gate 3501 -> 866 ms a minute, write gaps p99 120 -> 40 ms) and
+   priming the 40 ms device ring with 30 ms of silence. Both sounded worse - more crackle - than
+   the same build without them. Likely reason for the prime: it leaves the mixer only 10 ms of
+   ring, so it falls behind its timeline and resyncs (an audible jump). The trace numbers did
+   not predict what the ear heard; judge audio changes by listening. `VT3_GIL_YIELD_US` stays
+   as an override with the 50 us default. Remaining: the worst menu loads still hold the gil in
    one unbroken 100-456 ms run (pure guest code with no shim call to hand off at), so gate dips
    persist at loads at a lower level. Trace recipe: `VT3_TRACE_AUDIO=1` in `vt3.env`, drive menus, then read the
    per-second `stale N events at byte B` lines against the Lock timeline; `VT3_DUMP_AUDIO` captures
@@ -280,7 +280,7 @@ the GLSL.
 | `VT3_TRACE_AUDIO`, `VT3_DUMP_AUDIO=file` | Audio trace; raw s16 stereo 48 kHz dump of the mix. With the trace on, the once-a-second line also carries `t=` (wall clock, for aligning with dumps), ring fill, mixer-timeline gap, resync count and underruns, and one per-buffer line: size/format/loop, cumulative Lock/Play counts, milliseconds below-full gate, stale events (transitions of the stale-block gate) with the byte they hit, and the mixer's read-behind versus the game's play cursor. See the "Menu gargle" note under Open issues. |
 | `VT3_DS_NO_GATE=1` | Pin the stale-block gate open: the mixer ignores the fresh marks, so an unwritten block replays the previous lap (the pre-e8d1a37 behaviour: 128 ms repeats and clicks) instead of fading to silence. A/B experiment for what the gate itself contributes. |
 | `VT3_TRACE_SLOW=ms` | Slow-call trace with that threshold in ms: every guest-lock hold that long at release ("gil hold: tid T held N ms"), a thread's wait for the lock itself ("gil acquire"), ReadFile/CreateFileA calls that long with the current holder's tid, winmm timers firing that long past due ("timer late"), and texture create/upload/convert ops that long. This is what traced the menu gargle to the guest lock; the default build logs none of it. |
-| `VT3_GIL_YIELD_US=us` | Sleep in `gil_handoff` after releasing the guest lock (default 2000). Wider means the waiters (audio writer, winmm timer) win the lock; 50 us measured much worse for audio, 0 starves waiters for seconds. |
+| `VT3_GIL_YIELD_US=us` | Sleep in `gil_handoff` after releasing the guest lock (default 50). 2000 measured better in traces but sounded worse on the Retroid. Wider means the waiters (audio writer, winmm timer) win the lock; 50 us measured much worse for audio, 0 starves waiters for seconds. |
 | `VT3_TRACE_READS=1` | Log every ReadFile of 4 KB or more with its file offset. |
 | `VT3_INPUT_SCRIPT` | `t:KEY` absolute, `wN[@T]:KEY` quiet wait, `rN:KEY` repeat. |
 | `VT3_TOUCH`, `VT3_TOUCH_FORCE`, `VT3_TOUCH_SCALE`, `VT3_TOUCH_ALPHA`, `VT3_TOUCH_COLOR`, `VT3_TOUCH_DEBUG` | On-screen touch controls (Android; `VT3_TOUCH=1` also draws them on the desktop for a layout check). See `docs/TOUCH_CONTROLS.md`. |

@@ -412,15 +412,15 @@ DWORD WINAPI GetCurrentThreadId(void) { return current()->tid; }
  * usually lets the same thread take it straight back, so a busy guest thread starves the others:
  * the futex wakes a waiter but the hot thread re-acquires first, so the audio writer and the winmm
  * timer can lose every handoff and stall for hundreds of ms while the lock churns between short
- * holds. The sleep opens the window for the woken waiter to take it. Measured on the Retroid with
- * the menu route: 50 us lost most handoffs (below-full gate 3.5-6.2 s a minute, write gaps up to
- * 382 ms) and 2000 us cut that to 0.3-0.9 s with no gaps above 200 ms. VT3_GIL_YIELD_US overrides. */
+ * holds. The sleep opens the window for the woken waiter to take it. VT3_GIL_YIELD_US overrides the
+ * 50 us default. 2000 us measured fewer audio-writer gaps in traces, but sounded worse on the
+ * Retroid (more crackle) in a listening A/B, so the default stays at 50. */
 static void gil_handoff(void)
 {
     static int yield_us = -1;
     if (yield_us < 0) {
         const char *s = getenv("VT3_GIL_YIELD_US");
-        yield_us = s ? atoi(s) : 2000;
+        yield_us = s ? atoi(s) : 50;
         if (yield_us < 0) yield_us = 0;
     }
     vt3s_gil_releasing();

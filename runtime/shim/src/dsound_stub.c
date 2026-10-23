@@ -479,21 +479,6 @@ static void mixer_start_once(void)
     }
     g_ring_bytes = ring;
     g_mix_next_ns = now_ns();
-    /* Prime the ring with silence to a 30 ms cushion. Without it the cushion is however
-     * much the mixer managed to write before the device's first callback drained the ring:
-     * measured 40 ms when the callback started late and 4-12 ms when it started promptly,
-     * and in the thin case any jitter became an audible partial read (underrun). The
-     * prime runs before the mixer thread starts, so this is still the ring's only writer. */
-    {
-        uint8_t zeros[4096];
-        size_t prime = ring * 3u / 4u, left = prime;
-        memset(zeros, 0, sizeof zeros);
-        while (left) {
-            size_t n = left < sizeof zeros ? left : sizeof zeros;
-            vt3_audio_write(g_out, zeros, n);
-            left -= n;
-        }
-    }
     pthread_t th;
     if (pthread_create(&th, NULL, mix_thread, NULL) != 0) {
         VT3_WARN("DirectSound: could not start the mixer; playback stays silent");
