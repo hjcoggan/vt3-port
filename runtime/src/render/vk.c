@@ -2283,6 +2283,9 @@ static int vk_init(int logical_w, int logical_h)
     vkEnumeratePhysicalDevices(g.inst, &ndev, devs);
     g.phys = devs[0];
     vkGetPhysicalDeviceMemoryProperties(g.phys, &g.mem_props);
+    for (uint32_t i = 0; i < g.mem_props.memoryTypeCount; i++)
+        VT3_INFO("vulkan: memory type %u: flags 0x%x heap %u", i, (unsigned)g.mem_props.memoryTypes[i].propertyFlags,
+                 g.mem_props.memoryTypes[i].heapIndex);
     uint32_t nq = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(g.phys, &nq, NULL);
     VkQueueFamilyProperties qf[16];
