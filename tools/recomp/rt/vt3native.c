@@ -14,6 +14,7 @@
  */
 #include "vt3rt.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -437,45 +438,49 @@ static inline uint32_t cloth_pack4(cloth_v4 v, float fourth, float bias, float s
     return r;
 }
 
-/* Make the same guest calls as the translated body, including its return addresses and
- * callee-entry esp. The vector lives at its original offset in the caller's guest frame. */
+/* The game's D3DXVec3Normalize and D3DXPlaneFromPoints are the shim's (runtime/shim/src/
+ * d3dx9_math.c), so this is the same arithmetic, built with the same -ffp-contract=off. Keep it
+ * in step with norm3/cross3/dot3 there. Calling them through the guest import table cost more
+ * than the maths; what the guest calls wrote (arguments, the vectors) was the dead frame. */
+static inline float cloth_dot3(const float a[3], const float b[3])
+{
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+static inline void cloth_norm3(float v[3])
+{
+    float l = sqrtf(cloth_dot3(v, v));
+    if (l > 0.0f) {
+        v[0] /= l;
+        v[1] /= l;
+        v[2] /= l;
+    } else {
+        v[0] = v[1] = v[2] = 0.0f;
+    }
+}
+
 static void cloth_normalize(cloth_ctx *s, uint32_t off, uint32_t ret, cloth_v4 *v)
 {
-    uint32_t a = s->frame + off;
-    cloth_put32(a, v->x);
-    cloth_put32(a + 4, v->y);
-    cloth_put32(a + 8, v->z);
-    wr32(s->frame - 8, a);
-    wr32(s->frame - 4, a);
-    wr32(s->frame - 12, ret);
-    s->c->esp = s->frame - 12;
-    fn_006506a2(s->c);
-    v->x = rdf32g(a);
-    v->y = rdf32g(a + 4);
-    v->z = rdf32g(a + 8);
+    (void)s; (void)off; (void)ret;
+    float a[3] = { v->x, v->y, v->z };
+    cloth_norm3(a);
+    v->x = a[0];
+    v->y = a[1];
+    v->z = a[2];
 }
 
 static void cloth_plane(cloth_ctx *s, cloth_v4 p1, cloth_v4 p2, cloth_v4 p3,
                         cloth_v4 *out)
 {
-    const uint32_t o = s->frame + 0x264;
-    const uint32_t a1 = s->frame + 0x6c;
-    const uint32_t a2 = s->frame + 0x230;
-    const uint32_t a3 = s->frame + 0xe0;
-    cloth_write4(a1, p1);
-    cloth_write4(a2, p2);
-    cloth_write4(a3, p3);
-    wr32(s->frame - 16, o);
-    wr32(s->frame - 12, a1);
-    wr32(s->frame - 8, a2);
-    wr32(s->frame - 4, a3);
-    wr32(s->frame - 20, 0x423fd8u);
-    s->c->esp = s->frame - 20;
-    fn_006506a8(s->c);
-    out->x = rdf32g(o);
-    out->y = rdf32g(o + 4);
-    out->z = rdf32g(o + 8);
-    out->w = 0.0f;
+    (void)s;
+    float u[3] = { p2.x - p1.x, p2.y - p1.y, p2.z - p1.z };
+    float v[3] = { p3.x - p1.x, p3.y - p1.y, p3.z - p1.z };
+    float n[3] = { u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0] };
+    cloth_norm3(n);
+    out->x = n[0];
+    out->y = n[1];
+    out->z = n[2];
+    out->w = 0.0f;              /* the game copies only the normal from the plane */
 }
 
 static float cloth_x87_float(vt3_cpu *c, uint32_t scratch, double v)
