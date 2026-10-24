@@ -535,6 +535,11 @@ static uint16_t declared_samplers(const char *text)
  * to the panel's 120 Hz, and sleeping to a 120 budget on top of it missed vsync slots (Retroid,
  * rotated pairs: 120.0 fps median against 97-105 with the 120 cap). VT3_FPS_CAP overrides, 0 turns
  * the limit off; the launcher's "60 Hz battery saver" shortcut sets it to 60. */
+#ifdef __ANDROID__
+static int g_cap_probe;        /* frames timed so far in this probe, -1 between probes */
+static int g_cap_engaged = 1;  /* the software cap sleeps; off when the panel runs at the cap */
+#endif
+
 static int fps_cap_hz(void)
 {
     static int hz = -1;
@@ -568,10 +573,25 @@ static int create_swapchain(void)
     }
     if (fps_cap_hz() > 0) {
         /* Ask the compositor to run the panel at the capped rate, which also saves display power.
-         * ANativeWindow_setFrameRate is API 30; the build targets 29, so look it up. */
+         * FIXED_SOURCE (1): with the default compatibility the Retroid keeps 120 Hz, since 60 divides
+         * it, and FIFO then leaves the pacing to the software limiter. The calls are API 30/31 and the
+         * build targets 29, so look them up (in their own library: the linker namespace hides them
+         * from RTLD_DEFAULT). */
+        static int looked;
         static int32_t (*set_rate)(ANativeWindow *, float, int8_t);
-        if (!set_rate) set_rate = (int32_t (*)(ANativeWindow *, float, int8_t))dlsym(RTLD_DEFAULT, "ANativeWindow_setFrameRate");
-        if (set_rate) VT3_INFO("vulkan: panel rate %d Hz requested (%d)", fps_cap_hz(), (int)set_rate(g.window, (float)fps_cap_hz(), 0));
+        static int32_t (*set_rate_s)(ANativeWindow *, float, int8_t, int8_t);
+        if (!looked) {
+            looked = 1;
+            void *lib = dlopen("libnativewindow.so", RTLD_NOW);
+            if (lib) {
+                set_rate = (int32_t (*)(ANativeWindow *, float, int8_t))dlsym(lib, "ANativeWindow_setFrameRate");
+                set_rate_s = (int32_t (*)(ANativeWindow *, float, int8_t, int8_t))dlsym(lib, "ANativeWindow_setFrameRateWithChangeStrategy");
+            }
+        }
+        int32_t rc = set_rate_s ? set_rate_s(g.window, (float)fps_cap_hz(), 1, 1)   /* ALWAYS: switch even if not seamless */
+                   : set_rate ? set_rate(g.window, (float)fps_cap_hz(), 1) : -1;
+        VT3_INFO("vulkan: panel rate %d Hz requested (%d)", fps_cap_hz(), (int)rc);
+        g_cap_probe = 0;
     }
 #endif
     if (ext.width == 0 || ext.height == 0) return -1;
@@ -1988,6 +2008,28 @@ static void frame_limit(void)
 #endif
     }
     if (!period_ns) return;
+#ifdef __ANDROID__
+    /* When the panel honours the rate request, FIFO alone paces the game exactly (Retroid: 60.1 fps
+     * median, min 58.5); the sleep on top of it drops frames (56-57 median). So time the first 120
+     * frames unlimited and sleep only if they ran faster than the cap. Re-probe every 600 frames,
+     * as the panel can switch late or the probe can land on a slow loading screen. */
+    static uint64_t probe_t0;
+    static int since_probe;
+    if (g_cap_probe < 0 && ++since_probe >= 600) since_probe = 0, g_cap_probe = 0;
+    if (g_cap_probe >= 0) {
+        struct timespec pt;
+        clock_gettime(CLOCK_MONOTONIC, &pt);
+        uint64_t t = (uint64_t)pt.tv_sec * 1000000000ull + (uint64_t)pt.tv_nsec;
+        if (g_cap_probe == 0) probe_t0 = t;
+        if (++g_cap_probe <= 120) return;
+        g_cap_engaged = (t - probe_t0) / 120 < (uint64_t)period_ns * 9 / 10;
+        VT3_DEBUG("vulkan: %.1f fps unlimited, software cap %s", 120e9 / (double)(t - probe_t0),
+                 g_cap_engaged ? "on" : "off (the panel paces)");
+        g_cap_probe = -1;
+        last_ns = 0;
+    }
+    if (!g_cap_engaged) return;
+#endif
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     uint64_t now = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
