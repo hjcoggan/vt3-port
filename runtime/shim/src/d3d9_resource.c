@@ -38,6 +38,19 @@ d3d9_buffer *d3d9_buffer_of(GPTR obj)
     return h ? (d3d9_buffer *)h->data : NULL;
 }
 
+/* The callers below know which kind they hold, so they skip the other lookup. */
+d3d9_buffer *d3d9_vb_of(GPTR obj)
+{
+    d3d9_host *h = d3d9_host_of(obj, D3D9_KIND_VB);
+    return h ? (d3d9_buffer *)h->data : NULL;
+}
+
+d3d9_buffer *d3d9_ib_of(GPTR obj)
+{
+    d3d9_host *h = d3d9_host_of(obj, D3D9_KIND_IB);
+    return h ? (d3d9_buffer *)h->data : NULL;
+}
+
 static uint32_t mip_count(uint32_t w, uint32_t h)
 {
     uint32_t m = w > h ? w : h, n = 1;

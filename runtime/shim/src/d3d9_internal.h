@@ -237,6 +237,8 @@ GPTR d3d9_create_shader_obj(GPTR dev, int is_ps, GPTR byte_code);
 d3d9_surface *d3d9_surface_of(GPTR obj);
 d3d9_texture *d3d9_texture_of(GPTR obj);
 d3d9_buffer *d3d9_buffer_of(GPTR obj);
+d3d9_buffer *d3d9_vb_of(GPTR obj);     /* the caller knows it is a vertex buffer */
+d3d9_buffer *d3d9_ib_of(GPTR obj);     /* the caller knows it is an index buffer */
 
 /* D3DFORMAT, D3DERR, HRESULT and enum values used here. SDK values; see tests/sdk_layout_check.c. */
 #ifndef E_NOINTERFACE

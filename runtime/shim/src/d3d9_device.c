@@ -676,7 +676,7 @@ HRESULT WINAPI IDirect3DDevice9_SetIndices(GPTR This, GPTR pIndexData)
     d3d9_device *d = DEV(This);
     if (!d) return D3DERR_CHK_INVALIDCALL;
     d->indices = pIndexData;
-    d3d9_buffer *b = d3d9_buffer_of(pIndexData);
+    d3d9_buffer *b = d3d9_ib_of(pIndexData);
     d->indices_format = b ? b->fvf_or_fmt : 0;
     return S_OK;
 }

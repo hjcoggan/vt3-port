@@ -1467,12 +1467,20 @@ static VkSamplerAddressMode sampler_address(uint8_t mode)
 
 static VkSampler sampler_for(uint8_t minf, uint8_t magf, uint8_t u, uint8_t v, uint8_t w)
 {
+    static int last = -1;   /* most recent hit: a scene reuses one sampler for most draws */
     /* The non-programmable TL path passes NULL state and keeps its historical clamp/linear sampler. */
     if (minf == 0 && magf == 0 && u == 0 && v == 0 && w == 0) return g.samp;
-    for (uint32_t i = 0; i < g.nsamplers; i++) {
-        vk_sampler_entry *e = &g.samplers[i];
+    if (last >= 0 && (uint32_t)last < g.nsamplers) {
+        vk_sampler_entry *e = &g.samplers[last];
         if (e->minf == minf && e->magf == magf && e->u == u && e->v == v && e->w == w)
             return e->sampler;
+    }
+    for (uint32_t i = 0; i < g.nsamplers; i++) {
+        vk_sampler_entry *e = &g.samplers[i];
+        if (e->minf == minf && e->magf == magf && e->u == u && e->v == v && e->w == w) {
+            last = (int)i;
+            return e->sampler;
+        }
     }
     if (g.nsamplers >= SAMPLER_CACHE) return g.samp;
 
@@ -1501,6 +1509,7 @@ static VkSampler sampler_for(uint8_t minf, uint8_t magf, uint8_t u, uint8_t v, u
     }
     vk_sampler_entry *e = &g.samplers[g.nsamplers++];
     e->minf = minf; e->magf = magf; e->u = u; e->v = v; e->w = w; e->sampler = sampler;
+    last = (int)g.nsamplers - 1;
     return sampler;
 }
 
@@ -1556,13 +1565,22 @@ static uint32_t tl_layout_hash(void)
 static VkPipeline get_pipeline(uint32_t prog, VkShaderModule vs, VkShaderModule fs, const vt3_vlayout *lay,
                                int tl, const vt3_rstate *st, int strip, uint32_t rpk)
 {
+    static int last = -1;   /* most recent hit: consecutive draws usually reuse one pipeline */
     uint32_t lh = tl ? tl_layout_hash() : layout_hash(lay);
     uint32_t sh = state_hash(st);
-    for (int i = 0; i < PIPE_MAX; i++) {
-        vk_pipe *p = &g.pipes[i];
+    if (last >= 0) {
+        vk_pipe *p = &g.pipes[last];
         if (p->used && p->key.prog == prog && p->key.layout_hash == lh && p->key.state_hash == sh &&
             p->key.topology == (uint32_t)strip && p->key.rpk == rpk)
             return p->pipe;
+    }
+    for (int i = 0; i < PIPE_MAX; i++) {
+        vk_pipe *p = &g.pipes[i];
+        if (p->used && p->key.prog == prog && p->key.layout_hash == lh && p->key.state_hash == sh &&
+            p->key.topology == (uint32_t)strip && p->key.rpk == rpk) {
+            last = i;
+            return p->pipe;
+        }
     }
     int slot = -1;
     for (int i = 0; i < PIPE_MAX; i++) {
@@ -1696,6 +1714,7 @@ static VkPipeline get_pipeline(uint32_t prog, VkShaderModule vs, VkShaderModule 
     g.pipes[slot].key.topology = (uint32_t)strip;
     g.pipes[slot].key.rpk = rpk;
     g.pipes[slot].pipe = pipe;
+    last = slot;
     return pipe;
 }
 

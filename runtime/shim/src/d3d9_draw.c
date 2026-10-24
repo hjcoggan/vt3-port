@@ -275,6 +275,7 @@ static void fill_textures(const d3d9_device *d, vt3_tex out[VT3_MAX_SAMPLERS])
 {
     for (int s = 0; s < VT3_MAX_SAMPLERS; s++) {
         out[s] = 0;
+        if (d->textures[s] == 0) continue;   /* d3d9_texture_of(0) is NULL too */
         d3d9_texture *t = d3d9_texture_of(d->textures[s]);
         if (!t) continue;
         if (t->faces == 6) {                 /* a cube texture that failed to create reads as zero */
@@ -685,8 +686,8 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
             skip_w = e ? atoi(e) : 0;
             skip_h = (e && strchr(e, 'x')) ? atoi(strchr(e, 'x') + 1) : 0;
         }
-        d3d9_surface *tsurf = d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
-        if (skip_w && tsurf && !tsurf->backbuffer && (int)tsurf->w == skip_w && (int)tsurf->h == skip_h) return S_OK;
+        d3d9_surface *tsurf = skip_w && d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
+        if (tsurf && !tsurf->backbuffer && (int)tsurf->w == skip_w && (int)tsurf->h == skip_h) return S_OK;
     }
     d3d9_gpu_rt_bind(d3d9_surface_target(d->rt[0]));   /* draws go to the device's render target */
     /* VT3_SKIP_FRAME_DRAWS=a-b (or a) drops draws a..b of each frame, to find which draws make up a
@@ -720,7 +721,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         stride = a->up_stride;
         vbase = a->up_vertices;
     } else {
-        d3d9_buffer *vb = d3d9_buffer_of(d->streams[0][0]);
+        d3d9_buffer *vb = d3d9_vb_of(d->streams[0][0]);
         if (!vb || !vb->data) { VT3_WARN_ONCE("draw: stream 0 unbound, draw skipped"); return D3DERR_CHK_INVALIDCALL; }
         vbase = vt3_g2h(vb->data + d->streams[0][1]);
         stride = d->streams[0][2];
@@ -757,7 +758,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
             uint32_t off = 0;
             for (uint32_t s = 0; s < 16; s++) {
                 if (!(used & (1u << s))) continue;
-                d3d9_buffer *sb = d3d9_buffer_of(d->streams[s][0]);
+                d3d9_buffer *sb = d3d9_vb_of(d->streams[s][0]);
                 uint32_t st = d->streams[s][2] ? d->streams[s][2] : dc->stride[s];
                 if (!sb || !sb->data || st == 0) { VT3_WARN_ONCE("draw: stream %d unbound, draw skipped", s); return D3DERR_CHK_INVALIDCALL; }
                 sptr[s] = vt3_g2h(sb->data + d->streams[s][1]);
@@ -1154,7 +1155,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     {   /* VT3_TRACE_QUAD=1 (debug): the layout and raw floats of the first few small draws, such as full-screen quads */
         static int quad_on = -1, quad_shown;
         if (quad_on < 0) quad_on = getenv("VT3_TRACE_QUAD") != NULL;
-        d3d9_surface *qs = d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
+        d3d9_surface *qs = quad_on && d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
         if (quad_on && nverts <= 6 && quad_shown < 10 && qs && !qs->backbuffer) {
             quad_shown++;
             VT3_INFO("quad %d: %u verts, stride %d, %d attrs, prim %d, target %ux%u fvf 0x%x%s", quad_shown, (unsigned)nverts, lay.stride,
@@ -1192,7 +1193,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
             bb_on = e != NULL;
             bb_start = e ? atof(e) : 0.0;   /* seconds to wait before tracing: catch a later screen */
         }
-        d3d9_surface *qs = d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
+        d3d9_surface *qs = bb_on && d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
         if (bb_on && nverts <= 6 && qs && qs->backbuffer) {
             static double bb_first = -1.0;
             struct timespec bts;
