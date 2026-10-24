@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 extern size_t vt3_guest_size_;   /* runtime/src/core/guest.c */
 /* Translated functions in vt3.c (the translator exports them for this file). */
@@ -36,6 +37,14 @@ static int native_mode = -1;
 static int checks_left;
 static int checks_done, checks_matched;
 static int in_check;
+static double ns_native, ns_translated;   /* check mode: time in each body */
+
+static double now_ns(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec * 1e9 + t.tv_nsec;
+}
 
 /* Snapshot of everything the function can write: the guest heap (from VT3_GUEST_HEAP_BASE up
  * to 1 GiB, so about 2 GiB of host memory while checking), the image's writable sections, and
@@ -195,14 +204,18 @@ static int check_call(vt3_cpu *c)
     vt3_cpu cpu_in = *c;
     snapshot(in);
 
+    double t0 = now_ns();
     int handled = native_body(c);
+    ns_native += now_ns() - t0;
     vt3_cpu cpu_nat = *c;
     snapshot(out);
 
     *c = cpu_in;
     restore(in);
 
+    t0 = now_ns();
     fn_00421e90_tr(c);                     /* translated result, left in the guest */
+    ns_translated += now_ns() - t0;
     in_check = 0;
 
     checks_done++;
@@ -243,6 +256,8 @@ static int check_call(vt3_cpu *c)
         native_mode = NATIVE_ON;
         fprintf(stderr, "vt3 native: %d/%d calls matched; using the native body\n",
                 checks_matched, checks_done);
+        fprintf(stderr, "vt3 native: per call: native %.1f us, translated %.1f us\n",
+                ns_native / 1e3 / checks_done, ns_translated / 1e3 / checks_done);
     }
     return 1;
 }
