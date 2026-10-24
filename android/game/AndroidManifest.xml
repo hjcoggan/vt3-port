@@ -14,7 +14,11 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
+        <!-- Its own task, so opening it while the game runs never stacks a second game on top. -->
+        <activity android:name="net.vt3port.game.Settings" android:exported="true"
+            android:taskAffinity="" android:excludeFromRecents="true" />
         <activity android:name="android.app.NativeActivity"
             android:exported="false"
             android:configChanges="orientation|keyboardHidden|screenSize|screenLayout"

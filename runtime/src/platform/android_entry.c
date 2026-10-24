@@ -72,6 +72,8 @@ void android_main(struct android_app *app)
 #endif
     vt3_platform_android_attach(app);
     apply_env_file(VT3_ANDROID_ROOT "/vt3.env");
+    /* The Settings screen's "60 Hz battery saver" (a marker file); a VT3_FPS_CAP in vt3.env wins. */
+    if (access(VT3_ANDROID_ROOT "/fps60", F_OK) == 0) setenv("VT3_FPS_CAP", "60", 0);
     /* Full screen: the game draws over the whole panel, with no status bar (the activity has no Java). */
     ANativeActivity_setWindowFlags(app->activity, AWINDOW_FLAG_FULLSCREEN, 0);
     /* Game data: <root>/data2 is the extracted English archive set; <root>/image.bin is the image. */

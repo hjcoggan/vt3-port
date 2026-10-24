@@ -31,6 +31,7 @@
 #define VK_USE_PLATFORM_ANDROID_KHR 1
 #endif
 #include <android/native_window.h>
+#include <dlfcn.h>
 #endif
 #include <vulkan/vulkan.h>
 
@@ -529,6 +530,26 @@ static uint16_t declared_samplers(const char *text)
 
 /* ---- instance, device, swapchain --------------------------------------------- */
 
+/* The software frame cap in Hz, or 0 for none. The Mac's default is 60, matching its display and
+ * what the game was written for. On Android there is no cap by default: FIFO already holds the game
+ * to the panel's 120 Hz, and sleeping to a 120 budget on top of it missed vsync slots (Retroid,
+ * rotated pairs: 120.0 fps median against 97-105 with the 120 cap). VT3_FPS_CAP overrides, 0 turns
+ * the limit off; the launcher's "60 Hz battery saver" shortcut sets it to 60. */
+static int fps_cap_hz(void)
+{
+    static int hz = -1;
+    if (hz < 0) {
+        const char *cap = getenv("VT3_FPS_CAP");
+#ifdef __ANDROID__
+        hz = cap ? atoi(cap) : 0;
+#else
+        hz = cap ? atoi(cap) : 60;
+#endif
+        if (hz < 0) hz = 0;
+    }
+    return hz;
+}
+
 static int create_swapchain(void)
 {
     VkSurfaceCapabilitiesKHR caps;
@@ -544,6 +565,13 @@ static int create_swapchain(void)
     if (ext.width == 0xFFFFFFFFu) {
         ext.width = (uint32_t)ANativeWindow_getWidth(g.window);
         ext.height = (uint32_t)ANativeWindow_getHeight(g.window);
+    }
+    if (fps_cap_hz() > 0) {
+        /* Ask the compositor to run the panel at the capped rate, which also saves display power.
+         * ANativeWindow_setFrameRate is API 30; the build targets 29, so look it up. */
+        static int32_t (*set_rate)(ANativeWindow *, float, int8_t);
+        if (!set_rate) set_rate = (int32_t (*)(ANativeWindow *, float, int8_t))dlsym(RTLD_DEFAULT, "ANativeWindow_setFrameRate");
+        if (set_rate) VT3_INFO("vulkan: panel rate %d Hz requested (%d)", fps_cap_hz(), (int)set_rate(g.window, (float)fps_cap_hz(), 0));
     }
 #endif
     if (ext.width == 0 || ext.height == 0) return -1;
@@ -1932,19 +1960,13 @@ static void frame_limit(void)
     static long long period_ns = -1;
     static uint64_t last_ns;
     if (period_ns < 0) {
-        const char *cap = getenv("VT3_FPS_CAP");
-        /* The Mac's default is 60, matching its display and what the game was written for. On
-         * Android there is no software cap by default: FIFO already holds the game to the panel's
-         * 120 Hz, and sleeping to a 120 budget on top of it missed vsync slots. Retroid, rotated
-         * pairs: 120.0 fps median, no frame over 20 ms, against 97-105 with the 120 cap.
-         * VT3_FPS_CAP overrides, and 0 turns the limit off. */
-        int hz = cap ? atoi(cap)
-#ifdef __ANDROID__
-                     : 0;
-#else
-                     : 60;
-#endif
+        int hz = fps_cap_hz();
         period_ns = hz > 0 ? 1000000000ll / hz : 0;
+#ifdef __ANDROID__
+        /* Wake 1 ms early and let FIFO hold the present to its vsync: a sleep that overshoots
+         * by a hair would otherwise miss the slot and drop to the next one. */
+        if (period_ns > 2000000) period_ns -= 1000000;
+#endif
     }
     if (!period_ns) return;
     struct timespec ts;

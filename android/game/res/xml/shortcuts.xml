@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the VT3 icon for Settings; a plain tap still goes straight into the game. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="settings" android:enabled="true"
+        android:icon="@mipmap/ic_launcher" android:shortcutShortLabel="@string/settings">
+        <intent android:action="android.intent.action.VIEW"
+            android:targetPackage="net.vt3port.game" android:targetClass="net.vt3port.game.Settings" />
+    </shortcut>
+</shortcuts>
