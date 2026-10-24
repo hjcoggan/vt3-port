@@ -2330,6 +2330,9 @@ static int vk_init(int logical_w, int logical_h)
     memset(&enabled_features, 0, sizeof enabled_features);
     vkGetPhysicalDeviceFeatures(g.phys, &supported_features);
     g.aniso_enabled = supported_features.samplerAnisotropy == VK_TRUE;
+    VT3_INFO("vulkan: compressed textures: BC %d, ETC2 %d, ASTC LDR %d",
+             (int)supported_features.textureCompressionBC, (int)supported_features.textureCompressionETC2,
+             (int)supported_features.textureCompressionASTC_LDR);
     enabled_features.samplerAnisotropy = g.aniso_enabled ? VK_TRUE : VK_FALSE;
     dci.pEnabledFeatures = &enabled_features;
     VKT(vkCreateDevice(g.phys, &dci, NULL, &g.dev), "vkCreateDevice");
@@ -2339,6 +2342,9 @@ static int vk_init(int logical_w, int logical_h)
     vkGetPhysicalDeviceProperties(g.phys, &props);
     VkPhysicalDeviceLimits lim = props.limits;
     g.max_aniso = g.aniso_enabled && lim.maxSamplerAnisotropy > 0.0f ? lim.maxSamplerAnisotropy : 1.0f;
+    const char *an = getenv("VT3_ANISO");   /* cap the anisotropy of the game's anisotropic samplers */
+    if (an && *an && atof(an) >= 1.0 && atof(an) < g.max_aniso) g.max_aniso = (float)atof(an);
+    VT3_INFO("vulkan: anisotropy up to %.0fx", g.max_aniso);
     if (lim.minUniformBufferOffsetAlignment > 256) {
         VT3_ERROR("vulkan: uniform buffer alignment %llu is larger than the 256 bytes assumed",
                   (unsigned long long)lim.minUniformBufferOffsetAlignment);
