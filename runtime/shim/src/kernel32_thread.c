@@ -576,8 +576,12 @@ BOOL WINAPI SwitchToThread(void)
 void vt3s_spin_point(void)
 {
     honor_suspend();
-    static unsigned calls;
-    if ((++calls & 63u) == 0) gil_handoff();
+    /* VT3_SPIN_EVERY=n: lend the guest lock every n-th polling call. Default 0 (never): the loop
+     * safepoints and blocking waits keep the other threads running, and each lend here cost the
+     * game thread the wait to get the lock back (Retroid: 102.6 against 89.1 fps with 64). */
+    static unsigned calls, every = ~0u;
+    if (every == ~0u) { const char *e = getenv("VT3_SPIN_EVERY"); every = e && *e ? (unsigned)atoi(e) : 0u; }
+    if (every && ++calls % every == 0) gil_handoff();
 }
 
 void WINAPI Sleep(DWORD ms)
