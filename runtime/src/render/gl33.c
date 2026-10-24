@@ -934,16 +934,18 @@ static void gl_draw_program(const vt3_draw *d)
         want |= 1u << a->location;
         /* Integer types are converted to float by GL: as values, or normalised to 0..1 or -1..1. */
         GLenum t = GL_FLOAT;
+        GLint size = a->components;
         GLboolean norm = GL_FALSE;
         switch (a->type) {
         case VT3_VT_UBYTE_NORM: t = GL_UNSIGNED_BYTE; norm = GL_TRUE; break;
+        case VT3_VT_UBYTE_NORM_BGRA: t = GL_UNSIGNED_BYTE; norm = GL_TRUE; size = GL_BGRA; break;   /* D3DCOLOR */
         case VT3_VT_UBYTE:      t = GL_UNSIGNED_BYTE; break;
         case VT3_VT_SHORT:      t = GL_SHORT; break;
         case VT3_VT_SHORT_NORM: t = GL_SHORT; norm = GL_TRUE; break;
         default: break;
         }
         p_glEnableVertexAttribArray((GLuint)a->location);
-        p_glVertexAttribPointer((GLuint)a->location, a->components, t, norm, d->layout->stride,
+        p_glVertexAttribPointer((GLuint)a->location, size, t, norm, d->layout->stride,
                                 (const void *)(intptr_t)a->offset);
     }
     for (int loc = 0; loc < VT3_MAX_VATTR; loc++) {

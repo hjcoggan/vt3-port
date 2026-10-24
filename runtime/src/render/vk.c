@@ -401,6 +401,7 @@ static VkFormat attr_format(const vt3_vattr *a)
     int c = a->components >= 1 && a->components <= 4 ? a->components - 1 : 3;
     switch (a->type) {
     case VT3_VT_UBYTE_NORM: return f_ubyte_n[c];
+    case VT3_VT_UBYTE_NORM_BGRA: return VK_FORMAT_B8G8R8A8_UNORM;   /* D3DCOLOR: 4 components, B first */
     case VT3_VT_UBYTE: return f_ubyte[c];
     case VT3_VT_SHORT: return f_short[c];
     case VT3_VT_SHORT_NORM: return f_short_n[c];

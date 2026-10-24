@@ -136,10 +136,9 @@ static void decl_from_fvf(d3d9_decl *dc, uint32_t fvf)
 static uint32_t g_bad_type, g_bad_usage;
 
 /* Fills a renderer layout from a declaration. Returns 0, or -1 for a type the renderer lacks. */
-static int layout_from_decl(const d3d9_decl *dc, vt3_vlayout *lay, uint32_t stride, int *swap_colour)
+static int layout_from_decl(const d3d9_decl *dc, vt3_vlayout *lay, uint32_t stride)
 {
     memset(lay, 0, sizeof *lay);
-    *swap_colour = 0;
     lay->stride = (int)stride;
     int k = 0;
     for (uint32_t i = 0; i < dc->n; i++) {
@@ -158,10 +157,7 @@ static int layout_from_decl(const d3d9_decl *dc, vt3_vlayout *lay, uint32_t stri
             a->type = VT3_VT_FLOAT;
         } else if (type == DT_D3DCOLOR) {
             a->components = 4;
-            a->type = VT3_VT_UBYTE_NORM;
-            *swap_colour = 1;                  /* D3DCOLOR is BGRA in memory */
-            /* Swapping only works per attribute, so mark the element by its offset. */
-            lay->attr[k - 1].type = VT3_VT_UBYTE_NORM;
+            a->type = VT3_VT_UBYTE_NORM_BGRA;   /* D3DCOLOR is B,G,R,A in memory: the GPU reorders it */
         } else if (type == DT_UBYTE4N) {
             a->components = 4;
             a->type = VT3_VT_UBYTE_NORM;
@@ -191,27 +187,6 @@ static int layout_from_decl(const d3d9_decl *dc, vt3_vlayout *lay, uint32_t stri
     }
     lay->count = k;
     return 0;
-}
-
-/* Copies vertex bytes [v0, v1) of one stream into dst, swapping every D3DCOLOR element. */
-static void copy_vertices(uint8_t *dst, const uint8_t *src, uint32_t n, uint32_t stride,
-                          const d3d9_decl *dc)
-{
-    if (dst != src) memcpy(dst, src, (size_t)n * stride);
-    for (uint32_t i = 0; i < dc->n; i++) {
-        const uint8_t *e = dc->el[i];
-        if ((e[0] | (e[1] << 8)) != 0 || e[4] != DT_D3DCOLOR) continue;
-        uint32_t off = e[2] | (e[3] << 8);
-        if (off + 4 > stride) continue;     /* past the end of the vertex: nothing to swap */
-        /* Read the bytes from src: dst may be the renderer's write-combined ring, slow to read. */
-        for (uint32_t v = 0; v < n; v++) {
-            uint8_t *p = dst + (size_t)v * stride + off;
-            const uint8_t *q = src + (size_t)v * stride + off;
-            uint8_t t = q[0];
-            p[0] = q[2];
-            p[2] = t;
-        }
-    }
 }
 
 /* ---- programs ---------------------------------------------------------------- */
@@ -428,6 +403,7 @@ static void attr_read(const vt3_vattr *at, const uint8_t *v, float out[4])
         switch (at->type) {
         case VT3_VT_FLOAT: memcpy(&out[i], p + 4 * i, 4); break;
         case VT3_VT_UBYTE_NORM: out[i] = p[i] / 255.0f; break;
+        case VT3_VT_UBYTE_NORM_BGRA: out[i] = p[i < 3 ? 2 - i : 3] / 255.0f; break;   /* B,G,R,A in memory */
         case VT3_VT_UBYTE: out[i] = (float)p[i]; break;
         case VT3_VT_SHORT: { int16_t s; memcpy(&s, p + 2 * i, 2); out[i] = (float)s; break; }
         case VT3_VT_SHORT_NORM: { int16_t s; memcpy(&s, p + 2 * i, 2); out[i] = s / 32767.0f; break; }
@@ -959,8 +935,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     if (!prog) { return S_OK; }
 
     vt3_vlayout lay;
-    int swap = 0;
-    if (layout_from_decl(dc, &lay, stride, &swap) != 0) {
+    if (layout_from_decl(dc, &lay, stride) != 0) {
         if (!warned_once(&g_warn_layout))
             VT3_WARN("draw: vertex element type %u (usage %u) not supported (skipped)", g_bad_type, g_bad_usage);
         return S_OK;
@@ -971,18 +946,18 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
      * would come from the previous mesh's declaration and its UV would sample the wrong bytes.
      * The FVF-derived layout above is the quad's real one. */
 
-    /* Whether the vertex bytes need a shadow copy: a D3DCOLOR element must be byte-swapped
-     * (cannot touch the source buffer), multiple streams must be gathered into one, or the
-     * Adreno UBYTE4 blend-indices must be expanded to float4. Wherever we do have to copy, the
-     * scratch copy goes into the frame's ring when the backend has one, so the renderer does
-     * not copy the same bytes a second time. Anything else is handed to the renderer straight
-     * from the locked buffer and it copies into its ring within the same call. */
+    /* Whether the vertex bytes need a shadow copy: multiple streams must be gathered into one,
+     * or the Adreno UBYTE4 blend-indices must be expanded to float4. D3DCOLOR no longer forces
+     * one: its vertices carry VT3_VT_UBYTE_NORM_BGRA and the GPU does the reorder. Wherever we do
+     * have to copy, the scratch copy goes into the frame's ring when the backend has one, so the
+     * renderer does not copy the same bytes a second time. Anything else is handed to the
+     * renderer straight from the locked buffer and it copies into its ring within the same call. */
     int idx_k = -1;
     for (int k = 0; k < lay.count; k++)
         if (lay.attr[k].location == 2 && lay.attr[k].type == VT3_VT_UBYTE && lay.attr[k].components == 4)
             idx_k = k;
     int blend_indices = idx_k >= 0;
-    int needs_copy = swap || multi;
+    int needs_copy = multi;
 
     /* Vertex bytes for the referenced range. Indexed: [first, first + count); plain: the vertices. */
     uint32_t v0 = first_v;
@@ -997,18 +972,13 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     if (needs_copy) {
         /* The expansion below needs room after the source, so a blended draw keeps its source in
          * scratch and only the expanded copy goes straight into the ring. */
-        if (!blend_indices && !(multi && swap)) vring = vt3_gfx_reserve_vertices(bytes, &vring_off);
+        if (!blend_indices) vring = vt3_gfx_reserve_vertices(bytes, &vring_off);
         vcopy = vring ? vring : vertex_scratch_reserve(scratch_need ? scratch_need : 1);
         if (!vcopy) { return E_OUTOFMEMORY_D3D9; }
-        if (multi) {
-            for (uint32_t v = 0; v < nv; v++)
-                for (uint32_t s = 0; s < 16; s++)
-                    if (sptr[s])
-                        memcpy(vcopy + (size_t)v * stride + sbase[s], sptr[s] + (size_t)(v0 + v) * sstride[s], sstride[s]);
-            copy_vertices(vcopy, vcopy, nv, stride, dc);   /* in place: the D3DCOLOR swaps only */
-        } else {
-            copy_vertices(vcopy, vbase + (size_t)v0 * stride, nv, stride, dc);
-        }
+        for (uint32_t v = 0; v < nv; v++)
+            for (uint32_t s = 0; s < 16; s++)
+                if (sptr[s])
+                    memcpy(vcopy + (size_t)v * stride + sbase[s], sptr[s] + (size_t)(v0 + v) * sstride[s], sstride[s]);
         vertex_ring = vring != NULL;
     } else {
         vcopy = (uint8_t *)vbase + (size_t)v0 * stride;   /* renderer copies into its ring within the call */
@@ -1094,8 +1064,8 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     if (idx_k >= 0) {
         int ioff = lay.attr[idx_k].offset;
         rstride = (uint32_t)lay.stride + 12u;
-        /* Convert straight into the ring when it has room; otherwise swapped / merged sources
-         * stay in the first scratch region while the expanded draw data occupies the tail. */
+        /* Convert straight into the ring when it has room; otherwise the merged source stays in
+         * the first scratch region while the expanded draw data occupies the tail. */
         uint32_t expanded_off = 0;
         uint8_t *expanded = vt3_gfx_reserve_vertices(expanded_bytes, &expanded_off);
         if (expanded) {

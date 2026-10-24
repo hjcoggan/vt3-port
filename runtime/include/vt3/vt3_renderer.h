@@ -68,10 +68,11 @@ typedef uint32_t vt3_prog;      /* 0 = none */
 
 typedef enum vt3_vtype {
     VT3_VT_FLOAT = 0,           /* 1-4 floats */
-    VT3_VT_UBYTE_NORM = 1,      /* 4 unsigned bytes, normalised (D3DCOLOR order B,G,R,A) */
+    VT3_VT_UBYTE_NORM = 1,      /* 4 unsigned bytes, normalised, stored R,G,B,A */
     VT3_VT_UBYTE = 2,           /* 1-4 unsigned bytes, as values (D3DDECLTYPE_UBYTE4: blend indices) */
     VT3_VT_SHORT = 3,           /* 2 or 4 signed 16-bit values, as values (SHORT2, SHORT4) */
-    VT3_VT_SHORT_NORM = 4       /* 2 or 4 signed 16-bit values, normalised (SHORT2N, SHORT4N) */
+    VT3_VT_SHORT_NORM = 4,      /* 2 or 4 signed 16-bit values, normalised (SHORT2N, SHORT4N) */
+    VT3_VT_UBYTE_NORM_BGRA = 5  /* 4 unsigned bytes, normalised, stored B,G,R,A (D3DCOLOR) */
 } vt3_vtype;
 
 typedef struct vt3_vattr {
