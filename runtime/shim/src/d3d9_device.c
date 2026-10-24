@@ -215,7 +215,9 @@ HRESULT WINAPI IDirect3DDevice9_Clear(GPTR This, DWORD rect_count, GPTR rects, D
     (void)rect_count; (void)rects; (void)stencil;
     d3d9_device *d = DEV(This);
     if (!d) return D3DERR_CHK_INVALIDCALL;
-    if (getenv("VT3_TRACE_RTSEQ"))
+    static int trace_rtseq = -1;
+    if (trace_rtseq < 0) trace_rtseq = getenv("VT3_TRACE_RTSEQ") != NULL;
+    if (trace_rtseq)
         VT3_INFO("seq: clear rt 0x%x depth 0x%x flags 0x%x rects %u colour 0x%08x", (unsigned)d->rt[0],
                  (unsigned)d->depth, (unsigned)flags, (unsigned)rect_count, (unsigned)color);
     if (d3d9_target_missing(d->rt[0])) return S_OK;
@@ -303,8 +305,11 @@ HRESULT WINAPI IDirect3DDevice9_SetRenderTarget(GPTR This, DWORD RenderTargetInd
             d->viewport[5] = 0x3f800000u;   /* MaxZ 1.0f */
         }
     }
-    if (getenv("VT3_TRACE_RTSEQ")) VT3_INFO("seq: set rt %u -> 0x%x", (unsigned)RenderTargetIndex, (unsigned)pRenderTarget);
-    if (getenv("VT3_TRACE_RT")) {
+    static int trace_rtseq = -1, trace_rt = -1;
+    if (trace_rtseq < 0) trace_rtseq = getenv("VT3_TRACE_RTSEQ") != NULL;
+    if (trace_rt < 0) trace_rt = getenv("VT3_TRACE_RT") != NULL;
+    if (trace_rtseq) VT3_INFO("seq: set rt %u -> 0x%x", (unsigned)RenderTargetIndex, (unsigned)pRenderTarget);
+    if (trace_rt) {
         d3d9_surface *rs = pRenderTarget ? d3d9_surface_of(pRenderTarget) : NULL;
         VT3_INFO("SetRenderTarget %u -> 0x%08x (%s %ux%u fmt 0x%x usage 0x%x)", (unsigned)RenderTargetIndex,
                  (unsigned)pRenderTarget, rs ? (rs->backbuffer ? "backbuffer" : "surface") : "none",
@@ -343,7 +348,9 @@ HRESULT WINAPI IDirect3DDevice9_SetViewport(GPTR This, GPTR viewport)
     d3d9_device *d = DEV(This);
     if (!d || !d3d9_gmem(viewport, VP_SIZE)) return D3DERR_CHK_INVALIDCALL;
     for (int i = 0; i < 6; i++) d->viewport[i] = d3d9_rd(viewport, (uint32_t)(4 * i));
-    if (getenv("VT3_TRACE_VIEWPORT")) {
+    static int trace_viewport = -1;
+    if (trace_viewport < 0) trace_viewport = getenv("VT3_TRACE_VIEWPORT") != NULL;
+    if (trace_viewport) {
         d3d9_surface *ts = d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
         VT3_INFO("viewport %u %u %u %u z %g %g on rt 0x%x (%ux%u) from 0x%x", d->viewport[0], d->viewport[1], d->viewport[2], d->viewport[3], (double)0, (double)0, (unsigned)d->rt[0], ts ? (unsigned)ts->w : 0u, ts ? (unsigned)ts->h : 0u, vt3s_guest_caller);
     }
@@ -473,7 +480,9 @@ HRESULT WINAPI IDirect3DDevice9_GetFVF(GPTR This, GPTR pFVF)
 HRESULT WINAPI IDirect3DDevice9_SetTexture(GPTR This, DWORD Stage, GPTR pTexture)
 {
     d3d9_device *d = DEV(This);
-    if (d3d9_pixel_watch && getenv("VT3_PIXEL_TEX")) {   /* the bindings of the watched frame, in order */
+    static int pixel_tex = -1;
+    if (pixel_tex < 0) pixel_tex = getenv("VT3_PIXEL_TEX") != NULL;
+    if (d3d9_pixel_watch && pixel_tex) {   /* the bindings of the watched frame, in order */
         d3d9_texture *t = d3d9_texture_of(pTexture);
         VT3_INFO("SetTexture stage %u tex 0x%x gl %u (%ux%u) before draw %d caller 0x%08x", (unsigned)Stage,
                  (unsigned)pTexture, t ? (unsigned)t->gl : 0u, t ? t->w : 0u, t ? t->h : 0u, d3d9_frame_draws,
@@ -592,7 +601,9 @@ HRESULT WINAPI IDirect3DDevice9_StretchRect(GPTR This, GPTR src_surface, GPTR sr
     d3d9_surface *ss = src_surface ? d3d9_surface_of(src_surface) : NULL;
     d3d9_surface *ds = dst_surface ? d3d9_surface_of(dst_surface) : NULL;
     if (!ss || !ds) return D3DERR_CHK_INVALIDCALL;
-    if (getenv("VT3_TRACE_STRETCH")) {
+    static int trace_stretch = -1;
+    if (trace_stretch < 0) trace_stretch = getenv("VT3_TRACE_STRETCH") != NULL;
+    if (trace_stretch) {
         vt3_rect tsr = rect_at(src_rect, ss->w, ss->h), tdr = rect_at(dst_rect, ds->w, ds->h);
         VT3_INFO("stretch %ux%u src rect %d %d %d %d (rt 0x%x) -> dst %ux%u rect %d %d %d %d (rt 0x%x) filter %u",
                  (unsigned)ss->w, (unsigned)ss->h, tsr.x, tsr.y, tsr.w, tsr.h, (unsigned)d3d9_surface_target(src_surface),

@@ -210,13 +210,16 @@ static const char *k_ff_ps =
 
 static vt3_prog program_for(uint32_t vs_obj, uint32_t ps_obj, const d3d9_shader *vs, const d3d9_shader *ps)
 {
+    static int last = -1;   /* most recent hit: a draw normally repeats the previous program */
+    if (last >= 0 && g_progs[last].used && g_progs[last].vs == vs_obj && g_progs[last].ps == ps_obj)
+        return g_progs[last].prog;
     int free_slot = -1;
     for (int i = 0; i < PROG_CACHE; i++) {
         if (!g_progs[i].used) {
             if (free_slot < 0) free_slot = i;
             continue;
         }
-        if (g_progs[i].vs == vs_obj && g_progs[i].ps == ps_obj) return g_progs[i].prog;
+        if (g_progs[i].vs == vs_obj && g_progs[i].ps == ps_obj) { last = i; return g_progs[i].prog; }
     }
     if (free_slot < 0) return 0;
     char err[1024] = "";
@@ -230,6 +233,7 @@ static vt3_prog program_for(uint32_t vs_obj, uint32_t ps_obj, const d3d9_shader 
     g_progs[free_slot].vs = vs_obj;
     g_progs[free_slot].ps = ps_obj;
     g_progs[free_slot].prog = p;
+    last = free_slot;
     return p;
 }
 
@@ -341,11 +345,13 @@ static void trace_draw(const d3d9_device *d, const d3d9_draw_args *a, uint32_t n
         VT3_INFO("  hash vs %08x ps %08x", trace_vh ? shader_hash(trace_vh->data) : 0u,
                  hp ? shader_hash(hp->data) : 0u);
     }
-    if (trace_skinned && getenv("VT3_TRACE_LIGHT"))   /* the light matrix the scene and shadow passes read */
+    static int trace_light = -1;
+    if (trace_light < 0) trace_light = getenv("VT3_TRACE_LIGHT") != NULL;
+    if (trace_skinned && trace_light)   /* the light matrix the scene and shadow passes read */
         VT3_INFO("  mvp rt 0x%x c0 %g %g %g %g | c1 %g %g %g %g | c2 %g %g %g %g | c3 %g %g %g %g", (unsigned)d->rt[0],
                  d->vsc[0][0], d->vsc[0][1], d->vsc[0][2], d->vsc[0][3], d->vsc[1][0], d->vsc[1][1], d->vsc[1][2], d->vsc[1][3],
                  d->vsc[2][0], d->vsc[2][1], d->vsc[2][2], d->vsc[2][3], d->vsc[3][0], d->vsc[3][1], d->vsc[3][2], d->vsc[3][3]);
-    if (trace_skinned && getenv("VT3_TRACE_LIGHT"))
+    if (trace_skinned && trace_light)
         VT3_INFO("  light rt 0x%x c248 %g %g %g %g | c249 %g %g %g %g | c250 %g %g %g %g | c251 %g %g %g %g", (unsigned)d->rt[0],
                  d->vsc[248][0], d->vsc[248][1], d->vsc[248][2], d->vsc[248][3],
                  d->vsc[249][0], d->vsc[249][1], d->vsc[249][2], d->vsc[249][3],
@@ -355,13 +361,17 @@ static void trace_draw(const d3d9_device *d, const d3d9_draw_args *a, uint32_t n
              (unsigned)d->rs[27], (unsigned)d->rs[19], (unsigned)d->rs[20], (unsigned)d->rs[15],
              (unsigned)d->rs[25], (unsigned)(d->rs[24] & 0xFF), (unsigned)d->rs[7], (unsigned)d->rs[14],
              (unsigned)d->rs[22]);
-    if (trace_skinned && getenv("VT3_TRACE_PSC")) {   /* the first pixel constants of skinned draws */
+    static int trace_psc = -1;
+    if (trace_psc < 0) trace_psc = getenv("VT3_TRACE_PSC") != NULL;
+    if (trace_skinned && trace_psc) {   /* the first pixel constants of skinned draws */
         for (int r = 0; r < 16; r += 2)
             VT3_INFO("  psc c%-2d %9.4f %9.4f %9.4f %9.4f | c%-2d %9.4f %9.4f %9.4f %9.4f", r, d->psc[r][0],
                      d->psc[r][1], d->psc[r][2], d->psc[r][3], r + 1, d->psc[r + 1][0], d->psc[r + 1][1],
                      d->psc[r + 1][2], d->psc[r + 1][3]);
     }
-    if (trace_skinned && getenv("VT3_TRACE_VSC")) {   /* the whole vertex constant block of skinned draws */
+    static int trace_vsc = -1;
+    if (trace_vsc < 0) trace_vsc = getenv("VT3_TRACE_VSC") != NULL;
+    if (trace_skinned && trace_vsc) {   /* the whole vertex constant block of skinned draws */
         for (int r = 147; r < 171; r += 3)
             VT3_INFO("  vsc c%-2d %9.4f %9.4f %9.4f %9.4f | c%-2d %9.4f %9.4f %9.4f %9.4f | c%-2d %9.4f %9.4f %9.4f %9.4f",
                      r, d->vsc[r][0], d->vsc[r][1], d->vsc[r][2], d->vsc[r][3],
@@ -437,8 +447,11 @@ static void skin_check(const d3d9_device *d, const d3d9_shader *vsh, const d3d9_
     /* Skinned draws, or any draw whose vertex shader VT3_TRACE_HASH names (positions then go
      * straight through c0..c3, as a rigid mesh's shader does). */
     if (now_s - first_s < after_s || !trace_hash_match(vsh)) return;
-    if (!vsh->skinned && !getenv("VT3_TRACE_HASH")) return;
-    if (isnan(d->vsc[0][0]) && !getenv("VT3_SKIN_NAN")) return;   /* a NaN camera draws nothing; VT3_SKIN_NAN keeps them */
+    static int trace_hash = -1, skin_nan = -1;
+    if (trace_hash < 0) trace_hash = getenv("VT3_TRACE_HASH") != NULL;
+    if (skin_nan < 0) skin_nan = getenv("VT3_SKIN_NAN") != NULL;
+    if (!vsh->skinned && !trace_hash) return;
+    if (isnan(d->vsc[0][0]) && !skin_nan) return;   /* a NaN camera draws nothing; VT3_SKIN_NAN keeps them */
     const vt3_vattr *pos = NULL, *wt = NULL, *ix = NULL;
     for (int k = 0; k < lay->count; k++) {
         if (lay->attr[k].location == 0) pos = &lay->attr[k];
@@ -864,7 +877,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         if (stride != 28) { return S_OK; }
         uint32_t n = use_idx ? nidx : nverts;
         const uint8_t *src = vbase + (size_t)first_v * stride;
-        vt3_tlvertex *tmp = malloc((size_t)n * sizeof *tmp);
+        vt3_tlvertex *tmp = (vt3_tlvertex *)vertex_scratch_reserve((size_t)n * sizeof *tmp);
         if (!tmp) { return E_OUTOFMEMORY_D3D9; }
         if (use_idx) {
             /* idx16 is local to the range that starts at first_v. */
@@ -889,7 +902,6 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         if (tx) t0 = tx->gl;
         vt3_gfx_draw(prim_list == PRIM_TRIANGLESTRIP ? VT3_PRIM_TRIANGLESTRIP : VT3_PRIM_TRIANGLELIST,
                      tmp, n, t0);
-        free(tmp);
         return S_OK;
     }
 
@@ -1133,8 +1145,11 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         dd.samp_addr_w[s] = (uint8_t)d->samp[s][3];
     }
     fill_rstate(d, &dd.state);
-    if (vsh->skinned && getenv("VT3_SKIN_NOCULL")) dd.state.cull = 1;   /* debug: skinned meshes drawn two-sided */
-    if (vsh->skinned && getenv("VT3_SKIN_FLIPCULL") && (dd.state.cull == 2 || dd.state.cull == 3))
+    static int skin_nocull = -1, skin_flipcull = -1;
+    if (skin_nocull < 0) skin_nocull = getenv("VT3_SKIN_NOCULL") != NULL;
+    if (skin_flipcull < 0) skin_flipcull = getenv("VT3_SKIN_FLIPCULL") != NULL;
+    if (vsh->skinned && skin_nocull) dd.state.cull = 1;   /* debug: skinned meshes drawn two-sided */
+    if (vsh->skinned && skin_flipcull && (dd.state.cull == 2 || dd.state.cull == 3))
         dd.state.cull = 5 - dd.state.cull;                              /* debug: skinned meshes, culling reversed */
     {   /* VT3_TRACE_QUAD=1 (debug): the layout and raw floats of the first few small draws, such as full-screen quads */
         static int quad_on = -1, quad_shown;
