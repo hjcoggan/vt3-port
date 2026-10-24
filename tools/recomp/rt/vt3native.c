@@ -277,7 +277,7 @@ static void native_init(void)
     native_mode = NATIVE_OFF;
     vt_native_on = 0;
     if (s && strcmp(s, "0") == 0) return;      /* on by default; VT3_NATIVE=0 turns it off */
-    int check = strcmp(s, "check") == 0;
+    int check = s && strcmp(s, "check") == 0;
     const char *n = getenv("VT3_NATIVE_CHECKS");
     checks_left = n && *n ? atoi(n) : 50;
     native_mode = check ? NATIVE_CHECK : NATIVE_ON;
