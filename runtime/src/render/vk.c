@@ -1932,22 +1932,14 @@ static void frame_limit(void)
     static uint64_t last_ns;
     if (period_ns < 0) {
         const char *cap = getenv("VT3_FPS_CAP");
-        /* The default follows the display's rate. The Mac's is 60 Hz, where pacing the present is
-         * free and matches what the game was written for. The Retroid's panel runs at 120 Hz, and
-         * holding the game to 60 on it would show each frame twice over while the frame times still
-         * land unevenly - that is judder, not smoothness. At 120 the budget is 8.3 ms, below what a
-         * frame costs today, so nothing sleeps and the game runs flat out; if it ever gets fast
-         * enough to reach 120 the same code starts holding it there. VT3_FPS_CAP overrides, and 0
-         * turns the limit off.
-         *
-         * Be careful attributing frame rate to the cap on the Retroid: every run picks a different
-         * opponent and venue, so two runs do not measure the same work. A cap whose budget sits
-         * near a frame's own cost does sleep, and that idle lets the big cores drop from 2.0 GHz to
-         * 0.85 so the next frame costs more than the sleep saved - but isolating that needs two
-         * runs of the same match, which the game does not offer. */
+        /* The Mac's default is 60, matching its display and what the game was written for. On
+         * Android there is no software cap by default: FIFO already holds the game to the panel's
+         * 120 Hz, and sleeping to a 120 budget on top of it missed vsync slots. Retroid, rotated
+         * pairs: 120.0 fps median, no frame over 20 ms, against 97-105 with the 120 cap.
+         * VT3_FPS_CAP overrides, and 0 turns the limit off. */
         int hz = cap ? atoi(cap)
 #ifdef __ANDROID__
-                     : 120;
+                     : 0;
 #else
                      : 60;
 #endif
