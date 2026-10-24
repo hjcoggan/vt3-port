@@ -6,7 +6,7 @@
  * leave the callee-saved registers as the translated body would), returning 0 means the
  * dispatcher runs the translated body.
  *
- * VT3_NATIVE=1 uses the native body. VT3_NATIVE=check runs both: for the first
+ * The native body is used by default (VT3_NATIVE=0 turns it off). VT3_NATIVE=check runs both: for the first
  * VT3_NATIVE_CHECKS calls (default 50) it runs the native body, saves the guest state, restores
  * the input, runs the translated body and compares. Execution keeps the translated result
  * while checking, so a mismatch can never change the game. After the checks, native is used
@@ -276,7 +276,7 @@ static void native_init(void)
     const char *s = getenv("VT3_NATIVE");
     native_mode = NATIVE_OFF;
     vt_native_on = 0;
-    if (!s || !*s || strcmp(s, "0") == 0) return;
+    if (s && strcmp(s, "0") == 0) return;      /* on by default; VT3_NATIVE=0 turns it off */
     int check = strcmp(s, "check") == 0;
     const char *n = getenv("VT3_NATIVE_CHECKS");
     checks_left = n && *n ? atoi(n) : 50;
