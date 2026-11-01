@@ -109,6 +109,13 @@ static uint32_t prim_vertex_count(uint32_t prim, uint32_t count)
     return 0;
 }
 
+/* Whether bytes [off, off + (first + n) * stride) fit in len. 64-bit with the first two tests
+ * bounding the product, since every term is guest-controlled. */
+static int draw_span_ok(uint64_t off, uint64_t first, uint64_t n, uint64_t stride, uint64_t len)
+{
+    return first + n <= len && stride <= len && off + (first + n) * stride <= len;
+}
+
 /* Builds a declaration from an FVF code, in the order the SDK lays the fields out. */
 static void decl_from_fvf(d3d9_decl *dc, uint32_t fvf)
 {
@@ -726,16 +733,21 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     /* ---- where the vertices and indices come from ---- */
     const uint8_t *vbase = NULL;
     uint32_t stride = 0;
+    uint64_t voff = 0, vlen = 0;   /* vbase is voff bytes into a block of vlen */
     d3d9_decl fvf_decl;
     const d3d9_decl *dc = NULL;
     int from_user = a->up_vertices != NULL;
     if (from_user) {
         stride = a->up_stride;
         vbase = a->up_vertices;
+        voff = (uint64_t)(vbase - vt3_guest_base_);   /* vt3_g2h kept it inside the arena */
+        vlen = vt3_guest_size_;
     } else {
         d3d9_buffer *vb = d3d9_vb_of(d->streams[0][0]);
         if (!vb || !vb->data) { VT3_WARN_ONCE("draw: stream 0 unbound, draw skipped"); return D3DERR_CHK_INVALIDCALL; }
         vbase = vt3_g2h(vb->data + d->streams[0][1]);
+        voff = d->streams[0][1];
+        vlen = vb->length;
         stride = d->streams[0][2];
         if (stride == 0 && d->decl) {
             d3d9_host *h = d3d9_host_of(d->decl, D3D9_KIND_VDECL);
@@ -758,7 +770,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
      * order, and the declaration is rewritten to match, so the rest of the path sees stream 0. */
     d3d9_decl merged;
     int multi = 0;
-    uint32_t sbase[16] = { 0 }, sstride[16] = { 0 };
+    uint32_t sbase[16] = { 0 }, sstride[16] = { 0 }, slen[16] = { 0 };
     const uint8_t *sptr[16] = { 0 };
     if (!from_user) {
         uint32_t used = 0;
@@ -775,6 +787,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
                 if (!sb || !sb->data || st == 0) { VT3_WARN_ONCE("draw: stream %d unbound, draw skipped", s); return D3DERR_CHK_INVALIDCALL; }
                 sptr[s] = vt3_g2h(sb->data + d->streams[s][1]);
                 sstride[s] = st;
+                slen[s] = sb->length;
                 sbase[s] = off;
                 off += st;
             }
@@ -807,16 +820,24 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     if (a->indexed) {
         const uint8_t *ibase = NULL;
         uint32_t fmt = 0;
+        uint64_t ioff = 0, ilen = 0;
         if (a->up_indices) {
             ibase = a->up_indices;
             fmt = a->up_index_format;
+            ioff = (uint64_t)(ibase - vt3_guest_base_);
+            ilen = vt3_guest_size_;
         } else {
             d3d9_buffer *ib = d3d9_buffer_of(d->indices);
             if (!ib || !ib->data) { VT3_WARN_ONCE("draw: index buffer unbound, draw skipped"); return D3DERR_CHK_INVALIDCALL; }
             fmt = ib->fvf_or_fmt;
             ibase = vt3_g2h(ib->data);
+            ilen = ib->length;
         }
         uint32_t isz = fmt == D3DFMT_CHK_INDEX32 ? 4u : 2u;
+        if (!draw_span_ok(ioff, a->start, nidx, isz, ilen)) {
+            VT3_WARN_ONCE("draw: indices %u+%u past the index buffer, draw skipped", a->start, nidx);
+            return D3DERR_CHK_INVALIDCALL;
+        }
         const uint8_t *ip = ibase + (size_t)a->start * isz;
         uint32_t lo = a->min_vertex, hi = a->min_vertex + a->num_vertices;
         if (hi <= lo) return S_OK;
@@ -855,6 +876,21 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     } else {
         first_v = a->start;
         count_v = nverts;
+    }
+    {   /* Every vertex read is in [first, first + count_v) (indices are clamped above); a negative
+         * base + min would wrap first_v to ~4G and the copy would fault past the arena. */
+        int64_t first = a->indexed ? (int64_t)a->base_vertex + a->min_vertex : (int64_t)a->start;
+        int ok = first >= 0;
+        if (multi) {
+            for (uint32_t s = 0; s < 16 && ok; s++)
+                if (sptr[s]) ok = draw_span_ok(d->streams[s][1], (uint64_t)first, count_v, sstride[s], slen[s]);
+        } else if (ok) {
+            ok = draw_span_ok(voff, (uint64_t)first, count_v, stride, vlen);
+        }
+        if (!ok) {
+            VT3_WARN_ONCE("draw: vertices %lld+%u past the vertex data, draw skipped", (long long)first, count_v);
+            return D3DERR_CHK_INVALIDCALL;
+        }
     }
 
     /* A triangle fan becomes a triangle list over the same vertices: triangle t is (0, t+1, t+2)
