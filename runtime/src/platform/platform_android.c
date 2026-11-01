@@ -146,7 +146,7 @@ int vt3_platform_pump_events(void)
             if (ALooper_pollOnce(-1, NULL, &events, (void **)&source) >= 0 && source) source->process(g_app, source);
             if (g_app->destroyRequested) g_quit = 1;
         }
-        vt3_audio_pause(0);
+        if (!g_quit) vt3_audio_pause(0);   /* no burst of sound while the app is torn down */
     }
     vt3_audio_recover();
     return !g_quit;

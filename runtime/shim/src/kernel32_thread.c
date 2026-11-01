@@ -61,7 +61,7 @@ struct vt3s_sync {
     uint32_t owner;         /* mutex owner tid, 0 when free */
     uint32_t count;         /* mutex recursion */
     uint32_t gen;          /* PulseEvent generation: waiters that started earlier are released */
-    int pulsed;             /* auto-reset PulseEvent not yet taken: it releases one waiter */
+    int pulsed;             /* auto-reset pulses not yet taken: each releases one waiter */
     int waiters;            /* threads inside wait_set holding a pointer to this */
     int closed;             /* CloseHandle ran; the last waiter out frees it */
 };
@@ -761,7 +761,7 @@ BOOL WINAPI PulseEvent(HANDLE h)
     struct vt3s_sync *s = vt3s_handle_get(h, VT3S_H_SYNC);
     if (!s || s->is_mutex) { vt3s_set_last_error(ERROR_INVALID_HANDLE); return FALSE; }
     s->gen++;
-    s->pulsed = 1;
+    if (s->waiters > s->pulsed) s->pulsed++;   /* a pulse with nobody left to release is lost, as on Windows */
     s->signaled = 0;
     vt3s_gil_broadcast();
     return TRUE;
@@ -805,7 +805,7 @@ static void obj_take(const struct wobj *o)
         o->sync->count++;
     } else if (!o->sync->manual) {
         if (o->sync->signaled) o->sync->signaled = 0;
-        else o->sync->pulsed = 0;   /* an auto-reset pulse releases only the first waiter */
+        else o->sync->pulsed--;     /* each auto-reset pulse releases one waiter */
     }
 }
 
@@ -863,7 +863,10 @@ static DWORD wait_set(struct wset *w, DWORD ms)
     }
     for (uint32_t i = 0; i < w->n; i++) {
         struct vt3s_sync *s = w->o[i].sync;
-        if (s && --s->waiters == 0 && s->closed) free(s);
+        if (s && --s->waiters == 0) {
+            if (s->closed) free(s);
+            else s->pulsed = 0;   /* pulses no waiter took (timed out) do not carry over */
+        }
     }
     return r;
 }
