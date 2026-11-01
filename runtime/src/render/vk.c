@@ -102,7 +102,7 @@ typedef struct vk_tex {
 
 typedef struct vk_prog {
     VkShaderModule vs, ps;
-    uint8_t cube_mask;             /* sampler n is a samplerCube in this program */
+    uint16_t cube_mask;            /* sampler n is a samplerCube in this program */
     uint16_t sampler_mask;         /* samplers the program declares (sampler2D or samplerCube) */
     int used;
 } vk_prog;
@@ -503,13 +503,13 @@ static VkShaderModule module_for_text(const char *text, uint32_t stage_want, cha
 }
 
 /* Which samplers the program declares as samplerCube (the text is the translator's output). */
-static uint8_t cube_samplers(const char *text)
+static uint16_t cube_samplers(const char *text)
 {
-    uint8_t mask = 0;
+    uint16_t mask = 0;
     for (int n = 0; n < 16; n++) {
         char pat[32];
         snprintf(pat, sizeof pat, "samplerCube s%d;", n);
-        if (strstr(text, pat)) mask |= (uint8_t)(1u << n);
+        if (strstr(text, pat)) mask |= (uint16_t)(1u << n);
     }
     return mask;
 }
@@ -1265,8 +1265,9 @@ static int ensure_frame(void)
         VT3_ERROR("vulkan: descriptor set for the frame failed");
         return -1;
     }
-    /* Both constant blocks are dynamic: the offsets are absolute positions in the ring buffer. */
-    VkDescriptorBufferInfo bi = { g.ubo, 0, VK_WHOLE_SIZE };
+    /* Both constant blocks are dynamic: the offsets are absolute positions in the ring buffer.
+     * The range is one slot: the whole ring would exceed maxUniformBufferRange (64 KB on many GPUs). */
+    VkDescriptorBufferInfo bi = { g.ubo, 0, UBO_SLOT };
     VkWriteDescriptorSet ws[2] = {0};
     for (uint32_t b = 0; b < 2; b++) {
         ws[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1563,7 +1564,7 @@ static VkSampler sampler_for(uint8_t minf, uint8_t magf, uint8_t u, uint8_t v, u
 
 /* Samplers the program does not declare get the white texel: the game leaves stale textures bound on
  * stages a shader never reads, and those should neither cost a layout change nor be read. */
-static VkDescriptorSet alloc_set1(vk_frame *f, uint8_t cube_mask, uint16_t declared, const vt3_tex *samplers,
+static VkDescriptorSet alloc_set1(vk_frame *f, uint16_t cube_mask, uint16_t declared, const vt3_tex *samplers,
                                   const uint8_t *minf, const uint8_t *magf, const uint8_t *addr_u,
                                   const uint8_t *addr_v, const uint8_t *addr_w)
 {
@@ -2136,6 +2137,9 @@ static void vk_present(const vt3_rect *dst, int nearest, int drawable_w, int dra
     }
     if (ar != VK_SUCCESS && ar != VK_SUBOPTIMAL_KHR) {
         VT3_ERROR("vulkan: acquire failed (%d)", (int)ar);
+#ifdef __ANDROID__
+        if (ar == VK_ERROR_SURFACE_LOST_KHR) g.window = NULL; /* the next frame rebuilds the surface */
+#endif
         submit_frame(0, 0);
         return;
     }
@@ -2143,8 +2147,9 @@ static void vk_present(const vt3_rect *dst, int nearest, int drawable_w, int dra
     end_pass();
     layout_to(cb, g.col, &g.col_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     VkImage sc = g.sc_img[idx];
+    /* srcStage matches the acquire semaphore's wait stage, so the transition waits for the image. */
     barrier_image(cb, sc, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                  VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
                   VK_ACCESS_TRANSFER_WRITE_BIT, 0, 1, VK_IMAGE_ASPECT_COLOR_BIT);
     VkClearColorValue black = {{ 0.0f, 0.0f, 0.0f, 1.0f }};
     VkImageSubresourceRange whole = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
@@ -2168,6 +2173,10 @@ static void vk_present(const vt3_rect *dst, int nearest, int drawable_w, int dra
         blit.dstOffsets[1].x = x1;
         blit.dstOffsets[1].y = y1;
         blit.dstOffsets[1].z = 1;
+        /* Two transfer writes to one image are unordered without a barrier: the clear could land last. */
+        barrier_image(cb, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                      VK_ACCESS_TRANSFER_WRITE_BIT, 0, 1, VK_IMAGE_ASPECT_COLOR_BIT);
         vkCmdBlitImage(cb, g.col, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                        &blit, nearest ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
     }
@@ -2201,6 +2210,9 @@ static void vk_present(const vt3_rect *dst, int nearest, int drawable_w, int dra
 #endif
     } else if (pr != VK_SUCCESS) {
         VT3_ERROR("vulkan: present failed (%d)", (int)pr);
+#ifdef __ANDROID__
+        if (pr == VK_ERROR_SURFACE_LOST_KHR) g.window = NULL; /* the next frame rebuilds the surface */
+#endif
     }
     uint64_t lt0 = stats_enabled() ? now_ns() : 0;
     frame_limit();
@@ -2824,6 +2836,10 @@ static void vk_blit(vt3_tex dst, vt3_rect dr, vt3_tex src, vt3_rect sr, int near
     VkImage simg = rs ? rs->image : g.col, dimg = rd ? rd->image : g.col;
     VkImageLayout *sl = rs ? &rs->layout : &g.col_layout, *dl = rd ? &rd->layout : &g.col_layout;
     layout_to(cb, simg, sl, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    /* layout_to is a no-op when dst is already TRANSFER_DST, so order this blit after the last write. */
+    if (*dl == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+        barrier_image(cb, dimg, *dl, *dl, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, 0, 1, VK_IMAGE_ASPECT_COLOR_BIT);
     layout_to(cb, dimg, dl, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkImageBlit b = {0};
     b.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
