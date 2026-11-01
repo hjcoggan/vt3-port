@@ -208,12 +208,15 @@ void vt_stx(uint32_t a, vt_xmm v);
 /* Declare the flags and the direction flag. Eager flags, dead code removed by cc (the c->eflags
  * load too, unless a flag is read before it is written). A jump or fallthrough into another
  * function is a tail call, so it hands its flags over in c->eflags (VT_SPILL_FLAGS); after a
- * call they are stale, which is fine as x86 leaves them undefined there. DF starts clear, as
- * the ABI has it at every function entry. */
+ * call they are stale, which is fine as x86 leaves them undefined there, except where the
+ * caller reads them: then the callee's ret spills them and the caller reloads them
+ * (VT_RELOAD_FLAGS). DF starts clear, as the ABI has it at every function entry. */
 #define VT_FLAGS() \
     uint32_t vfl = c->eflags, cf = vfl & 1u, zf = (vfl >> 1) & 1u, sf = (vfl >> 2) & 1u, \
              of = (vfl >> 3) & 1u, pf = (vfl >> 4) & 1u, af = (vfl >> 5) & 1u, df = 0
 #define VT_SPILL_FLAGS() (c->eflags = !!cf | !!zf << 1 | !!sf << 2 | !!of << 3 | !!pf << 4 | !!af << 5)
+#define VT_RELOAD_FLAGS() (vfl = c->eflags, cf = vfl & 1u, zf = (vfl >> 1) & 1u, sf = (vfl >> 2) & 1u, \
+                           of = (vfl >> 3) & 1u, pf = (vfl >> 4) & 1u, af = (vfl >> 5) & 1u)
 
 #define VT_SPILL() do { \
     c->eax = eax; c->ecx = ecx; c->edx = edx; c->ebx = ebx; \
