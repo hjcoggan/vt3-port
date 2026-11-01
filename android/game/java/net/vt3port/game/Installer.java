@@ -44,7 +44,11 @@ public class Installer extends Activity {
     Uri iso, zip;
     Button isoButton, zipButton, installButton;
     TextView status;
-    final Handler ui = new Handler(Looper.getMainLooper());
+    static final Handler ui = new Handler(Looper.getMainLooper());
+    /* The install thread outlives the activity (a recreate, or a relaunch from the icon), so it
+     * reports to whichever instance is on screen, and a second install never runs over the first. */
+    static volatile Installer live;
+    static volatile boolean busy;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -73,6 +77,23 @@ public class Installer extends Activity {
         status.setText("Needs about 4.5 GB free. The files stay on this device; uninstalling removes them.");
         box.addView(status);
         setContentView(box);
+        live = this;
+        if (busy) {
+            isoButton.setEnabled(false);
+            zipButton.setEnabled(false);
+            status.setText("Setup is running...");
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (live == this) live = null;
+        super.onDestroy();
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (!busy) super.onBackPressed(); /* leaving mid-install lets the system kill the unpacking */
     }
 
     Button button(LinearLayout box, String label, int code) {
@@ -93,6 +114,8 @@ public class Installer extends Activity {
     }
 
     void install() {
+        if (busy) return;
+        busy = true;
         isoButton.setEnabled(false);
         zipButton.setEnabled(false);
         installButton.setEnabled(false);
@@ -102,7 +125,7 @@ public class Installer extends Activity {
                 say("Checking VT3.exe...");
                 buildImage();
                 Runnable[] tick = new Runnable[1];
-                tick[0] = () -> { status.setText("Unpacking the disc... " + progress() / 10 + "%"); ui.postDelayed(tick[0], 500); };
+                tick[0] = () -> { say("Unpacking the disc... " + progress() / 10 + "%"); ui.postDelayed(tick[0], 500); };
                 ui.post(tick[0]);
                 int rc;
                 try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(iso, "r")) {
@@ -113,14 +136,21 @@ public class Installer extends Activity {
                 if (rc == -1) throw new IOException("That file is not a disc image (.iso).");
                 if (rc == -2) throw new IOException("No Virtua Tennis 3 PC install files on that disc image.");
                 if (rc < 0) throw new IOException("Unpacking failed. Check there is about 4.5 GB free.");
+                /* Another game's InstallShield disc unpacks fine, and install.ok would make that stick. */
+                if (!new File(root, "data2/Resource").isDirectory())
+                    throw new IOException("No Virtua Tennis 3 PC install files on that disc image.");
                 try (FileOutputStream o = new FileOutputStream(new File(root, "install.ok"))) { o.getFD().sync(); }
-                ui.post(this::launch);
+                ui.post(() -> { busy = false; Installer a = live; if (a != null) a.launch(); });
             } catch (Throwable e) { /* an Error (OutOfMemoryError) must not kill the thread silently */
                 ui.post(() -> {
-                    status.setText("Setup failed: " + e.getMessage());
-                    isoButton.setEnabled(true);
-                    zipButton.setEnabled(true);
-                    installButton.setEnabled(true);
+                    busy = false;
+                    Installer a = live;
+                    if (a == null) return;
+                    a.status.setText("Setup failed: " + e.getMessage());
+                    a.isoButton.setEnabled(true);
+                    a.zipButton.setEnabled(true);
+                    a.installButton.setEnabled(a.iso != null && a.zip != null);
+                    a.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                 });
             }
         }).start();
@@ -176,7 +206,7 @@ public class Installer extends Activity {
         finish();
     }
 
-    void say(String s) { ui.post(() -> status.setText(s)); }
+    static void say(String s) { ui.post(() -> { Installer a = live; if (a != null) a.status.setText(s); }); }
 
     /* Capped: VT3.exe is a few MB, and picking the 4.5 GB disc image here would run out of memory. */
     static byte[] readAll(InputStream in) throws IOException {

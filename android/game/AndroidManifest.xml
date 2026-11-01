@@ -9,7 +9,7 @@
     <application android:label="VT3" android:icon="@mipmap/ic_launcher" android:hasCode="true" android:debuggable="true">
         <activity android:name="net.vt3port.game.Installer"
             android:exported="true"
-            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout">
+            android:configChanges="orientation|keyboard|keyboardHidden|navigation|screenSize|smallestScreenSize|screenLayout|uiMode|density">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -19,9 +19,11 @@
         <!-- Its own task, so opening it while the game runs never stacks a second game on top. -->
         <activity android:name="net.vt3port.game.Settings" android:exported="true"
             android:taskAffinity="" android:excludeFromRecents="true" />
+        <!-- keyboard|navigation: connecting a pad or keyboard must not recreate the activity, which
+             ends the game (APP_CMD_DESTROY) mid-match; the game takes the change as a resize. -->
         <activity android:name="android.app.NativeActivity"
             android:exported="false"
-            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout"
+            android:configChanges="orientation|keyboard|keyboardHidden|navigation|screenSize|smallestScreenSize|screenLayout|uiMode|density"
             android:screenOrientation="sensorLandscape">
             <meta-data android:name="android.app.lib_name" android:value="vt3android" />
         </activity>
