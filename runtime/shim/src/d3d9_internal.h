@@ -163,9 +163,10 @@ typedef struct d3d9_device {
     uint32_t vs, ps;                    /* shader objects, guest addresses */
     uint32_t decl;                      /* vertex declaration object */
     uint32_t textures[16];
-    uint32_t rt[4];
-    uint32_t depth;
-    uint32_t backbuffer;                /* surface object for the back buffer */
+    uint32_t rt[4];                     /* bound targets: each holds a reference, as in D3D9 */
+    uint32_t depth;                     /* bound depth-stencil: holds a reference */
+    uint32_t backbuffer;                /* surface object for the back buffer; the device holds a reference */
+    uint32_t auto_depth;                /* the implicit depth-stencil (0 if none); the device holds a reference */
     uint32_t streams[16][3];            /* buffer, offset, stride */
     uint32_t indices, indices_format;
     float vsc[256][4];
@@ -181,6 +182,7 @@ extern int d3d9_frame_draws;   /* draws since the last Present (debug bisect) */
 extern int d3d9_pixel_watch;   /* nonzero during the frame VT3_PIXEL_AFTER picks (d3d9_draw.c) */
 
 void d3d9_device_free(d3d9_device *d);
+void d3d9_hold(uint32_t *slot, GPTR obj);
 
 /* ---- GPU glue (d3d9_gpu.c) ----------------------------------------------- */
 

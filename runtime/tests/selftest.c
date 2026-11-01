@@ -898,9 +898,8 @@ static void test_d3dx_misc(void)
     printf("PASS d3dx lookat, ortho, project, plane\n");
 }
 
-/* Shim internals (d3d9_resource.c): a texture made with no device and no renderer. */
-GPTR d3d9_create_texture_obj(GPTR dev, uint32_t cube, uint32_t w, uint32_t h, uint32_t levels, uint32_t fmt,
-                             uint32_t usage, uint32_t pool);
+/* Shim internals: objects made with no renderer, and a device built by hand (CreateDevice would open one). */
+#include "../shim/src/d3d9_internal.h"
 
 static void test_d3d9_lock_and_refs(void)
 {
@@ -945,6 +944,53 @@ static void test_d3d9_lock_and_refs(void)
     printf("PASS d3d9 LockRect rect, surface keeps its texture\n");
 }
 
+/* Bound render targets and depth-stencils hold a reference, as in D3D9, so the game's
+ * SetRenderTarget(s); s->Release() leaves s alive; unbinding, Reset and device Release drop them. */
+static void test_d3d9_target_refs(void)
+{
+    HANDLE ph = GetProcessHeap();
+    GPTR out = HeapAlloc(ph, 0, 4), pp = HeapAlloc(ph, 0, 56), desc = HeapAlloc(ph, 0, 32);
+    memset(vt3_g2h(pp), 0, 56);
+    d3d9_device *dd = calloc(1, sizeof *dd);
+    GPTR dev = d3d9_obj_new(D3D9_KIND_DEVICE, dd, 0);
+    dd->backbuffer = d3d9_create_surface_obj(dev, 16, 16, 0x16u, 0x1u, 0, 0, 1);
+    dd->auto_depth = d3d9_create_surface_obj(dev, 16, 16, 0x4bu, 0x2u, 0, 0, 0);
+    d3d9_hold(&dd->rt[0], dd->backbuffer);   /* bound as CreateDevice binds them */
+    d3d9_hold(&dd->depth, dd->auto_depth);
+    GPTR bb = dd->backbuffer, ad = dd->auto_depth;
+
+    GPTR t = d3d9_create_texture_obj(dev, 0, 16, 16, 1, 0x15u, 0x1u, 0);
+    CHECK(t && IDirect3DTexture9_GetSurfaceLevel(t, 0, out) == 0, "render-target texture create failed");
+    GPTR s = *(uint32_t *)vt3_g2h(out);
+    CHECK(IDirect3DDevice9_SetRenderTarget(dev, 0, s) == 0, "SetRenderTarget failed");
+    CHECK(IDirect3DSurface9_Release(s) == 1, "a bound render target must keep the device's reference");
+    CHECK(IDirect3DTexture9_Release(t) == 1, "texture Release with its bound surface must leave 1 reference");
+    CHECK(IDirect3DDevice9_GetRenderTarget(dev, 0, out) == 0 && *(uint32_t *)vt3_g2h(out) == s &&
+          IDirect3DSurface9_Release(s) == 1, "GetRenderTarget must AddRef what it returns");
+    IDirect3DDevice9_SetRenderTarget(dev, 0, bb);
+    CHECK(IDirect3DTexture9_GetLevelCount(t) == 0, "unbinding the last reference must free the surface and texture");
+
+    GPTR ds = d3d9_create_surface_obj(dev, 16, 16, 0x4bu, 0x2u, 0, 0, 0);
+    CHECK(IDirect3DDevice9_SetDepthStencilSurface(dev, ds) == 0, "SetDepthStencilSurface failed");
+    CHECK(IDirect3DDevice9_GetDepthStencilSurface(dev, out) == 0 && *(uint32_t *)vt3_g2h(out) == ds &&
+          IDirect3DSurface9_Release(ds) == 2, "a bound depth-stencil must hold a reference; Get must AddRef");
+    CHECK(IDirect3DDevice9_Reset(dev, pp) == 0 && IDirect3DSurface9_Release(ds) == 0,
+          "Reset must drop the bound depth-stencil's reference");
+    CHECK(IDirect3DDevice9_GetDepthStencilSurface(dev, out) == 0 && *(uint32_t *)vt3_g2h(out) == ad,
+          "Reset must rebind the implicit depth-stencil");
+
+    CHECK(IDirect3DDevice9_GetBackBuffer(dev, 0, 0, 0, out) == 0, "GetBackBuffer failed");
+    CHECK(IDirect3DDevice9_Release(dev) == 0, "device Release");
+    CHECK(IDirect3DSurface9_GetDesc(bb, desc) == 0 && IDirect3DSurface9_GetDesc(ad, desc) == 0,
+          "the implicit surfaces the game still holds must outlive the device");
+    CHECK(IDirect3DSurface9_Release(bb) == 0 && IDirect3DSurface9_Release(ad) == 0,
+          "device Release must drop every reference it held on the implicit surfaces");
+    HeapFree(ph, 0, out);
+    HeapFree(ph, 0, pp);
+    HeapFree(ph, 0, desc);
+    printf("PASS d3d9 bound targets hold references\n");
+}
+
 /* ---- entry -------------------------------------------------------------- */
 
 int vt3_selftest_run(const char *adx_path)
@@ -966,6 +1012,7 @@ int vt3_selftest_run(const char *adx_path)
     test_d3dx_offcenter_rh();
     test_d3dx_misc();
     test_d3d9_lock_and_refs();
+    test_d3d9_target_refs();
 
     int adx_ran = 0;
     if (adx_path) adx_ran = test_adx(adx_path);

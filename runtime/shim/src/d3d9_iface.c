@@ -272,10 +272,11 @@ HRESULT WINAPI IDirect3D9_CreateDevice(GPTR This, UINT Adapter, UINT DeviceType,
     /* The back buffer and the auto depth-stencil are objects the game can fetch, so they exist from the start. */
     d->backbuffer = d3d9_create_surface_obj(dev, w, h, bbfmt, 0x1u, 0, 0, 1);
     if (!d->backbuffer) d->backbuffer = d3d9_new_stub(D3D9_KIND_SURFACE, dev);
-    d->rt[0] = d->backbuffer;
+    d3d9_hold(&d->rt[0], d->backbuffer);
     if (d->pp[9]) {          /* EnableAutoDepthStencil */
-        d->depth = d3d9_create_surface_obj(dev, w, h, d->pp[10], 0x2u, 0, 0, 0);
-        if (!d->depth) d->depth = d3d9_new_stub(D3D9_KIND_SURFACE, dev);
+        d->auto_depth = d3d9_create_surface_obj(dev, w, h, d->pp[10], 0x2u, 0, 0, 0);
+        if (!d->auto_depth) d->auto_depth = d3d9_new_stub(D3D9_KIND_SURFACE, dev);
+        d3d9_hold(&d->depth, d->auto_depth);
     }
     vt3s_store_u32(ppReturnedDeviceInterface, dev);
     VT3_INFO("CreateDevice: IDirect3DDevice9 at 0x%08x (%ux%u back buffer, %s)", dev, (unsigned)w,

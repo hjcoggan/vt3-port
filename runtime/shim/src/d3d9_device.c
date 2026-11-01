@@ -26,8 +26,21 @@ d3d9_device *d3d9_device_of(GPTR dev)
     return h ? (d3d9_device *)h->data : NULL;
 }
 
+/* Point a device slot at obj, taking a reference on it and dropping the one the old object held. */
+void d3d9_hold(uint32_t *slot, GPTR obj)
+{
+    GPTR old = *slot;
+    if (obj) d3d9_add_ref(obj);
+    *slot = obj;
+    if (old) d3d9_release(old);
+}
+
 void d3d9_device_free(d3d9_device *d)
 {
+    for (int i = 0; i < 4; i++) d3d9_hold(&d->rt[i], 0);
+    d3d9_hold(&d->depth, 0);
+    d3d9_hold(&d->backbuffer, 0);
+    d3d9_hold(&d->auto_depth, 0);
     free(d);   /* host allocation, made with calloc in CreateDevice */
 }
 
@@ -102,6 +115,10 @@ HRESULT WINAPI IDirect3DDevice9_Reset(GPTR This, GPTR pPresentationParameters)
     d3d9_device *d = DEV(This);
     if (!d || !d3d9_gmem(pPresentationParameters, PP_SIZE)) return D3DERR_CHK_INVALIDCALL;
     for (int i = 0; i < 14; i++) d->pp[i] = d3d9_rd(pPresentationParameters, (uint32_t)(4 * i));
+    /* D3D9 Reset rebinds the implicit targets and drops the references the old bindings held. */
+    for (int i = 1; i < 4; i++) d3d9_hold(&d->rt[i], 0);
+    d3d9_hold(&d->rt[0], d->backbuffer);
+    d3d9_hold(&d->depth, d->auto_depth);
     return S_OK;
 }
 
@@ -294,7 +311,7 @@ HRESULT WINAPI IDirect3DDevice9_SetRenderTarget(GPTR This, DWORD RenderTargetInd
 {
     d3d9_device *d = DEV(This);
     if (!d || RenderTargetIndex >= 4) return D3DERR_CHK_INVALIDCALL;
-    d->rt[RenderTargetIndex] = pRenderTarget;
+    d3d9_hold(&d->rt[RenderTargetIndex], pRenderTarget);
     if (RenderTargetIndex == 0 && pRenderTarget) {   /* D3D resets the viewport to the whole new target */
         d3d9_surface *ns = d3d9_surface_of(pRenderTarget);
         if (ns) {
@@ -331,7 +348,7 @@ HRESULT WINAPI IDirect3DDevice9_SetDepthStencilSurface(GPTR This, GPTR pNewZSten
 {
     d3d9_device *d = DEV(This);
     if (!d) return D3DERR_CHK_INVALIDCALL;
-    d->depth = pNewZStencil;
+    d3d9_hold(&d->depth, pNewZStencil);
     return S_OK;
 }
 
