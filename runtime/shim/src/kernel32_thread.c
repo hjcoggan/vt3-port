@@ -61,6 +61,9 @@ struct vt3s_sync {
     uint32_t owner;         /* mutex owner tid, 0 when free */
     uint32_t count;         /* mutex recursion */
     uint32_t gen;          /* PulseEvent generation: waiters that started earlier are released */
+    int pulsed;             /* auto-reset PulseEvent not yet taken: it releases one waiter */
+    int waiters;            /* threads inside wait_set holding a pointer to this */
+    int closed;             /* CloseHandle ran; the last waiter out frees it */
 };
 
 static pthread_mutex_t gil = PTHREAD_MUTEX_INITIALIZER;
@@ -108,26 +111,35 @@ volatile int vt3shim_safepoint_req;
 static int g_gil_wake_pending;
 
 /* A timed condition wait that expires re-takes the lock inside pthread_cond_timedwait, which no
- * count sees (the winmm timer fired 100-360 ms late this way). The earliest such deadline is kept
- * here (CLOCK_REALTIME ns, the condition's clock; 0 = none, approximate with several waiters), and
- * a 1 ms ticker marks one pending waiter once it passes while the lock is held. */
-static int64_t g_gil_timed_deadline;
+ * count sees (the winmm timer fired 100-360 ms late this way). Each timed waiter keeps its deadline
+ * in a slot here (CLOCK_REALTIME ns, the condition's clock; 0 = free), claimed and released under
+ * the lock, and a 1 ms ticker marks one pending waiter per slot once it passes while the lock is
+ * held. One slot each, so a waiter returning cannot erase another's later deadline. */
+#define GIL_TIMED_SLOTS 32
+static int64_t g_gil_timed_deadline[GIL_TIMED_SLOTS];
 
 static int64_t ts_ns(const struct timespec *t) { return (int64_t)t->tv_sec * 1000000000LL + t->tv_nsec; }
 
 static void *safepoint_ticker(void *arg)
 {
     (void)arg;
-    const struct timespec tick = { 0, 1000000L };
+    uint32_t sleep_ms = 1;
     for (;;) {
+        const struct timespec tick = { sleep_ms / 1000u, (long)(sleep_ms % 1000u) * 1000000L };
         nanosleep(&tick, NULL);
-        if (!vt3s_gil_holder() || vt3s_now_ms() - g_gil_since_ms < g_safepoint_ms) continue;
-        int64_t d = __atomic_load_n(&g_gil_timed_deadline, __ATOMIC_RELAXED);
-        if (d) {
-            struct timespec now;
-            clock_gettime(CLOCK_REALTIME, &now);
-            if (ts_ns(&now) >= d &&
-                __atomic_compare_exchange_n(&g_gil_timed_deadline, &d, 0, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+        sleep_ms = 1;
+        uint32_t age = vt3s_now_ms() - g_gil_since_ms;
+        if (!vt3s_gil_holder() || age < g_safepoint_ms) {
+            /* Nothing acts before a hold reaches g_safepoint_ms, so sleep out the rest of it. */
+            sleep_ms = age < g_safepoint_ms ? g_safepoint_ms - age : g_safepoint_ms;
+            continue;
+        }
+        struct timespec now;
+        clock_gettime(CLOCK_REALTIME, &now);
+        for (int i = 0; i < GIL_TIMED_SLOTS; i++) {
+            int64_t d = __atomic_load_n(&g_gil_timed_deadline[i], __ATOMIC_RELAXED);
+            if (d && ts_ns(&now) >= d &&
+                __atomic_compare_exchange_n(&g_gil_timed_deadline[i], &d, 0, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
                 __atomic_add_fetch(&g_gil_wake_pending, 1, __ATOMIC_RELAXED);
         }
         if (__atomic_load_n(&g_gil_waiters, __ATOMIC_RELAXED) + __atomic_load_n(&g_gil_wake_pending, __ATOMIC_RELAXED))
@@ -197,19 +209,21 @@ int vt3s_gil_cond_wait(const struct timespec *deadline)
 {
     int on = handoff_on();
     int64_t mine = 0;
+    int slot = -1;
     if (on) {
         __atomic_add_fetch(&g_gil_cond_waiters, 1, __ATOMIC_RELAXED);
         if (deadline) {
             mine = ts_ns(deadline);
-            int64_t d = __atomic_load_n(&g_gil_timed_deadline, __ATOMIC_RELAXED);
-            while ((d == 0 || mine < d) && !__atomic_compare_exchange_n(&g_gil_timed_deadline, &d, mine, 0,
-                                                                       __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
+            for (int i = 0; i < GIL_TIMED_SLOTS && slot < 0; i++)   /* claims are serialised by the lock */
+                if (__atomic_load_n(&g_gil_timed_deadline[i], __ATOMIC_RELAXED) == 0) slot = i;
+            if (slot >= 0) __atomic_store_n(&g_gil_timed_deadline[slot], mine, __ATOMIC_RELAXED);
         }
     }
     int rc = deadline ? pthread_cond_timedwait(&gcond, &gil, deadline) : pthread_cond_wait(&gcond, &gil);
     if (on) {
         __atomic_sub_fetch(&g_gil_cond_waiters, 1, __ATOMIC_RELAXED);
-        if (mine) __atomic_compare_exchange_n(&g_gil_timed_deadline, &mine, 0, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+        if (slot >= 0)   /* the ticker may already have counted and cleared it */
+            __atomic_compare_exchange_n(&g_gil_timed_deadline[slot], &mine, 0, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
         int p = __atomic_load_n(&g_gil_wake_pending, __ATOMIC_RELAXED);
         while (p > 0 && !__atomic_compare_exchange_n(&g_gil_wake_pending, &p, p - 1, 0,
                                                      __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
@@ -744,6 +758,7 @@ BOOL WINAPI PulseEvent(HANDLE h)
     struct vt3s_sync *s = vt3s_handle_get(h, VT3S_H_SYNC);
     if (!s || s->is_mutex) { vt3s_set_last_error(ERROR_INVALID_HANDLE); return FALSE; }
     s->gen++;
+    s->pulsed = 1;
     s->signaled = 0;
     vt3s_gil_broadcast();
     return TRUE;
@@ -775,7 +790,7 @@ static int obj_ready(const struct wobj *o)
 {
     if (o->thread) return o->thread->finished;
     if (o->sync->is_mutex) return o->sync->owner == 0 || o->sync->owner == o->tid;
-    return o->sync->signaled || o->sync->gen != o->gen;
+    return o->sync->signaled || (o->sync->gen != o->gen && (o->sync->manual || o->sync->pulsed));
 }
 
 /* Take the object once it is ready: an auto-reset event clears, a mutex is acquired. */
@@ -786,7 +801,8 @@ static void obj_take(const struct wobj *o)
         o->sync->owner = o->tid;
         o->sync->count++;
     } else if (!o->sync->manual) {
-        o->sync->signaled = 0;
+        if (o->sync->signaled) o->sync->signaled = 0;
+        else o->sync->pulsed = 0;   /* an auto-reset pulse releases only the first waiter */
     }
 }
 
@@ -830,13 +846,31 @@ static int collect(struct wset *w, const uint32_t *hs, uint32_t n)
 /* Shared body of WaitForSingleObject and WaitForMultipleObjects. */
 static DWORD wait_set(struct wset *w, DWORD ms)
 {
-    if (!wait_until(set_ready, w, ms)) return 0x102u;           /* WAIT_TIMEOUT */
-    if (w->wait_all) {
-        for (uint32_t i = 0; i < w->n; i++) obj_take(&w->o[i]);
-        return 0u;
+    for (uint32_t i = 0; i < w->n; i++)   /* CloseHandle during the wait must not free these */
+        if (w->o[i].sync) w->o[i].sync->waiters++;
+    DWORD r = 0x102u;                                          /* WAIT_TIMEOUT */
+    if (wait_until(set_ready, w, ms)) {
+        if (w->wait_all) {
+            for (uint32_t i = 0; i < w->n; i++) obj_take(&w->o[i]);
+            r = 0u;
+        } else {
+            obj_take(&w->o[w->hit]);
+            r = w->hit;
+        }
     }
-    obj_take(&w->o[w->hit]);
-    return w->hit;
+    for (uint32_t i = 0; i < w->n; i++) {
+        struct vt3s_sync *s = w->o[i].sync;
+        if (s && --s->waiters == 0 && s->closed) free(s);
+    }
+    return r;
+}
+
+/* CloseHandle on an event or mutex: free it now, or leave it to the last waiter. Caller holds gil. */
+void vt3s_sync_close(struct vt3s_sync *s)
+{
+    if (!s) return;
+    if (s->waiters) s->closed = 1;
+    else free(s);
 }
 
 DWORD WINAPI WaitForSingleObject(HANDLE h, DWORD ms)

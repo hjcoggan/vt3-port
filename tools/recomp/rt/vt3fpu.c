@@ -173,8 +173,8 @@ void vt_fst32_rc(uint32_t a, double x, uint32_t cw)
 
 void vt_fst64_rc(uint32_t a, double x, uint32_t cw)
 {
-    double d = round_by_rc(x, (cw >> 10) & 3u);
-    memcpy(vt_mem + a, &d, 8);
+    (void)cw;   /* RC only rounds 80-bit precision down to 64; x is already a double, so it is exact */
+    memcpy(vt_mem + a, &x, 8);
 }
 
 double vt_frndint(double a, uint32_t cw)

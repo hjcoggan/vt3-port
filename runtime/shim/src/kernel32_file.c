@@ -684,7 +684,7 @@ DWORD WINAPI GetFileAttributesA(LPCSTR name)
 BOOL WINAPI CloseHandle(HANDLE h)
 {
     if (vt3s_handle_get(h, VT3S_H_SYNC)) {
-        free(vt3s_handle_take(h, VT3S_H_SYNC));
+        vt3s_sync_close(vt3s_handle_take(h, VT3S_H_SYNC));
         return TRUE;
     }
     if (vt3s_handle_get(h, VT3S_H_THREAD)) {

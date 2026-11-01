@@ -143,7 +143,7 @@ def main():
             # vt3.c is about 100 MB and slow to compile. Reuse its object unless the source or
             # anything it was compiled against has changed.
             inputs = [src] + headers
-            if os.path.exists(obj) and min(map(os.path.getmtime, inputs)) >= os.path.getmtime(obj):
+            if os.path.exists(obj) and max(map(os.path.getmtime, inputs)) <= os.path.getmtime(obj):
                 objs.append(obj)
                 continue
         level = ['-O1'] + flags[1:] if src == translated else flags   # same level as the first build; -O2 measured no gain

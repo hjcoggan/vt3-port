@@ -20,6 +20,7 @@
 #include "vt3/vt3_input.h"
 #include "vt3/vt3_renderer.h"
 #include "vt3shim/shim.h"
+#include "win32/d3dx9.h"
 #include "win32/dinput.h"
 #include "win32/dsound.h"
 #include "win32/kernel32.h"
@@ -758,6 +759,33 @@ static void test_dinput8_xbox360_controls(void)
     printf("PASS dinput8 xbox360 controls\n");
 }
 
+/* ---- D3DX matrices ------------------------------------------------------ */
+
+static DWORD fbits(float f)
+{
+    DWORD d;
+    memcpy(&d, &f, 4);
+    return d;
+}
+
+static void test_d3dx_offcenter_rh(void)
+{
+    /* MS docs, D3DXMatrixPerspectiveOffCenterRH with l=-1 r=3 b=-2 t=2 zn=1 zf=11: _11 = 2zn/(r-l) = 0.5,
+     * _22 = 2zn/(t-b) = 0.5, _31 = (l+r)/(r-l) = 0.5, _32 = (t+b)/(t-b) = 0, _33 = zf/(zn-zf) = -1.1,
+     * _34 = -1, _43 = zn*zf/(zn-zf) = -1.1. */
+    static const float want[16] = { 0.5f, 0, 0, 0, 0, 0.5f, 0, 0, 0.5f, 0, -1.1f, -1, 0, 0, -1.1f, 0 };
+    HANDLE ph = GetProcessHeap();
+    GPTR out = HeapAlloc(ph, 0, 64);
+    CHECK(D3DXMatrixPerspectiveOffCenterRH(out, fbits(-1), fbits(3), fbits(-2), fbits(2), fbits(1), fbits(11)) == out,
+          "D3DXMatrixPerspectiveOffCenterRH failed");
+    float m[16];
+    memcpy(m, vt3_g2h(out), sizeof m);
+    for (int i = 0; i < 16; i++)
+        CHECK(fabsf(m[i] - want[i]) < 1e-5f, "PerspectiveOffCenterRH m[%d] = %g, want %g", i, m[i], want[i]);
+    HeapFree(ph, 0, out);
+    printf("PASS d3dx perspective off-centre RH\n");
+}
+
 /* ---- entry -------------------------------------------------------------- */
 
 int vt3_selftest_run(const char *adx_path)
@@ -776,6 +804,7 @@ int vt3_selftest_run(const char *adx_path)
     test_heap();
     test_file_mapping();
     test_dinput8_xbox360_controls();
+    test_d3dx_offcenter_rh();
 
     int adx_ran = 0;
     if (adx_path) adx_ran = test_adx(adx_path);

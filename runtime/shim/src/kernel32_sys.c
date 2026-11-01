@@ -20,8 +20,6 @@
 #include <unistd.h>
 
 #define VT3_PAGE 4096u
-#define VT3_VM_BASE 0x30000000u   /* VirtualAlloc hands out pages from here upward */
-#define VT3_VM_LIMIT 0x3F000000u
 #define VT3_WAIT_OBJECT_0 0u
 
 static uint32_t vm_next = VT3_VM_BASE;

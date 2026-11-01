@@ -35,9 +35,6 @@ typedef struct vt3s_heap {
     int is_process_heap;
 } vt3s_heap;
 
-/* Bump allocator for regions handed out to HeapCreate. */
-static vt3_gaddr g_carve_next;
-static vt3_gaddr g_carve_end;
 static HANDLE g_process_heap;
 
 static uint32_t align16(uint64_t n)
@@ -127,8 +124,10 @@ void vt3s_heap_module_init(void)
     vt3s_heap *ph = heap_new(base, process_size, 1);
     g_process_heap = vt3s_handle_new(VT3S_H_HEAP, ph);
 
-    g_carve_next = base + process_size;
-    g_carve_end = (vt3_gaddr)vt3_guest_size();
+    /* HeapCreate, VirtualAlloc and thread stacks share the VM range, which must clear the process heap */
+    if (base + process_size > VT3_VM_BASE || vt3_guest_size() < VT3_VM_LIMIT)
+        VT3_ERROR("heap: process heap [0x%08x, 0x%08x) or arena end 0x%zx overlaps the VM range [0x%08x, 0x%08x)",
+                  base, base + process_size, vt3_guest_size(), VT3_VM_BASE, VT3_VM_LIMIT);
     VT3_INFO("heap: process heap %u MiB at 0x%08x", process_size >> 20, base);
 }
 
@@ -157,16 +156,12 @@ HANDLE WINAPI HeapCreate(DWORD options, SIZE_T initial_size, SIZE_T maximum_size
     (void)maximum_size;
     uint64_t want = initial_size ? initial_size : HEAP_DEFAULT_BYTES;
     uint64_t size = (want + HEAP_PAGE - 1) & ~(uint64_t)(HEAP_PAGE - 1);
-    if (size == 0 || (uint64_t)g_carve_next + size > g_carve_end) {
-        vt3s_set_last_error(ERROR_NOT_ENOUGH_MEMORY);
-        return 0;
-    }
-    vt3s_heap *h = heap_new(g_carve_next, (uint32_t)size, 0);
+    vt3_gaddr region = size <= VT3_VM_LIMIT ? vt3s_vm_alloc((uint32_t)size) : 0;
+    vt3s_heap *h = region ? heap_new(region, (uint32_t)size, 0) : NULL;
     if (!h) {
         vt3s_set_last_error(ERROR_NOT_ENOUGH_MEMORY);
         return 0;
     }
-    g_carve_next += (vt3_gaddr)size;
     HANDLE hh = vt3s_handle_new(VT3S_H_HEAP, h);
     if (!hh) {
         free(h->head);
