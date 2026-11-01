@@ -416,11 +416,13 @@ static void gl_tex_upload(vt3_tex t, const void *pixels, int pitch, int w, int h
         p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
     }
     p_glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    /* Generate the mip chain (the game loads one level; a single-mip fine grid aliases at distance). */
-    p_glGenerateMipmap(GL_TEXTURE_2D);
+    /* Generate the mip chain (the game loads one level; a single-mip fine grid aliases at distance).
+     * MAX_LEVEL is raised first: glGenerateMipmap only fills levels up to it, and levels past it left
+     * undefined make the texture incomplete, which samples as zero (black). */
     int levels = 1, mx = w > h ? w : h;
     while (mx > 1) { mx >>= 1; levels++; }
     p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, levels - 1);
+    p_glGenerateMipmap(GL_TEXTURE_2D);
 }
 
 static void gl_tex_destroy(vt3_tex t)
