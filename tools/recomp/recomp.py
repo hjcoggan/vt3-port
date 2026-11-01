@@ -1058,7 +1058,7 @@ class FnGen:
 
     def branch(self, t, src=None):
         if t != self.entry and t in self.an.E:
-            return f"{{ VT_SPILL(); {fname(t)}(c); return; }}"
+            return f"{{ VT_SPILL_FLAGS(); VT_SPILL(); {fname(t)}(c); return; }}"
         if src is not None and t <= src:
             # A loop's back edge: a safepoint where a long guest loop can lend out the guest lock.
             return f"{{ VT_SAFEPOINT(); goto L_{t:x}; }}"
@@ -1090,7 +1090,7 @@ class FnGen:
                 cases = "".join(f" case 0x{t:x}u: {self.branch(t, ins.addr)}" for t in tb.targets)
                 return [f"{{ uint32_t t = {val(op, 4)}; switch (t) {{{cases} "
                         f"default: vt_die_at(0x{ins.addr:x}u, t); }} }}"]
-            return [f"{{ uint32_t t = {val(op, 4)}; VT_SPILL(); vt_icall(c, t); return; }}"]
+            return [f"{{ uint32_t t = {val(op, 4)}; VT_SPILL_FLAGS(); VT_SPILL(); vt_icall(c, t); return; }}"]
         if is_jcc(mn):
             return [f"if ({CC[mn[1:]]}) {self.branch(ins.ops[0].imm & M32, ins.addr)}"]
         if mn in LOOPS:
@@ -2157,7 +2157,7 @@ def gen_function(an, entry, hard):
             elif nxt in seen:
                 out.append(f"goto L_{nxt:x};")
             elif nxt in an.E:
-                out.append(f"{{ VT_SPILL(); {fname(nxt)}(c); return; }}")
+                out.append(f"{{ VT_SPILL_FLAGS(); VT_SPILL(); {fname(nxt)}(c); return; }}")
             else:
                 raise TranslateError(f"internal: flow to {nxt:#x} from {a:#x} not covered")
         elif mn == 'call':

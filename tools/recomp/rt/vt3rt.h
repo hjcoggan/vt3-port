@@ -35,6 +35,7 @@ typedef struct vt3_cpu {
     vt_xmm xmm[8];
     uint64_t mm[8];       /* MMX registers. Not aliased to the x87 stack. */
     uint32_t mxcsr;       /* SSE control/status word, stored and read back only (recomp.py ldmxcsr) */
+    uint32_t eflags;      /* CF ZF SF OF PF AF in bits 0-5, handed over by a jump or fallthrough into a function */
 } vt3_cpu;
 
 typedef void (*vt3_fnptr)(vt3_cpu *c);
@@ -204,9 +205,15 @@ void vt_stx(uint32_t a, vt_xmm v);
 #define VT_LOAD() \
     uint32_t eax = c->eax, ecx = c->ecx, edx = c->edx, ebx = c->ebx; \
     uint32_t esp = c->esp, ebp = c->ebp, esi = c->esi, edi = c->edi
-/* Declare the flags and the direction flag. Eager flags, dead code removed by cc. */
+/* Declare the flags and the direction flag. Eager flags, dead code removed by cc (the c->eflags
+ * load too, unless a flag is read before it is written). A jump or fallthrough into another
+ * function is a tail call, so it hands its flags over in c->eflags (VT_SPILL_FLAGS); after a
+ * call they are stale, which is fine as x86 leaves them undefined there. DF starts clear, as
+ * the ABI has it at every function entry. */
 #define VT_FLAGS() \
-    uint32_t cf = 0, zf = 0, sf = 0, of = 0, pf = 0, af = 0, df = 0
+    uint32_t vfl = c->eflags, cf = vfl & 1u, zf = (vfl >> 1) & 1u, sf = (vfl >> 2) & 1u, \
+             of = (vfl >> 3) & 1u, pf = (vfl >> 4) & 1u, af = (vfl >> 5) & 1u, df = 0
+#define VT_SPILL_FLAGS() (c->eflags = !!cf | !!zf << 1 | !!sf << 2 | !!of << 3 | !!pf << 4 | !!af << 5)
 
 #define VT_SPILL() do { \
     c->eax = eax; c->ecx = ecx; c->edx = edx; c->ebx = ebx; \
