@@ -113,9 +113,9 @@ public class Installer extends Activity {
                 if (rc == -1) throw new IOException("That file is not a disc image (.iso).");
                 if (rc == -2) throw new IOException("No Virtua Tennis 3 PC install files on that disc image.");
                 if (rc < 0) throw new IOException("Unpacking failed. Check there is about 4.5 GB free.");
-                new FileOutputStream(new File(root, "install.ok")).close();
+                try (FileOutputStream o = new FileOutputStream(new File(root, "install.ok"))) { o.getFD().sync(); }
                 ui.post(this::launch);
-            } catch (Exception e) {
+            } catch (Throwable e) { /* an Error (OutOfMemoryError) must not kill the thread silently */
                 ui.post(() -> {
                     status.setText("Setup failed: " + e.getMessage());
                     isoButton.setEnabled(true);
@@ -145,15 +145,19 @@ public class Installer extends Activity {
         if (img == null || !IMAGE_SHA256.equals(hex(MessageDigest.getInstance("SHA-256").digest(img))))
             throw new IOException("That VT3.exe is not the v1.0.1 build this port needs.");
         File tmp = new File(root, "image.bin.tmp");
-        try (OutputStream o = new FileOutputStream(tmp)) { o.write(img); }
+        try (FileOutputStream o = new FileOutputStream(tmp)) { o.write(img); o.getFD().sync(); }
         if (!tmp.renameTo(new File(root, "image.bin"))) throw new IOException("Could not write image.bin.");
     }
 
+    /* Through a .tmp and a rename, so a full disk never leaves a truncated dst. */
     void copyAsset(String name, File dst) throws IOException {
-        try (InputStream in = getAssets().open(name); OutputStream o = new FileOutputStream(dst)) {
+        File tmp = new File(dst.getPath() + ".tmp");
+        try (InputStream in = getAssets().open(name); FileOutputStream o = new FileOutputStream(tmp)) {
             byte[] b = new byte[1 << 16];
             for (int n; (n = in.read(b)) > 0; ) o.write(b, 0, n);
+            o.getFD().sync();
         }
+        if (!tmp.renameTo(dst)) throw new IOException("Could not write " + dst.getName());
     }
 
     void launch() {
@@ -174,10 +178,14 @@ public class Installer extends Activity {
 
     void say(String s) { ui.post(() -> status.setText(s)); }
 
+    /* Capped: VT3.exe is a few MB, and picking the 4.5 GB disc image here would run out of memory. */
     static byte[] readAll(InputStream in) throws IOException {
         ByteArrayOutputStream o = new ByteArrayOutputStream();
         byte[] b = new byte[1 << 16];
-        for (int n; (n = in.read(b)) > 0; ) o.write(b, 0, n);
+        for (int n; (n = in.read(b)) > 0; ) {
+            if (o.size() + n > 64 << 20) { in.close(); throw new IOException("That file is too big to be VT3.exe (over 64 MB)."); }
+            o.write(b, 0, n);
+        }
         in.close();
         return o.toByteArray();
     }

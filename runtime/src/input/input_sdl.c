@@ -78,6 +78,9 @@ static void pads_changed(void)
 
 static void open_pad(SDL_JoystickID id)
 {
+    /* SDL also sends GAMEPAD_ADDED for pads already opened at startup: one slot per pad. */
+    for (int i = 0; i < VT3_MAX_PADS; i++)
+        if (g_pads[i] && SDL_GetGamepadID(g_pads[i]) == id) return;
     for (int i = 0; i < VT3_MAX_PADS; i++) {
         if (g_pads[i]) continue;
         g_pads[i] = SDL_OpenGamepad(id);

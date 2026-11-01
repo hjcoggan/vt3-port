@@ -82,4 +82,12 @@ void android_main(struct android_app *app)
     VT3_INFO("android: running the game from %s", VT3_ANDROID_ROOT);
     int rc = vt3_run(&vt3_mod, VT3_ANDROID_ROOT "/image.bin");
     VT3_INFO("android: game returned %d", rc);
+    /* Close the activity and end the process, so a relaunch never runs over stale statics. */
+    ANativeActivity_finish(app->activity);
+    while (!app->destroyRequested) {
+        int events = 0;
+        struct android_poll_source *source = NULL;
+        if (ALooper_pollOnce(-1, NULL, &events, (void **)&source) >= 0 && source) source->process(app, source);
+    }
+    exit(rc);
 }

@@ -37,6 +37,11 @@ uint64_t vt3_audio_played_bytes(const vt3_audio *a);
 void     vt3_audio_set_playing(vt3_audio *a, int playing);
 uint32_t vt3_audio_underruns(const vt3_audio *a);
 
+/* Android only, called from the platform pump: pause/resume the open output while the app has no
+ * window (the ring is kept), and reopen a stream the device dropped (a route change). */
+void     vt3_audio_pause(int paused);
+void     vt3_audio_recover(void);
+
 /* Writes up to max_frames frames of a sine wave; *phase carries across calls. */
 size_t   vt3_audio_fill_sine(vt3_audio *a, double freq_hz, double *phase,
                              size_t max_frames, int16_t amplitude);

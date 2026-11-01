@@ -21,7 +21,10 @@ struct vt3_audio {
     _Atomic int playing;
     _Atomic uint32_t underruns;
     _Atomic uint64_t played;
+    _Atomic int lost;            /* set by the error callback: the device dropped the stream */
 };
+
+static vt3_audio *g_open;        /* the one open output, for the platform pump's pause/recover */
 
 static aaudio_data_callback_result_t data_callback(AAudioStream *stream, void *user, void *audio,
                                                    int32_t num_frames)
@@ -41,21 +44,21 @@ static aaudio_data_callback_result_t data_callback(AAudioStream *stream, void *u
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
 
-int vt3_audio_open(vt3_audio **out, vt3_audio_format fmt, size_t buffer_bytes)
+/* Runs on an AAudio thread, where the stream must not be closed: the platform pump reopens it. */
+static void error_callback(AAudioStream *stream, void *user, aaudio_result_t error)
 {
-    *out = NULL;
-    vt3_audio *a = calloc(1, sizeof *a);
-    if (!a) return -1;
-    a->fmt = fmt;
-    a->frame_bytes = (size_t)fmt.channels * sizeof(int16_t);
-    a->rb = vt3_rb_create(buffer_bytes);
-    if (!a->rb) { free(a); return -1; }
+    (void)stream;
+    (void)error;
+    atomic_store(&((vt3_audio *)user)->lost, 1);
+}
 
+/* Opens and starts a->stream on the default device. Returns 0 on success. */
+static int open_stream(vt3_audio *a)
+{
+    vt3_audio_format fmt = a->fmt;
     AAudioStreamBuilder *b = NULL;
     if (AAudio_createStreamBuilder(&b) != AAUDIO_OK) {
         VT3_ERROR("audio: AAudio_createStreamBuilder failed");
-        vt3_rb_destroy(a->rb);
-        free(a);
         return -1;
     }
     AAudioStreamBuilder_setDirection(b, AAUDIO_DIRECTION_OUTPUT);
@@ -65,31 +68,71 @@ int vt3_audio_open(vt3_audio **out, vt3_audio_format fmt, size_t buffer_bytes)
     AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
     AAudioStreamBuilder_setSharingMode(b, AAUDIO_SHARING_MODE_SHARED);
     AAudioStreamBuilder_setDataCallback(b, data_callback, a);
+    AAudioStreamBuilder_setErrorCallback(b, error_callback, a);
+    a->stream = NULL;
     aaudio_result_t rc = AAudioStreamBuilder_openStream(b, &a->stream);
     AAudioStreamBuilder_delete(b);
     if (rc != AAUDIO_OK || !a->stream) {
         VT3_ERROR("audio: AAudio open failed: %s", AAudio_convertResultToText(rc));
-        vt3_rb_destroy(a->rb);
-        free(a);
+        a->stream = NULL;
         return -1;
     }
     rc = AAudioStream_requestStart(a->stream);
     if (rc != AAUDIO_OK) {
         VT3_ERROR("audio: AAudio start failed: %s", AAudio_convertResultToText(rc));
         AAudioStream_close(a->stream);
+        a->stream = NULL;
+        return -1;
+    }
+    VT3_INFO("audio: %u Hz, %d ch, S16 (AAudio), ring %zu bytes, device burst %d frames",
+             fmt.sample_rate, fmt.channels, vt3_rb_capacity(a->rb), AAudioStream_getFramesPerBurst(a->stream));
+    return 0;
+}
+
+int vt3_audio_open(vt3_audio **out, vt3_audio_format fmt, size_t buffer_bytes)
+{
+    *out = NULL;
+    vt3_audio *a = calloc(1, sizeof *a);
+    if (!a) return -1;
+    a->fmt = fmt;
+    a->frame_bytes = (size_t)fmt.channels * sizeof(int16_t);
+    a->rb = vt3_rb_create(buffer_bytes);
+    if (!a->rb) { free(a); return -1; }
+    if (open_stream(a) != 0) {
         vt3_rb_destroy(a->rb);
         free(a);
         return -1;
     }
-    VT3_INFO("audio: %u Hz, %d ch, S16 (AAudio), ring %zu bytes, device burst %d frames",
-             fmt.sample_rate, fmt.channels, buffer_bytes, AAudioStream_getFramesPerBurst(a->stream));
+    g_open = a;
     *out = a;
     return 0;
+}
+
+void vt3_audio_pause(int paused)
+{
+    if (!g_open || !g_open->stream) return;
+    if (paused) AAudioStream_requestPause(g_open->stream);
+    else AAudioStream_requestStart(g_open->stream);
+}
+
+void vt3_audio_recover(void)
+{
+    vt3_audio *a = g_open;
+    if (!a || !atomic_exchange(&a->lost, 0)) return;
+    VT3_WARN("audio: AAudio stream disconnected; reopening");
+    if (a->stream) {
+        AAudioStream_requestStop(a->stream);
+        AAudioStream_close(a->stream);
+    }
+    /* The ring is kept, so the mixer carries on.
+     * shortcut: a failed reopen stays silent for the session; retry here if that shows up. */
+    open_stream(a);
 }
 
 void vt3_audio_close(vt3_audio *a)
 {
     if (!a) return;
+    if (a == g_open) g_open = NULL;
     if (a->stream) {
         AAudioStream_requestStop(a->stream);
         AAudioStream_close(a->stream);

@@ -47,7 +47,9 @@ static int iso_read_root(Iso *iso, int fd)
     for (uint32_t o = 0; o < len && iso->n < MAXF;) {
         uint8_t rl = dir[o];
         if (!rl) { o = (o / 2048 + 1) * 2048; continue; } /* records never straddle a sector */
+        if (rl < 34 || o + rl > len) break; /* a corrupt record: stop before reading past dir */
         uint8_t nl = dir[o + 32];
+        if (33u + nl > rl) break;
         if (!(dir[o + 25] & 2) && nl && nl < sizeof iso->f[0].name) {
             IsoFile *f = &iso->f[iso->n++];
             memcpy(f->name, dir + o + 33, nl);
@@ -200,6 +202,7 @@ int vt3_extract_iso(int fd, const char *out)
         }
     }
     unshield_close(u);
+    if (rc >= 0) sync(); /* the tree must be on disk before Installer.java writes install.ok */
     return rc;
 }
 

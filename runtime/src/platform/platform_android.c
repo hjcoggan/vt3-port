@@ -4,6 +4,7 @@
  * from the glue's looper, so everything runs on the game thread. The renderer presents to the
  * window through vt3_platform_native_window; there is no GL context.
  */
+#include "vt3/vt3_audio.h"
 #include "vt3/vt3_log.h"
 #include "vt3/vt3_platform.h"
 
@@ -134,6 +135,20 @@ int vt3_platform_pump_events(void)
         if (source) source->process(g_app, source);
         if (g_app->destroyRequested) g_quit = 1;
     }
+    /* Backgrounded (no window): block here with the sound paused, or the game loop spins a core.
+     * This thread runs the glue's looper, so the window comes back through this same wait. The
+     * glue's own window is tested, not g_window, which a headless shutdown also clears. */
+    if (!g_app->window && !g_quit) {
+        vt3_audio_pause(1);
+        while (!g_app->window && !g_quit) {
+            int events = 0;
+            struct android_poll_source *source = NULL;
+            if (ALooper_pollOnce(-1, NULL, &events, (void **)&source) >= 0 && source) source->process(g_app, source);
+            if (g_app->destroyRequested) g_quit = 1;
+        }
+        vt3_audio_pause(0);
+    }
+    vt3_audio_recover();
     return !g_quit;
 }
 

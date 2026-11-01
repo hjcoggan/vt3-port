@@ -157,12 +157,21 @@ static float axis(const AInputEvent *e, int32_t which)
 static void motion_event(const AInputEvent *e)
 {
     note_pad();
-    /* Hat: the d-pad on pads that report it as an axis. */
-    float hx = axis(e, AMOTION_EVENT_AXIS_HAT_X), hy = axis(e, AMOTION_EVENT_AXIS_HAT_Y);
-    set_pad(VT3_BTN_LEFT, hx < -0.5f);
-    set_pad(VT3_BTN_RIGHT, hx > 0.5f);
-    set_pad(VT3_BTN_UP, hy < -0.5f);
-    set_pad(VT3_BTN_DOWN, hy > 0.5f);
+    /* Hat: the d-pad on pads that report it as an axis. Only on a change, so stick noise does not
+     * release a d-pad held through key events. */
+    static int last_hx, last_hy;
+    float fx = axis(e, AMOTION_EVENT_AXIS_HAT_X), fy = axis(e, AMOTION_EVENT_AXIS_HAT_Y);
+    int hx = fx < -0.5f ? -1 : fx > 0.5f, hy = fy < -0.5f ? -1 : fy > 0.5f;
+    if (hx != last_hx) {
+        set_pad(VT3_BTN_LEFT, hx < 0);
+        set_pad(VT3_BTN_RIGHT, hx > 0);
+        last_hx = hx;
+    }
+    if (hy != last_hy) {
+        set_pad(VT3_BTN_UP, hy < 0);
+        set_pad(VT3_BTN_DOWN, hy > 0);
+        last_hy = hy;
+    }
     vt3_input_set_axis(VT3_AXIS_LX, axis(e, AMOTION_EVENT_AXIS_X));
     vt3_input_set_axis(VT3_AXIS_LY, axis(e, AMOTION_EVENT_AXIS_Y));
     vt3_input_set_axis(VT3_AXIS_RX, axis(e, AMOTION_EVENT_AXIS_Z));
