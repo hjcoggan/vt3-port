@@ -249,7 +249,7 @@ double vt_fdbl1(double a, uint32_t cw, int op)
     case VT_FD_SIN: return sin(a);
     case VT_FD_COS: return cos(a);
     case VT_FD_TAN: return tan(a);
-    default: return exp2(a) - 1.0;               /* F2XM1 */
+    default: return expm1(a * 0.69314718055994530942);  /* F2XM1: 2^a - 1 without cancellation near 0 */
     }
 }
 
