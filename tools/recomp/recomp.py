@@ -1103,7 +1103,7 @@ class FnGen:
 
 def plain(ins):
     mn, ops = ins.mn, ins.ops
-    if mn in ('nop', 'fnop', 'fwait', 'wait', 'emms', 'prefetchnta', 'prefetcht0', 'prefetcht1'):
+    if mn in ('nop', 'fnop', 'fwait', 'wait', 'emms', 'prefetchnta', 'prefetcht0', 'prefetcht1', 'pause'):
         return []
     special = simd_or_misc(ins)
     if special is not None:
