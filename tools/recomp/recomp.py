@@ -1684,7 +1684,8 @@ def _vstore(op, nb, var):
 def simd_or_misc(ins):
     """Statements for the MMX/SSE2 integer forms and single-instruction gaps, or None."""
     mn, ops = ins.mn, ins.ops
-    if mn in PKOPS:
+    # XMM forms with an inline path in sse()/_packed() skip the out-of-line lane helper.
+    if mn in PKOPS and (mn not in SSE_MN and mn not in PACKED_MN or any(_vkind(o) and _vkind(o)[0] == 'mm' for o in ops)):
         op, bits = PKOPS[mn]
         d, s = ops
         nb = _width(d)
@@ -1830,7 +1831,8 @@ PACKED_ARITH = {
     'paddd': ('u32', 4, '+'), 'psubd': ('u32', 4, '-'), 'paddq': ('u64', 2, '+'), 'psubq': ('u64', 2, '-'),
     'paddw': ('u16', 8, '+'), 'psubw': ('u16', 8, '-'), 'paddb': ('b', 16, '+'), 'psubb': ('b', 16, '-'),
 }
-PACKED_MN = set(PACKED_ARITH) | {
+PACKED_CMPEQ = {'pcmpeqb': ('b', 16, '0xFFu'), 'pcmpeqw': ('u16', 8, '0xFFFFu'), 'pcmpeqd': ('u32', 4, '0xFFFFFFFFu')}
+PACKED_MN = set(PACKED_ARITH) | set(PACKED_CMPEQ) | {
     'unpcklps', 'unpckhps', 'unpcklpd', 'unpckhpd', 'punpckldq', 'punpckhdq', 'movlhps', 'movhlps',
     'shufps', 'shufpd', 'pshufd', 'cvttps2dq', 'cvtdq2ps', 'movhps', 'movlps', 'movhpd', 'movlpd',
     'cvtdq2pd', 'cvttpd2dq', 'cvtps2pd', 'cvtpd2ps',
@@ -1845,6 +1847,12 @@ def _packed(ins):
         di = _xmm(d)
         return [blk(f"vt_xmm s = {_x128src(s)};",
                     f"for (int i = 0; i < {n}; i++) c->xmm[{di}].{t}[i] = c->xmm[{di}].{t}[i] {oc} s.{t}[i];")]
+    if mn in PACKED_CMPEQ:
+        t, n, ones = PACKED_CMPEQ[mn]
+        d, s = ops
+        di = _xmm(d)
+        return [blk(f"vt_xmm s = {_x128src(s)};",
+                    f"for (int i = 0; i < {n}; i++) c->xmm[{di}].{t}[i] = c->xmm[{di}].{t}[i] == s.{t}[i] ? {ones} : 0u;")]
     if mn in ('unpcklps', 'punpckldq', 'unpckhps', 'punpckhdq'):
         d, s = ops
         di = _xmm(d)
