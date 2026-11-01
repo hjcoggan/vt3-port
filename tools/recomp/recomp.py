@@ -1317,6 +1317,7 @@ def shld(ins):
     if size_of(d) != 4:
         raise Unsupported("shld 16-bit")
     cnt = f"(({val(c, 1)}) & 0x1Fu)"
+    # OF is the sign change, which Intel defines for count 1 only; like shift(), other counts use the same formula.
     if ins.mn == 'shld':
         core = ["uint64_t t = (((uint64_t)a << 32) | b) << cnt;", "r = (uint32_t)(t >> 32);",
                 "cf = (a >> (32u - cnt)) & 1u;"]
@@ -1324,7 +1325,7 @@ def shld(ins):
         core = ["uint64_t t = (((uint64_t)b << 32) | a) >> cnt;", "r = (uint32_t)t;",
                 "cf = (a >> (cnt - 1u)) & 1u;"]
     return blk(f"uint32_t a = {val(d, 4)};", f"uint32_t b = {val(s, 4)};", f"uint32_t cnt = {cnt};",
-               "uint32_t r = a;", "if (cnt != 0u) {", *core, "of = 0u;", *zsp(32), "}",
+               "uint32_t r = a;", "if (cnt != 0u) {", *core, "of = ((r ^ a) >> 31) & 1u;", *zsp(32), "}",
                store(d, 4, 'r'))
 
 
