@@ -171,6 +171,10 @@ HRESULT WINAPI D3DXCreateTexture(GPTR device, UINT width, UINT height, UINT mipl
         vt3s_store_u32(texture, 0);
         return D3DERR_CHK_INVALIDCALL;
     }
+    /* D3DX: 0 or D3DX_DEFAULT takes the other dimension, or 256 when both are; levels clamp in create */
+    int wdef = width == 0 || width == 0xFFFFFFFFu, hdef = height == 0 || height == 0xFFFFFFFFu;
+    if (wdef) width = hdef ? 256u : height;
+    if (hdef) height = wdef ? 256u : width;
     GPTR t = d3d9_create_texture_obj(device, 0, width, height, miplevels, format, usage, pool);
     if (!t) t = d3d9_new_stub(D3D9_KIND_TEXTURE, device);
     if (!t) return E_OUTOFMEMORY_D3D9;

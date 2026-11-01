@@ -174,7 +174,10 @@ static void reg_base(ctx *c, int type, uint32_t idx, int has_rel, uint32_t rel_t
         if (idx >= VT3_SM2_MAX_CONST) { fail(c, "constant c%u out of range", idx); return; }
         if (!has_rel && (int)idx + 1 > c->out->const_max) c->out->const_max = (int)idx + 1;
         if (has_rel) {
-            snprintf(out, cap, "%sc[%u + %s]", vs ? "vs" : "ps", idx, rel);
+            /* D3D9 reads 0 for an out-of-range relative constant; unchecked GLSL indexing is UB. */
+            const char *cb = vs ? "vs" : "ps";
+            snprintf(out, cap, "(uint(%u + %s) < %uu ? %sc[%u + %s] : vec4(0.0))", idx, rel,
+                     (unsigned)VT3_SM2_MAX_CONST, cb, idx, rel);
             if (c->out->const_max < VT3_SM2_MAX_CONST) c->out->const_max = VT3_SM2_MAX_CONST;
         } else if (c->out->cdef_set[idx]) {
             /* A def constant belongs to the shader: its value is part of the code, and it

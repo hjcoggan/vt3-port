@@ -49,12 +49,14 @@ uint32_t d3d9_level_layout(uint32_t fmt, uint32_t w, uint32_t h, uint32_t *pitch
     if (w == 0 || h == 0) return 0;
     if (d3d9_fmt_is_dxt(fmt)) {
         uint32_t bs = fmt == D3DFMT_CHK_DXT1 ? 8u : 16u;
-        uint32_t bw = (w + 3) / 4, bh = (h + 3) / 4;
-        *pitch = bw * bs;
-        return *pitch * bh;
+        uint64_t bw = ((uint64_t)w + 3) / 4, bh = ((uint64_t)h + 3) / 4;
+        if (bw * bs * bh > UINT32_MAX) return 0;   /* a size the 32-bit guest cannot hold */
+        *pitch = (uint32_t)(bw * bs);
+        return (uint32_t)(bw * bs * bh);
     }
     uint32_t bpp = d3d9_fmt_bpp(fmt);
     if (!bpp) return 0;
+    if ((uint64_t)w * bpp * h > UINT32_MAX) return 0;
     *pitch = w * bpp;
     return *pitch * h;
 }

@@ -142,6 +142,7 @@ static void free_data(uint32_t kind, void *data)
     case D3D9_KIND_SURFACE: {
         d3d9_surface *s = data;
         if (!s->owner && s->data) HeapFree(GetProcessHeap(), 0, s->data);
+        d3d9_gpu_tex_destroy(s->rt);   /* the lazily made target (d3d9_surface_target); 0 when none */
         free(s);
         break;
     }
@@ -212,6 +213,8 @@ void d3d9_obj_free(GPTR obj)
 {
     int i = host_index_of(obj, d3d9_rd(obj, D3D9_OFF_KIND));
     if (i < 0) return;
+    if (g_d3d9_host[i].kind == D3D9_KIND_VSHADER || g_d3d9_host[i].kind == D3D9_KIND_PSHADER)
+        d3d9_draw_forget_shader(obj);
     free_data(g_d3d9_host[i].kind, g_d3d9_host[i].data);
     memset(&g_d3d9_host[i], 0, sizeof g_d3d9_host[i]);
     HeapFree(GetProcessHeap(), 0, obj);
