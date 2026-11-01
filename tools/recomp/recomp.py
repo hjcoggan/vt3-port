@@ -1089,6 +1089,8 @@ class FnGen:
         """Statements for one instruction (control flow included)."""
         mn = ins.mn
         if mn in RET_MN:
+            # A C return: right only if the popped value is the return address the C caller pushed. A
+            # whole-program esp scan of VT3 found no ret that pops anything else, outside soft pointer-scan entries.
             extra = ins.ops[0].imm & 0xFFFF if ins.ops else 0
             fl = " VT_SPILL_FLAGS();" if self.entry in self.an.flag_returns else ""
             return [f"{{ esp += {4 + extra}u;{fl} VT_SPILL(); return; }}"]
@@ -1188,6 +1190,8 @@ def plain(ins):
     if mn == 'sahf':
         return [blk("uint32_t ah = (eax >> 8) & 0xFFu;", "cf = ah & 1u; pf = (ah >> 2) & 1u;",
                     "af = (ah >> 4) & 1u; zf = (ah >> 6) & 1u; sf = (ah >> 7) & 1u;")]
+    # df is a local that VT_FLAGS clears at every entry and nothing spills: every std in VT3 reaches a cld
+    # before any call, ret or tail jump.
     if mn == 'cld':
         return ["df = 0u;"]
     if mn == 'std':
@@ -2256,6 +2260,8 @@ def write_module(img, an, out_dir, name, allow_unsup, log):
     body, unsup_hard, ninsn, stubs = [], [], 0, 0
     mnemonics = Counter()
     # Callees whose flags a caller reads after the call: their rets hand the flags back.
+    # shortcut: direct callees only, and not the functions they tail-jump to; VT3's one such callee (0x65cb65)
+    # is called directly and has no tail jump, upgrade if another game needs either.
     for entry in fns:
         try:
             insns = an.reach(entry).values()
