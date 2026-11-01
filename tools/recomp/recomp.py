@@ -1463,6 +1463,33 @@ def string_op(ins):
                 "} else " + loop,
             )
             return blk("if (ecx >= 8u && !df) {", *bulk, "} else ", loop)
+        if base == 'movs' and sz == 1:
+            # A forward byte copy equals memmove unless dst starts inside src past its start,
+            # where x86 replicates the leading bytes as a pattern; that case keeps the loop.
+            loop = blk("while (ecx != 0u) {", *body, "ecx -= 1u;", "}")
+            bulk = (
+                "uint64_t src_end = (uint64_t)esi + ecx;",
+                "uint64_t dst_end = (uint64_t)edi + ecx;",
+                "if (src_end <= 0x100000000ull && dst_end <= 0x100000000ull && "
+                "(edi <= esi || src_end <= (uint64_t)edi)) {",
+                "memmove(vt_mem + edi, vt_mem + esi, ecx);",
+                "esi += ecx; edi += ecx; ecx = 0u;",
+                "} else " + loop,
+            )
+            return blk("if (ecx >= 16u && !df) {", *bulk, "} else ", loop)
+        if base == 'stos' and sz in (1, 4):
+            # memset for DF=0 without address wrap; a dword fill qualifies only when its four
+            # bytes are equal (the common zero clear), other patterns keep the loop.
+            loop = blk("while (ecx != 0u) {", *body, "ecx -= 1u;", "}")
+            pat = "" if sz == 1 else " && eax == (eax & 0xFFu) * 0x01010101u"
+            bulk = (
+                f"uint64_t nbytes = (uint64_t)ecx * {sz}u;",
+                f"if ((uint64_t)edi + nbytes <= 0x100000000ull{pat}) {{",
+                "memset(vt_mem + edi, (int)(eax & 0xFFu), (size_t)nbytes);",
+                "edi += (uint32_t)nbytes; ecx = 0u;",
+                "} else " + loop,
+            )
+            return blk("if (ecx >= 16u && !df) {", *bulk, "} else ", loop)
         return blk("while (ecx != 0u) {", *body, "ecx -= 1u;", "}")
     return blk(*body)
 
