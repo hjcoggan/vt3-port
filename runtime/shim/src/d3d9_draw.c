@@ -221,7 +221,10 @@ static vt3_prog program_for(uint32_t vs_obj, uint32_t ps_obj, const d3d9_shader 
         }
         if (g_progs[i].vs == vs_obj && g_progs[i].ps == ps_obj) { last = i; return g_progs[i].prog; }
     }
-    if (free_slot < 0) return 0;
+    if (free_slot < 0) {
+        VT3_WARN_ONCE("program: cache full (%d pairs); new shader pairs are not drawn", PROG_CACHE);
+        return 0;
+    }
     char err[1024] = "";
     vt3_prog p = 0;
     const char *ps_src = ps ? ps->sm.glsl : (vt3_gfx_glsl_flags() ? vt3_builtin_ff_fs_vk : k_ff_ps);
@@ -235,6 +238,15 @@ static vt3_prog program_for(uint32_t vs_obj, uint32_t ps_obj, const d3d9_shader 
     g_progs[free_slot].prog = p;
     last = free_slot;
     return p;
+}
+
+/* A released shader's guest block can be reused by a new shader, so its cached pairs must not match it. */
+void d3d9_draw_forget_shader(GPTR obj)
+{
+    /* shortcut: the programs leak, because vk prog_destroy can free a pipeline the open frame has recorded;
+     * destroy them once the renderer defers program destruction like texture destruction. */
+    for (int i = 0; i < PROG_CACHE; i++)
+        if (g_progs[i].used && (g_progs[i].vs == obj || g_progs[i].ps == obj)) g_progs[i].used = 0;
 }
 
 /* ---- the draw ---------------------------------------------------------------- */
@@ -727,7 +739,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         stride = d->streams[0][2];
         if (stride == 0 && d->decl) {
             d3d9_host *h = d3d9_host_of(d->decl, D3D9_KIND_VDECL);
-            if (h) stride = ((d3d9_decl *)h->data)->stride[0];
+            if (h && h->data) stride = ((d3d9_decl *)h->data)->stride[0];
         }
     }
     if (d->decl) {
@@ -1047,7 +1059,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         vsc = vsc_copy;
     }
     if (psh && psh->sm.cdef_n) {
-        memcpy(psc_copy, psc, sizeof psc_copy);
+        memcpy(psc_copy, psc, sizeof d->psc);
         for (int i = 0; i < psh->sm.cdef_n; i++) {
             int r = psh->sm.cdef_idx[i];
             memcpy(&psc_copy[4 * r], psh->sm.cdef[r], 4 * sizeof(float));
@@ -1061,7 +1073,7 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         if (no_vsm < 0) no_vsm = getenv("VT3_NO_VSM") != NULL;
         d3d9_surface *ns = no_vsm && d->rt[0] ? d3d9_surface_of(d->rt[0]) : NULL;
         if (no_vsm && vsh->skinned && !(ns && ns->w == 512 && ns->h == 512)) {
-            if (psc != psc_copy) { memcpy(psc_copy, psc, sizeof psc_copy); psc = psc_copy; }
+            if (psc != psc_copy) { memcpy(psc_copy, psc, sizeof d->psc); psc = psc_copy; }
             psc_copy[10 * 4 + 0] = 1.0e6f;
         }
     }
@@ -1076,6 +1088,10 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
     const uint8_t *draw_vertices = vcopy;
     if (idx_k >= 0) {
         int ioff = lay.attr[idx_k].offset;
+        if ((uint32_t)ioff + 4u > (uint32_t)lay.stride) {   /* a stream stride shorter than the declaration */
+            VT3_WARN_ONCE("draw: blend indices at %d past stride %d (skipped)", ioff, lay.stride);
+            return S_OK;
+        }
         rstride = (uint32_t)lay.stride + 12u;
         /* Convert straight into the ring when it has room; otherwise the merged source stays in
          * the first scratch region while the expanded draw data occupies the tail. */

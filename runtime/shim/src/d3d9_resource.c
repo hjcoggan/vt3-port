@@ -598,7 +598,7 @@ HRESULT WINAPI IDirect3DVolume9_GetContainer(GPTR This, GPTR riid, GPTR ppContai
 HRESULT WINAPI IDirect3DVertexDeclaration9_GetDeclaration(GPTR This, GPTR arg0, GPTR pNumElements)
 {
     d3d9_host *h = d3d9_host_of(This, D3D9_KIND_VDECL);
-    if (!h) return D3DERR_CHK_INVALIDCALL;
+    if (!h || !h->data) return D3DERR_CHK_INVALIDCALL;
     d3d9_decl *dc = h->data;
     vt3s_store_u32(pNumElements, dc->n + 1);
     if (arg0) {
@@ -612,7 +612,7 @@ HRESULT WINAPI IDirect3DVertexDeclaration9_GetDeclaration(GPTR This, GPTR arg0, 
 static HRESULT shader_function(GPTR This, uint32_t kind, GPTR pData, GPTR pSizeOfData)
 {
     d3d9_host *h = d3d9_host_of(This, kind);
-    if (!h) return D3DERR_CHK_INVALIDCALL;
+    if (!h || !h->data) return D3DERR_CHK_INVALIDCALL;
     d3d9_shader *sh = h->data;
     uint32_t bytes = sh->ntok * 4;
     vt3s_store_u32(pSizeOfData, bytes);

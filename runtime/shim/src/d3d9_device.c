@@ -773,7 +773,7 @@ HRESULT WINAPI IDirect3DDevice9_GetPixelShader(GPTR This, GPTR ppShader)
 HRESULT WINAPI IDirect3DDevice9_SetVertexShaderConstantF(GPTR This, UINT reg_idx, GPTR data, UINT count)
 {
     d3d9_device *d = DEV(This);
-    if (!d || reg_idx + count > 256) return D3DERR_CHK_INVALIDCALL;
+    if (!d || reg_idx > 256 || count > 256 - reg_idx) return D3DERR_CHK_INVALIDCALL;
     copy_guest_floats(&d->vsc[reg_idx][0], data, count);
     static int trace_nan = -1;   /* VT3_TRACE_NAN=1: uploads with a NaN or Inf, once per guest caller */
     if (trace_nan < 0) trace_nan = getenv("VT3_TRACE_NAN") != NULL;
@@ -802,7 +802,7 @@ HRESULT WINAPI IDirect3DDevice9_GetVertexShaderConstantF(GPTR This, UINT StartRe
                                                          UINT Vector4fCount)
 {
     d3d9_device *d = DEV(This);
-    if (!d || StartRegister + Vector4fCount > 256) return D3DERR_CHK_INVALIDCALL;
+    if (!d || StartRegister > 256 || Vector4fCount > 256 - StartRegister) return D3DERR_CHK_INVALIDCALL;
     copy_host_floats(pConstantData, &d->vsc[StartRegister][0], Vector4fCount);
     return S_OK;
 }
@@ -820,7 +820,7 @@ static void copy_guest_bools(int *dst, GPTR src, UINT count, UINT limit, UINT fi
 HRESULT WINAPI IDirect3DDevice9_SetVertexShaderConstantB(GPTR This, UINT reg_idx, GPTR data, UINT count)
 {
     d3d9_device *d = DEV(This);
-    if (!d || reg_idx + count > 16) return D3DERR_CHK_INVALIDCALL;
+    if (!d || reg_idx > 16 || count > 16 - reg_idx) return D3DERR_CHK_INVALIDCALL;
     copy_guest_bools(d->vsb, data, count, 16, reg_idx);
     return S_OK;
 }
@@ -828,7 +828,7 @@ HRESULT WINAPI IDirect3DDevice9_SetVertexShaderConstantB(GPTR This, UINT reg_idx
 HRESULT WINAPI IDirect3DDevice9_SetPixelShaderConstantB(GPTR This, UINT reg_idx, GPTR data, UINT count)
 {
     d3d9_device *d = DEV(This);
-    if (!d || reg_idx + count > 16) return D3DERR_CHK_INVALIDCALL;
+    if (!d || reg_idx > 16 || count > 16 - reg_idx) return D3DERR_CHK_INVALIDCALL;
     copy_guest_bools(d->psb, data, count, 16, reg_idx);
     return S_OK;
 }
@@ -836,7 +836,7 @@ HRESULT WINAPI IDirect3DDevice9_SetPixelShaderConstantB(GPTR This, UINT reg_idx,
 HRESULT WINAPI IDirect3DDevice9_SetPixelShaderConstantF(GPTR This, UINT reg_idx, GPTR data, UINT count)
 {
     d3d9_device *d = DEV(This);
-    if (!d || reg_idx + count > 224) return D3DERR_CHK_INVALIDCALL;
+    if (!d || reg_idx > 224 || count > 224 - reg_idx) return D3DERR_CHK_INVALIDCALL;
     copy_guest_floats(&d->psc[reg_idx][0], data, count);
     return S_OK;
 }
@@ -845,7 +845,7 @@ HRESULT WINAPI IDirect3DDevice9_GetPixelShaderConstantF(GPTR This, UINT StartReg
                                                         UINT Vector4fCount)
 {
     d3d9_device *d = DEV(This);
-    if (!d || StartRegister + Vector4fCount > 224) return D3DERR_CHK_INVALIDCALL;
+    if (!d || StartRegister > 224 || Vector4fCount > 224 - StartRegister) return D3DERR_CHK_INVALIDCALL;
     copy_host_floats(pConstantData, &d->psc[StartRegister][0], Vector4fCount);
     return S_OK;
 }

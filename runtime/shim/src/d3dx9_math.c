@@ -209,8 +209,8 @@ GPTR WINAPI D3DXMatrixPerspectiveOffCenterRH(GPTR out, DWORD l, DWORD r, DWORD b
     memset(m, 0, sizeof m);
     m[0] = 2.0f * n / (R - L);
     m[5] = 2.0f * n / (T - B);
-    m[8] = (L + R) / (L - R);
-    m[9] = (T + B) / (B - T);
+    m[8] = (L + R) / (R - L);
+    m[9] = (T + B) / (T - B);
     m[10] = f / (n - f);
     m[11] = -1.0f;
     m[14] = n * f / (n - f);

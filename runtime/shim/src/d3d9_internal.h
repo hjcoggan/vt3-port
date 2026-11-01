@@ -219,6 +219,7 @@ typedef struct d3d9_draw_args {
 
 /* Issues one draw. Returns an HRESULT. Unsupported draws are skipped with a log line. */
 HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a);
+void d3d9_draw_forget_shader(GPTR obj);   /* drops cached programs that use this shader */
 
 /* Device lookup for host objects. NULL unless the guest pointer is a device. */
 d3d9_device *d3d9_device_of(GPTR dev);
