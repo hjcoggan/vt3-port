@@ -11,6 +11,7 @@ static vt3_input_state g_state;             /* merged: keyboard and pad buttons,
 static uint8_t g_keys[VT3_KEY_COUNT];       /* raw keyboard, 1 = down */
 static vt3_key_event g_queue[VT3_KEY_QUEUE];
 static uint32_t g_q_head, g_q_len;          /* ring of key transitions, oldest at head */
+static int g_q_overflow;                    /* transitions were dropped since the last take */
 
 static uint32_t g_pad;                      /* raw gamepad buttons, enum vt3_button bits */
 static int g_pad_connected;
@@ -22,6 +23,7 @@ void vt3_input_init(void)
     memset(g_keys, 0, sizeof g_keys);
     memset(g_queue, 0, sizeof g_queue);
     g_q_head = g_q_len = 0;
+    g_q_overflow = 0;
     g_pad = 0;
     g_pad_connected = 0;
     g_keyboard_seen = 0;
@@ -52,7 +54,11 @@ void vt3_input_set_key(uint32_t scancode, int down, uint32_t ms)
     uint8_t v = down ? 1 : 0;
     if (g_keys[scancode] == v) return;
     g_keys[scancode] = v;
-    if (g_q_len == VT3_KEY_QUEUE) return;   /* full: the oldest transitions are kept */
+    if (g_q_len == VT3_KEY_QUEUE) {         /* full: drop the oldest, as DirectInput does */
+        g_q_head = (g_q_head + 1) % VT3_KEY_QUEUE;
+        g_q_len--;
+        g_q_overflow = 1;
+    }
     uint32_t tail = (g_q_head + g_q_len) % VT3_KEY_QUEUE;
     g_queue[tail].scancode = scancode;
     g_queue[tail].down = v;
@@ -65,15 +71,23 @@ int vt3_input_key_down(uint32_t scancode)
     return scancode < VT3_KEY_COUNT && g_keys[scancode];
 }
 
-uint32_t vt3_input_take_keys(vt3_key_event *out, uint32_t max, int peek)
+uint32_t vt3_input_take_keys(vt3_key_event *out, uint32_t max, int peek, int *overflow)
 {
     uint32_t n = max < g_q_len ? max : g_q_len;
     for (uint32_t i = 0; i < n; i++) out[i] = g_queue[(g_q_head + i) % VT3_KEY_QUEUE];
+    *overflow = g_q_overflow;
     if (!peek) {
         g_q_head = (g_q_head + n) % VT3_KEY_QUEUE;
         g_q_len -= n;
+        g_q_overflow = 0;
     }
     return n;
+}
+
+void vt3_input_clear_keys(void)
+{
+    g_q_head = g_q_len = 0;
+    g_q_overflow = 0;
 }
 
 void vt3_input_set_pad_button(uint32_t mask, int down)

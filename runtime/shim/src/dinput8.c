@@ -649,6 +649,7 @@ HRESULT WINAPI IDirectInputDevice8A_SetProperty(GPTR This, GPTR rguidProp, GPTR 
     case DIPROP_BUFFERSIZE:
         if (v > DI_MAX_BUFSIZE) return DIERR_INVALIDPARAM;
         d->bufsize = v;
+        if (d->keyboard) vt3_input_clear_keys();     /* a new buffer starts empty */
         break;
     case DIPROP_AXISMODE:
         if (v != DIPROPAXISMODE_ABS) return DIERR_UNSUPPORTED;   /* relative axes are not reported */
@@ -678,6 +679,7 @@ HRESULT WINAPI IDirectInputDevice8A_Acquire(GPTR This)
     if (!d) return DIERR_INVALIDPARAM;
     if (d->acquired) return DI_NOEFFECT;
     d->acquired = 1;
+    if (d->keyboard) vt3_input_clear_keys();         /* drop transitions queued while not acquired */
     VT3_INFO("IDirectInputDevice8A::Acquire: %s", kind_name(kind_of(d)));
     return DI_OK;
 }
@@ -726,11 +728,12 @@ HRESULT WINAPI IDirectInputDevice8A_GetDeviceData(GPTR This, DWORD cbObjectData,
     if (cbObjectData != DIDEVICEOBJECTDATA_SIZE) return DIERR_INVALIDPARAM;
     uint32_t max = rd32(cnt, 0);
     uint32_t got = 0;
+    int overflow = 0;
     if (d->keyboard && max && rgdod) {
         uint32_t cap = max < 64u ? max : 64u;
         if (cap > d->bufsize) cap = d->bufsize;
         vt3_key_event ev[64];
-        uint32_t n = vt3_input_take_keys(ev, cap, (dwFlags & DIGDD_PEEK) != 0);
+        uint32_t n = vt3_input_take_keys(ev, cap, (dwFlags & DIGDD_PEEK) != 0, &overflow);
         uint8_t *out = d3d9_gmem(rgdod, cap * DIDEVICEOBJECTDATA_SIZE);
         for (uint32_t i = 0; out && i < n; i++) {
             uint8_t dik = dik_of_usage(ev[i].scancode);
@@ -744,7 +747,7 @@ HRESULT WINAPI IDirectInputDevice8A_GetDeviceData(GPTR This, DWORD cbObjectData,
         }
     }
     st32(cnt, 0, got);
-    return DI_OK;
+    return overflow ? DI_BUFFEROVERFLOW : DI_OK;
 }
 
 HRESULT WINAPI IDirectInputDevice8A_SetDataFormat(GPTR This, GPTR lpdf)

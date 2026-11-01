@@ -59,8 +59,10 @@ typedef struct vt3_key_event {
 
 void vt3_input_set_key(uint32_t scancode, int down, uint32_t ms);
 int  vt3_input_key_down(uint32_t scancode);
-/* Copies up to max queued key transitions, oldest first. Consumes them unless peek is nonzero. */
-uint32_t vt3_input_take_keys(vt3_key_event *out, uint32_t max, int peek);
+/* Copies up to max queued key transitions, oldest first. Consumes them unless peek is nonzero.
+ * *overflow is set when the full queue dropped its oldest transitions since the last take. */
+uint32_t vt3_input_take_keys(vt3_key_event *out, uint32_t max, int peek, int *overflow);
+void     vt3_input_clear_keys(void);
 
 /* Raw gamepad buttons, in enum vt3_button bits. The d-pad is UP, DOWN, LEFT, RIGHT. */
 void     vt3_input_set_pad_button(uint32_t mask, int down);

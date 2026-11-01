@@ -63,7 +63,6 @@ typedef struct ds_buffer {
     int looping;
     int32_t volume, pan;
     uint32_t freq;
-    uint32_t lock_off;           /* where the last Lock began: the Unlock writes start here */
     uint8_t *fresh;              /* one flag per FRESH_BLOCK bytes: set when the game writes it, cleared once played */
     ds_mix_state mix;            /* resampler state; only the mixer thread reads it, and Play/SetCurrentPosition reset it under g_mu */
     uint32_t n_locks, n_plays;   /* trace: how often the game wrote and played this buffer */
@@ -161,12 +160,25 @@ static uint32_t write_lead(const ds_buffer *b)
     return lead < b->bytes / 2u ? lead : b->bytes / 2u;
 }
 
+/* Bytes played since play_base, unwrapped. */
+static uint64_t played_at(const ds_buffer *b, uint64_t now)
+{
+    uint64_t us = now > b->play_ns ? (now - b->play_ns) / 1000u : 0;
+    return b->play_base + us * buf_bps(b) / 1000000u;
+}
+
+/* A non-looping buffer whose wall-clock cursor has passed its end: stopped to the game, even
+ * while the lagging mixer still plays its tail. */
+static int played_out(const ds_buffer *b, uint64_t now)
+{
+    return b->playing && !b->looping && b->bytes && played_at(b, now) >= b->bytes;
+}
+
 static uint32_t play_cursor_at(const ds_buffer *b, uint64_t now)
 {
     if (!b->playing || b->bytes == 0) return b->pos;
-    uint64_t us = now > b->play_ns ? (now - b->play_ns) / 1000u : 0;
-    uint64_t moved = us * buf_bps(b) / 1000000u;
-    return (uint32_t)((b->play_base + moved) % b->bytes);
+    if (played_out(b, now)) return 0;             /* where the mixer leaves a finished one-shot, not a wrapped cursor */
+    return (uint32_t)(played_at(b, now) % b->bytes);
 }
 
 /* Both cursors from one clock read, so GetCurrentPosition cannot report a play cursor and a
@@ -662,7 +674,10 @@ HRESULT WINAPI IDirectSound_DuplicateSoundBuffer(GPTR This, GPTR pdsbOriginal, G
         d->volume = src->volume;
         d->pan = src->pan;
         d->freq = src->freq;
+        pthread_mutex_lock(&g_mu);           /* the mixer writes src's pos and clears its fresh flags */
         d->pos = src->pos;
+        if (d->fresh && src->fresh) memcpy(d->fresh, src->fresh, (src->bytes + FRESH_BLOCK - 1) / FRESH_BLOCK);
+        pthread_mutex_unlock(&g_mu);
     }
     put32(ppdsbDuplicate, obj);
     return DS_OK;
@@ -728,12 +743,15 @@ HRESULT WINAPI IDirectSoundBuffer_GetCurrentPosition(GPTR This, GPTR pdwCurrentP
     if (!b) return DSERR_UNSUPPORTED;
     uint32_t play, write;
     uint64_t now = now_ns();
+    pthread_mutex_lock(&g_mu);               /* the mixer writes playing/pos */
     cursors_at(b, now, &play, &write);
+    int playing = b->playing;
+    pthread_mutex_unlock(&g_mu);
     put32(pdwCurrentPlayCursor, play);
     put32(pdwCurrentWriteCursor, write);
     if (dsound_trace())
         VT3_INFO("DirectSound: GetCurrentPosition 0x%08x play %u write %u (playing %d) t=%llu ms thr %llu", (unsigned)This,
-                 (unsigned)play, (unsigned)write, b->playing,
+                 (unsigned)play, (unsigned)write, playing,
                  (unsigned long long)(now / 1000000u % 100000u), (unsigned long long)((uintptr_t)pthread_self() % 1000u));
     return DS_OK;
 }
@@ -783,7 +801,10 @@ HRESULT WINAPI IDirectSoundBuffer_GetStatus(GPTR This, GPTR pdwStatus)
     ds_buffer *b = buf_of(This);
     if (!b) return DSERR_UNSUPPORTED;
     if (!pdwStatus) return DSERR_INVALIDPARAM;
-    uint32_t st = (b->playing ? DSBSTATUS_PLAYING : 0) | (b->looping ? DSBSTATUS_LOOPING : 0);
+    pthread_mutex_lock(&g_mu);
+    int playing = b->playing && !played_out(b, now_ns());
+    uint32_t st = (playing ? DSBSTATUS_PLAYING : 0) | (b->looping ? DSBSTATUS_LOOPING : 0);
+    pthread_mutex_unlock(&g_mu);
     put32(pdwStatus, st);
     return DS_OK;
 }
@@ -807,21 +828,20 @@ HRESULT WINAPI IDirectSoundBuffer_Lock(GPTR This, DWORD dwOffset, DWORD dwBytes,
     put32(ppvAudioPtr2, 0);
     put32(pdwAudioBytes2, 0);
     uint32_t off = dwOffset, n = dwBytes;
-    if (dwFlags & DSBLOCK_FROMWRITECURSOR) {
-        uint32_t play, write;
-        cursors_at(b, now_ns(), &play, &write);
-        off = write;
-    }
+    uint32_t play, write;
+    pthread_mutex_lock(&g_mu);               /* the mixer writes playing/pos */
+    cursors_at(b, now_ns(), &play, &write);
+    pthread_mutex_unlock(&g_mu);
+    if (dwFlags & DSBLOCK_FROMWRITECURSOR) off = write;
     if (dwFlags & DSBLOCK_ENTIREBUFFER) {
         off = 0;
         n = b->bytes;
     }
     if (dsound_trace())
         VT3_INFO("DirectSound: Lock 0x%08x offset %u bytes %u flags 0x%x (play %u) t=%llu ms thr %llu", (unsigned)This, (unsigned)off,
-                 (unsigned)n, (unsigned)dwFlags, (unsigned)play_cursor_at(b, now_ns()),
+                 (unsigned)n, (unsigned)dwFlags, (unsigned)play,
                  (unsigned long long)(now_ns() / 1000000u % 100000u), (unsigned long long)((uintptr_t)pthread_self() % 1000u));
     if (!b->bytes || off >= b->bytes || n > b->bytes) return DSERR_INVALIDPARAM;
-    b->lock_off = off;
     b->n_locks++;
     uint32_t n1 = n, n2 = 0;
     if (off + n > b->bytes) {                     /* the region wraps past the end of the buffer */
@@ -929,7 +949,7 @@ HRESULT WINAPI IDirectSoundBuffer_SetFrequency(GPTR This, DWORD dwFrequency)
         pthread_mutex_unlock(&g_mu);
         return DSERR_INVALIDPARAM;
     }
-    if (b->playing) {                        /* rebase, or the new rate would move the cursor retroactively */
+    if (b->playing && !played_out(b, now_ns())) {   /* rebase, or the new rate would move the cursor retroactively */
         uint64_t now = now_ns();
         b->play_base = play_cursor_at(b, now);
         b->play_ns = now;
@@ -960,9 +980,9 @@ HRESULT WINAPI IDirectSoundBuffer_Unlock(GPTR This, GPTR pvAudioPtr1, DWORD dwAu
                                          DWORD dwAudioBytes2)
 {
     ds_buffer *fb = buf_of(This);
-    if (fb) {                                    /* the game's writes: the first segment at the lock, the second at 0 */
-        mark_fresh(fb, fb->lock_off, dwAudioBytes1);
-        mark_fresh(fb, 0, dwAudioBytes2);
+    if (fb) {                                    /* the game's writes, where the pointers it unlocks say; mark_fresh drops out-of-range offsets */
+        if (pvAudioPtr1 >= fb->storage) mark_fresh(fb, pvAudioPtr1 - fb->storage, dwAudioBytes1);
+        if (pvAudioPtr2 >= fb->storage) mark_fresh(fb, pvAudioPtr2 - fb->storage, dwAudioBytes2);
     }
     if (dsound_trace() && buf_of(This)) {
         /* Hash of what the game wrote, so repeated chunks show up in the trace. */
@@ -976,8 +996,6 @@ HRESULT WINAPI IDirectSoundBuffer_Unlock(GPTR This, GPTR pvAudioPtr1, DWORD dwAu
         VT3_INFO("DirectSound: Unlock 0x%08x bytes %u hash %016llx %s", (unsigned)This, (unsigned)dwAudioBytes1,
                  (unsigned long long)h, constant ? "constant" : "varied");
     }
-    (void)pvAudioPtr2;
-    (void)dwAudioBytes2;
     return buf_of(This) ? DS_OK : DSERR_UNSUPPORTED;
 }
 

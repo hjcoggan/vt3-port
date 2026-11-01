@@ -1,10 +1,10 @@
 /*
  * wsprintfA and wvsprintfA: Win32 formatting into a guest buffer.
  *
- * Conversions: %d %i %u %o %x %X %c %s %%. Flags: - 0 + space #. Width and precision
- * are digits or * (taken from the arguments). The length prefixes h and l are accepted
- * and ignored, because the guest's int and long are both 32 bits. I64 takes an 8-byte
- * argument. Arguments are 4-byte stack slots in guest memory, read in order.
+ * Conversions: %d %i %u %o %x %X %c %s %S %%. Flags: - 0 + space #. Width and precision
+ * are digits or * (taken from the arguments). The length prefixes h and l do not change
+ * integers, because the guest's int and long are both 32 bits; %ls and %S read a wide
+ * string, %hs and %hS a narrow one. I64 takes an 8-byte argument. Arguments are 4-byte stack slots in guest memory, read in order.
  *
  * Output is capped at 1023 characters plus NUL, the limit Win32 puts on wsprintf.
  * Return value: characters written, not counting the NUL.
@@ -207,12 +207,15 @@ static void format_into(wout *o, GPTR fmt, GPTR va)
             }
         }
 
-        int wide64 = 0;
+        int wide64 = 0, hmod = 0, lmod = 0;
         if (gbyte(p) == 'I' && gbyte(p + 1) == '6' && gbyte(p + 2) == '4') {
             wide64 = 1;
             p += 3;
         } else {
-            while (gbyte(p) == 'h' || gbyte(p) == 'l') p++;
+            for (int m; (m = gbyte(p)) == 'h' || m == 'l'; p++) {
+                if (m == 'h') hmod = 1;
+                else lmod = 1;
+            }
         }
 
         int conv = gbyte(p);
@@ -246,8 +249,22 @@ static void format_into(wout *o, GPTR fmt, GPTR va)
             put_str(o, &one, &c, 1);
             break;
         }
-        case 's': {
+        case 's':
+        case 'S': {
             uint32_t a = next_arg(o);
+            if (lmod || (conv == 'S' && !hmod)) {    /* %ls, %S: UTF-16LE; keep the low byte of each unit */
+                char w[WSPRINTF_MAX];
+                size_t n = 0;
+                if (!vt3s_guest_range_ok(a, 2)) { put_str(o, &sp, "(null)", 6); break; }
+                for (; n < WSPRINTF_MAX; n++) {
+                    uint32_t q = a + 2u * (uint32_t)n;
+                    int lo = gbyte(q), hi = gbyte(q + 1);
+                    if (!lo && !hi) break;
+                    w[n] = (char)lo;
+                }
+                put_str(o, &sp, w, n);
+                break;
+            }
             long n = gstr_len(a, WSPRINTF_MAX);
             if (n < 0) put_str(o, &sp, "(null)", 6);
             else put_str(o, &sp, (const char *)vt3_g2h(a), (size_t)n);

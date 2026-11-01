@@ -740,6 +740,31 @@ static void test_dinput8_xbox360_controls(void)
     CHECK(g_load32(state_pad + 32) == 4500u, "D-pad UP+RIGHT POV = 4500");
     vt3_input_set_pad_button(VT3_BTN_UP | VT3_BTN_RIGHT, 0);
 
+    /* Buffered keyboard: Acquire drops stale transitions; a full queue drops the oldest and
+     * GetDeviceData reports DI_BUFFEROVERFLOW once. */
+    GPTR dod = HeapAlloc(ph, HEAP_ZERO_MEMORY, 64 * DIDEVICEOBJECTDATA_SIZE);
+    IDirectInputDevice8A_Unacquire(dev_kb);
+    g_store32(prop_rng + 0, 20);
+    g_store32(prop_rng + 16, 64);
+    CHECK(IDirectInputDevice8A_SetProperty(dev_kb, DIPROP_BUFFERSIZE, prop_rng) == 0, "SetProperty(DIPROP_BUFFERSIZE)");
+    vt3_input_set_key(4, 1, 0);                       /* HID A, before Acquire: stale */
+    vt3_input_set_key(4, 0, 0);
+    CHECK(IDirectInputDevice8A_Acquire(dev_kb) == 0, "Acquire(kb, buffered)");
+    g_store32(out_ptr, 64);
+    CHECK(IDirectInputDevice8A_GetDeviceData(dev_kb, DIDEVICEOBJECTDATA_SIZE, dod, out_ptr, 0) == DI_OK &&
+          g_load32(out_ptr) == 0, "Acquire must clear the key queue (got %u)", g_load32(out_ptr));
+    for (uint32_t i = 0; i < 65; i++) vt3_input_set_key(4, !(i & 1), i);
+    g_store32(out_ptr, 64);
+    CHECK(IDirectInputDevice8A_GetDeviceData(dev_kb, DIDEVICEOBJECTDATA_SIZE, dod, out_ptr, 0) == DI_BUFFEROVERFLOW &&
+          g_load32(out_ptr) == 64 && g_load32(dod + 8) == 1,
+          "full key queue must drop the oldest and report overflow (got %u, first ms %u)", g_load32(out_ptr),
+          g_load32(dod + 8));
+    g_store32(out_ptr, 64);
+    CHECK(IDirectInputDevice8A_GetDeviceData(dev_kb, DIDEVICEOBJECTDATA_SIZE, dod, out_ptr, 0) == DI_OK &&
+          g_load32(out_ptr) == 0, "overflow is reported once");
+    vt3_input_set_key(4, 0, 0);
+    HeapFree(ph, 0, dod);
+
     IDirectInputDevice8A_Release(dev_kb);
     IDirectInputDevice8A_Release(dev_pad);
     IDirectInput8A_Release(di);

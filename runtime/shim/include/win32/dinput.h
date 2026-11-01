@@ -71,6 +71,7 @@ typedef struct IDirectInputDevice8AVtbl {
 /* Results. Values are HRESULTs (DIERR_* as in the SDK; DI_NOEFFECT is S_FALSE). */
 #define DI_OK                      0u
 #define DI_NOEFFECT                1u
+#define DI_BUFFEROVERFLOW          1u
 #define DIERR_NOTFOUND             0x80070002u
 #define DIERR_INVALIDPARAM         0x80070057u
 #define DIERR_OUTOFMEMORY          0x8007000Eu
