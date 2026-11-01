@@ -115,7 +115,13 @@ DWORD vt3s_call_guest_nested(uint32_t fn, const uint32_t *args, uint32_t nargs);
  * thread that spins cannot starve the others (kernel32_thread.c). Caller holds gil. */
 void vt3s_spin_point(void);
 
+/* CloseHandle on an event or mutex; frees it once no wait holds it (kernel32_thread.c). */
+struct vt3s_sync;
+void vt3s_sync_close(struct vt3s_sync *s);
+
 /* A VirtualAlloc-style page range from the arena. Returns 0 when out of space. */
 uint32_t vt3s_vm_alloc(uint32_t bytes);
+#define VT3_VM_BASE 0x30000000u   /* VirtualAlloc, thread stacks and HeapCreate take pages from here up */
+#define VT3_VM_LIMIT 0x3F000000u
 
 #endif /* VT3_SHIM_INTERNAL_H */

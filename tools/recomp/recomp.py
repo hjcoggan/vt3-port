@@ -1389,7 +1389,7 @@ def muldiv(ins):
                       "eax = (uint32_t)q; edx = (uint32_t)(n % d);"]
         elif sz == 2:
             lines += ["int32_t n = (int32_t)(((uint32_t)(edx & 0xFFFFu) << 16) | (eax & 0xFFFFu));",
-                      "int32_t d = (int16_t)dv;", "if (d == 0) vt_die_at(0u, 0xDEu);",
+                      "int32_t d = (int16_t)dv;", "if (d == 0 || (d == -1 && n == INT32_MIN)) vt_die_at(0u, 0xDEu);",
                       "int32_t q = n / d;", "if (q != (int16_t)q) vt_die_at(0u, 0xDEu);",
                       setreg('ax', '(uint32_t)q'), setreg('dx', '(uint32_t)(n % d)')]
         else:

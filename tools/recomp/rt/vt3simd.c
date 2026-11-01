@@ -276,7 +276,7 @@ void vt_pmaddwd(vt_xmm *d, const vt_xmm *s, int nbytes)
     for (int i = 0; i < nbytes / 4; i++) {
         int32_t p0 = (int32_t)(int16_t)a.u16[2 * i] * (int32_t)(int16_t)b.u16[2 * i];
         int32_t p1 = (int32_t)(int16_t)a.u16[2 * i + 1] * (int32_t)(int16_t)b.u16[2 * i + 1];
-        r.u32[i] = (uint32_t)(p0 + p1);
+        r.u32[i] = (uint32_t)p0 + (uint32_t)p1;   /* wraps like x86 when both pairs are -32768^2 */
     }
     *d = r;
 }
