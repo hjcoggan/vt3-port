@@ -572,9 +572,12 @@ static void gil_handoff(void)
     vt3s_gil_acquired();
 }
 
+int vt3shim_safepoint_hold;   /* VT3_NATIVE=check sets it: no other guest thread mid-comparison */
+
 void vt3shim_safepoint(void)
 {
     vt3shim_safepoint_req = 0;
+    if (vt3shim_safepoint_hold) return;
     gil_handoff();
 }
 

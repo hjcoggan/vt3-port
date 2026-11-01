@@ -6,11 +6,14 @@
  * leave the callee-saved registers as the translated body would), returning 0 means the
  * dispatcher runs the translated body.
  *
- * The native body is used by default (VT3_NATIVE=0 turns it off). VT3_NATIVE=check runs both: for the first
- * VT3_NATIVE_CHECKS calls (default 50) it runs the native body, saves the guest state, restores
- * the input, runs the translated body and compares. Execution keeps the translated result
- * while checking, so a mismatch can never change the game. After the checks, native is used
- * only if every call matched. The log goes to stderr, as the rest of the runtime's does.
+ * The native bodies are used by default (VT3_NATIVE=0 turns them off). VT3_NATIVE=check runs both:
+ * for the first VT3_NATIVE_CHECKS calls (default 50) of each function it runs the native body, saves
+ * the guest state, restores the input, runs the translated body and compares. Execution keeps the
+ * translated result while checking, so a mismatch can never change the game. After its checks, a
+ * function uses native only if every call matched. The log goes to stderr, as the rest of the
+ * runtime's does.
+ *
+ * Bodies: fn_00421e90 (cloth solver), fn_006afd00 (the CRI audio reverb, one sample per call).
  */
 #include "vt3rt.h"
 
@@ -21,24 +24,37 @@
 #include <time.h>
 
 extern size_t vt3_guest_size_;   /* runtime/src/core/guest.c */
+extern int vt3shim_safepoint_hold;   /* runtime/shim/src/kernel32_thread.c */
 /* Translated functions in vt3.c (the translator exports them for this file). */
 extern void fn_00421e90_tr(vt3_cpu *c);
+extern void fn_006afd00_tr(vt3_cpu *c);
 extern void fn_006506a2(vt3_cpu *c);   /* D3DXVec3Normalize */
 extern void fn_006506a8(vt3_cpu *c);   /* D3DXPlaneFromPoints */
 
-/* vt3native.c is the one place the native body lives. */
-static int native_body(vt3_cpu *c);
+static int cloth_body(vt3_cpu *c);
+static int reverb_body(vt3_cpu *c);
 static void native_init(void);
 
 /* On until the first call reads VT3_NATIVE: Android loads vt3.env after constructors run. */
 int vt_native_on = 1;
 
 enum { NATIVE_OFF, NATIVE_ON, NATIVE_CHECK };
-static int native_mode = -1;
-static int checks_left;
-static int checks_done, checks_matched;
+static int native_mode = -1;             /* from VT3_NATIVE; each function starts in it */
+static int native_checks;                /* VT3_NATIVE_CHECKS */
 static int in_check;
-static double ns_native, ns_translated;   /* check mode: time in each body */
+
+typedef struct {
+    const char *name;
+    int (*body)(vt3_cpu *c);
+    void (*tr)(vt3_cpu *c);
+    int scratch_out;                     /* eax/ecx/edx are outputs too: compare them */
+    int mode;                            /* -1 until the first call */
+    int checks_left, checks_done, checks_matched;
+    double ns_native, ns_translated;     /* check mode: time in each body */
+} native_fn;
+
+static native_fn cloth_fn = { "fn_00421e90 (cloth)", cloth_body, fn_00421e90_tr, 0, -1 };
+static native_fn reverb_fn = { "fn_006afd00 (reverb)", reverb_body, fn_006afd00_tr, 1, -1 };
 
 static double now_ns(void)
 {
@@ -120,10 +136,7 @@ static void build_regions(uint32_t esp)
     uint64_t top = vt3_guest_size_ < 0x40000000u ? vt3_guest_size_ : 0x40000000u;
     add_region(0x20000000u, (uint32_t)(top - 0x20000000u));
     add_writable_sections();
-    uint32_t lo = esp > STACK_PAD ? esp - STACK_PAD : 0;
-    uint32_t hi = esp + STACK_PAD < esp ? 0xffffffffu : esp + STACK_PAD;
-    add_region(lo, hi - lo);
-    regions[nregions - 1].compare = esp - lo;
+    add_region(esp - STACK_PAD, 2u * STACK_PAD);   /* moved to each checked call's esp */
 
     size_t total = 0;
     for (int i = 0; i < nregions; i++) {
@@ -135,8 +148,20 @@ static void build_regions(uint32_t esp)
         }
         total += 2u * (size_t)regions[i].len;
     }
-    fprintf(stderr, "vt3 native: check mode: %d regions, %.1f MiB of snapshots, %d calls\n",
-            nregions, (double)total / (1024.0 * 1024.0), checks_left);
+    fprintf(stderr, "vt3 native: check mode: %d regions, %.1f MiB of snapshots, %d calls each\n",
+            nregions, (double)total / (1024.0 * 1024.0), native_checks);
+}
+
+/* The functions run on different guest threads (cloth on the game thread, reverb on the audio
+ * thread), so the stack region follows the esp of the call being checked. */
+static void place_stack(uint32_t esp)
+{
+    vt_region *r = &regions[nregions - 1];
+    uint32_t lo = esp > STACK_PAD ? esp - STACK_PAD : 0;
+    uint32_t hi = esp + STACK_PAD < esp ? 0xffffffffu : esp + STACK_PAD;
+    r->base = lo;
+    r->len = hi - lo;
+    r->compare = esp - lo;
 }
 
 static void snapshot(uint8_t *const *dst)
@@ -151,12 +176,28 @@ static void restore(uint8_t *const *src)
         memcpy(vt_mem + regions[i].base, src[i], regions[i].len);
 }
 
-/* Only the state the function's ABI promises to preserve, plus esp (the function does its own
- * ret). eax/ecx/edx and the SSE registers are caller-saved and dead at the return. */
-static int cpu_same(const vt3_cpu *a, const vt3_cpu *b)
+/* The dead frame below the entry esp is not compared. The stack region already skips it, but a
+ * thread whose stack is in the guest heap (the audio thread's) has it inside the heap region too:
+ * copy the translated bytes over the native result there. */
+static void mask_dead_frame(uint32_t esp)
 {
+    uint32_t lo = esp > STACK_PAD ? esp - STACK_PAD : 0;
+    for (int i = 0; i < nregions; i++) {
+        vt_region *r = &regions[i];
+        uint32_t a = lo > r->base ? lo : r->base;
+        uint32_t b = esp < r->base + r->len ? esp : r->base + r->len;
+        if (a < b) memcpy(r->out + (a - r->base), vt_mem + a, b - a);
+    }
+}
+
+/* Only the state the function's ABI promises to preserve, plus esp (the function does its own
+ * ret), and the x87 stack top. eax/ecx/edx and the SSE registers are caller-saved and dead at the
+ * return; with scratch set eax/ecx/edx are compared too. */
+static int cpu_same(const vt3_cpu *a, const vt3_cpu *b, int scratch)
+{
+    if (scratch && (a->eax != b->eax || a->ecx != b->ecx || a->edx != b->edx)) return 0;
     return a->esp == b->esp && a->ebx == b->ebx && a->esi == b->esi &&
-           a->edi == b->edi && a->ebp == b->ebp;
+           a->edi == b->edi && a->ebp == b->ebp && a->ftop == b->ftop;
 }
 
 static int region_same(const vt_region *r, uint32_t *addr, uint32_t *want, uint32_t *got)
@@ -171,8 +212,8 @@ static int region_same(const vt_region *r, uint32_t *addr, uint32_t *want, uint3
         memcpy(&b, out + i, 4);
         if (a != b) {
             *addr = r->base + r->compare + i;
-            *want = b;
-            *got = a;
+            *want = a;                     /* translated: left in the guest */
+            *got = b;                      /* native: the saved result */
             return 0;
         }
     }
@@ -184,16 +225,17 @@ static int region_same(const vt_region *r, uint32_t *addr, uint32_t *want, uint3
 /* Run both bodies from the same input and compare. The translated result is left in place:
  * while checking, the game keeps running the semantics it ran before. Returns 1, because the
  * dispatcher must not run the translated body a second time. */
-static int check_call(vt3_cpu *c)
+static int check_call(native_fn *f, vt3_cpu *c)
 {
-    if (in_check) return native_body(c);
-    if (regions_failed) { native_mode = NATIVE_OFF; return 0; }
+    if (in_check) return 0;                /* nested: the translated body, so both sides match */
+    if (regions_failed) { f->mode = NATIVE_OFF; return 0; }
     build_regions(c->esp);
     if (regions_failed) {
         fprintf(stderr, "vt3 native: check disabled: out of memory for snapshots\n");
-        native_mode = NATIVE_OFF;
+        f->mode = NATIVE_OFF;
         return 0;
     }
+    place_stack(c->esp);
 
     uint8_t *in[MAX_REGIONS], *out[MAX_REGIONS];
     for (int i = 0; i < nregions; i++) {
@@ -202,12 +244,13 @@ static int check_call(vt3_cpu *c)
     }
 
     in_check = 1;
+    vt3shim_safepoint_hold = 1;          /* a lend mid-check would let other threads write */
     vt3_cpu cpu_in = *c;
     snapshot(in);
 
     double t0 = now_ns();
-    int handled = native_body(c);
-    ns_native += now_ns() - t0;
+    int handled = f->body(c);
+    f->ns_native += now_ns() - t0;
     vt3_cpu cpu_nat = *c;
     snapshot(out);
 
@@ -215,14 +258,16 @@ static int check_call(vt3_cpu *c)
     restore(in);
 
     t0 = now_ns();
-    fn_00421e90_tr(c);                     /* translated result, left in the guest */
-    ns_translated += now_ns() - t0;
+    f->tr(c);                              /* translated result, left in the guest */
+    f->ns_translated += now_ns() - t0;
     in_check = 0;
+    vt3shim_safepoint_hold = 0;
 
-    checks_done++;
-    if (checks_left > 0) checks_left--;
+    f->checks_done++;
+    if (f->checks_left > 0) f->checks_left--;
 
-    int ok = handled && cpu_same(c, &cpu_nat);
+    mask_dead_frame(cpu_in.esp);
+    int ok = handled && cpu_same(c, &cpu_nat, f->scratch_out);
     uint32_t addr = 0, want = 0, got = 0;
     if (ok) {
         for (int i = 0; i < nregions; i++) {
@@ -231,45 +276,56 @@ static int check_call(vt3_cpu *c)
     }
     if (!ok) {
         if (!handled) {
-            fprintf(stderr, "vt3 native: check %d: native body declined the call\n", checks_done);
-        } else if (!cpu_same(c, &cpu_nat)) {
-            fprintf(stderr, "vt3 native: check %d: cpu mismatch: esp %08x/%08x ebx %08x/%08x "
-                    "esi %08x/%08x edi %08x/%08x ebp %08x/%08x (translated/native)\n",
-                    checks_done, c->esp, cpu_nat.esp, c->ebx, cpu_nat.ebx,
-                    c->esi, cpu_nat.esi, c->edi, cpu_nat.edi, c->ebp, cpu_nat.ebp);
+            fprintf(stderr, "vt3 native: %s check %d: native body declined the call\n",
+                    f->name, f->checks_done);
+        } else if (!cpu_same(c, &cpu_nat, f->scratch_out)) {
+            fprintf(stderr, "vt3 native: %s check %d: cpu mismatch: esp %08x/%08x ebx %08x/%08x "
+                    "esi %08x/%08x edi %08x/%08x ebp %08x/%08x eax %08x/%08x ecx %08x/%08x "
+                    "edx %08x/%08x ftop %u/%u (translated/native)\n",
+                    f->name, f->checks_done, c->esp, cpu_nat.esp, c->ebx, cpu_nat.ebx,
+                    c->esi, cpu_nat.esi, c->edi, cpu_nat.edi, c->ebp, cpu_nat.ebp,
+                    c->eax, cpu_nat.eax, c->ecx, cpu_nat.ecx, c->edx, cpu_nat.edx,
+                    c->ftop, cpu_nat.ftop);
         } else {
             float fw, fg;
             memcpy(&fw, &want, 4);
             memcpy(&fg, &got, 4);
-            fprintf(stderr, "vt3 native: check %d: first difference at guest %08x: "
+            fprintf(stderr, "vt3 native: %s check %d: first difference at guest %08x: "
                     "translated %08x (%.9g) native %08x (%.9g)\n",
-                    checks_done, addr, want, (double)fw, got, (double)fg);
+                    f->name, f->checks_done, addr, want, (double)fw, got, (double)fg);
         }
-        fprintf(stderr, "vt3 native: check %d/%d failed: keeping the translated body\n",
-                checks_done, checks_done + checks_left);
-        native_mode = NATIVE_OFF;
-        vt_native_on = 0;
-        return 0;                          /* not reached: translated already ran */
+        fprintf(stderr, "vt3 native: %s check %d/%d failed: keeping the translated body\n",
+                f->name, f->checks_done, f->checks_done + f->checks_left);
+        f->mode = NATIVE_OFF;
+        return 1;                          /* the translated body already ran */
     }
 
-    checks_matched++;
-    if (checks_left == 0) {
-        native_mode = NATIVE_ON;
-        fprintf(stderr, "vt3 native: %d/%d calls matched; using the native body\n",
-                checks_matched, checks_done);
-        fprintf(stderr, "vt3 native: per call: native %.1f us, translated %.1f us\n",
-                ns_native / 1e3 / checks_done, ns_translated / 1e3 / checks_done);
+    f->checks_matched++;
+    if (f->checks_left == 0) {
+        f->mode = NATIVE_ON;
+        fprintf(stderr, "vt3 native: %s: %d/%d calls matched; using the native body\n",
+                f->name, f->checks_matched, f->checks_done);
+        fprintf(stderr, "vt3 native: %s per call: native %.3f us, translated %.3f us\n",
+                f->name, f->ns_native / 1e3 / f->checks_done,
+                f->ns_translated / 1e3 / f->checks_done);
     }
     return 1;
 }
 
-int vt_native_00421e90(vt3_cpu *c)
+static int native_call(native_fn *f, vt3_cpu *c)
 {
-    if (native_mode < 0) native_init();
-    if (native_mode == NATIVE_CHECK) return check_call(c);
-    if (native_mode == NATIVE_ON) return native_body(c);
+    if (f->mode < 0) {
+        if (native_mode < 0) native_init();
+        f->mode = native_mode;
+        f->checks_left = native_checks;
+    }
+    if (f->mode == NATIVE_CHECK) return check_call(f, c);
+    if (f->mode == NATIVE_ON) return f->body(c);
     return 0;
 }
+
+int vt_native_00421e90(vt3_cpu *c) { return native_call(&cloth_fn, c); }
+int vt_native_006afd00(vt3_cpu *c) { return native_call(&reverb_fn, c); }
 
 static void native_init(void)
 {
@@ -279,7 +335,7 @@ static void native_init(void)
     if (s && strcmp(s, "0") == 0) return;      /* on by default; VT3_NATIVE=0 turns it off */
     int check = s && strcmp(s, "check") == 0;
     const char *n = getenv("VT3_NATIVE_CHECKS");
-    checks_left = n && *n ? atoi(n) : 50;
+    native_checks = n && *n ? atoi(n) : 50;
     native_mode = check ? NATIVE_CHECK : NATIVE_ON;
     vt_native_on = 1;
 }
@@ -700,7 +756,7 @@ static void cloth_collide(vt3_cpu *c, uint32_t frame, uint32_t pos, uint32_t col
     cloth_write4(pos, p);
 }
 
-static int native_body(vt3_cpu *c)
+static int cloth_body(vt3_cpu *c)
 {
     const uint32_t entry_esp = c->esp;
     const uint32_t saved_ebx = c->ebx, saved_ebp = c->ebp;
@@ -822,5 +878,138 @@ done:
     c->ebp = saved_ebp;
     c->esi = saved_esi;
     c->edi = saved_edi;
+    return 1;
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * fn_006afd00: the CRI audio reverb, one sample per call
+ *
+ * __stdcall (state, in, out_l, out_r, out_r_neg, out_l_neg), called per sample by the voice
+ * mixer at 0x6ad983/0x6ad9c4 on the audio thread. A pre-delay line feeds five allpass stages,
+ * whose output drives nine comb filters (fn_006afc80, only ever called from here, inlined);
+ * two fixed mixes of the comb outputs give the left and right samples.
+ *
+ * The audio library runs the x87 at control word 0x0C3F (truncate). The translation models that
+ * as host double arithmetic with truncating float stores (vt3fpu.h): fadd/fsub ignore the
+ * precision control and only warn once through vt_fbadcw, which is the per-instruction call
+ * this body removes. Every operation below keeps the translated operand order (d op s) and
+ * rounds only where the guest stores, so the results are bit-identical. Memory reads and
+ * writes keep the guest's order, which matters only if a ring buffer aliases its state.
+ * ------------------------------------------------------------------------------------------- */
+
+/* A delay ring: buffer pointer at +0, read distance at +8, write index at +0xc, mask at +0x10.
+ * Returns the oldest sample and advances the write index; *slot is where the new one goes. */
+static inline double reverb_ring(uint32_t r, uint32_t *slot)
+{
+    uint32_t wr = rd32(r + 0xc), mask = rd32(r + 0x10), buf = rd32(r);
+    double old = vt_fld32(buf + ((wr - rd32(r + 8) + 1u) & mask) * 4u);
+    wr = (wr + 1u) & mask;
+    wr32(r + 0xc, wr);
+    *slot = buf + wr * 4u;
+    return old;
+}
+
+/* fn_006afc80 (thiscall, comb state at s): a delay line with a biquad in its feedback path.
+ * Ring at +4 (buffer), +0xc (read distance), +0x10 (write index), +0x14 (mask). Returns the
+ * delayed sample, which the guest leaves on the x87 stack. */
+static double reverb_comb(uint32_t s, double in, uint32_t cw)
+{
+    uint32_t wr = rd32(s + 0x10), mask = rd32(s + 0x14);
+    double x = vt_fld32(rd32(s + 4) + ((wr - rd32(s + 0xc) + 1u) & mask) * 4u);
+    uint32_t x1 = rd32(s + 0x94), y1 = rd32(s + 0x50);
+
+    double bx = x * vt_fld32(s + 0x70);                /* b0 x, kept as the next x1 */
+    double acc = vt_fld32(s + 0x78) * vt_fld32(s + 0x98);
+    wr32(s + 0x98, x1);
+    acc = acc + bx;
+    double t = vt_fld32(s + 0x74) * vt_fld32(s + 0x94);
+    acc = acc + t;
+    vt_fst32(s + 0x94, bx, cw);
+    t = vt_fld32(s + 0x34) * vt_fld32(s + 0x54);
+    wr32(s + 0x54, y1);
+    acc = acc - t;
+    t = vt_fld32(s + 0x30) * vt_fld32(s + 0x50);
+    acc = acc - t;
+    vt_fst32(s + 0x50, acc, cw);
+
+    double g = vt_fld32(s + 0x24) * vt_fld32(s + 0x18);
+    wr = (wr + 1u) & mask;
+    wr32(s + 0x10, wr);
+    acc = acc * g;
+    acc = acc + in;
+    vt_fst32(rd32(s + 4) + wr * 4u, acc, cw);
+    return x;
+}
+
+/* The comb outputs pass through a float stack slot in the guest; x is a float, so exact. */
+static inline double reverb_f32(double x) { return (double)(float)x; }
+
+static int reverb_body(vt3_cpu *c)
+{
+    const uint32_t e = c->esp, cw = c->fcw;
+    const uint32_t s = rd32(e + 4);
+    uint32_t slot;
+
+    /* Input gain, then the pre-delay ring at +0x6f0 (gain at +0x708). */
+    double in = vt_fld32(0x9330c0u) * vt_fld32(s + 0x708);
+    in = in * vt_fld32(e + 8);
+    double x = reverb_ring(s + 0x6f0, &slot);
+    vt_fst32(slot, in, cw);
+
+    /* Five allpass stages, 0x20 apart: ring, then coefficients g (+0x14) and h (+0x18). */
+    for (uint32_t a = s + 0x650; a <= s + 0x6d0; a += 0x20) {
+        double y = reverb_ring(a, &slot);
+        double t = y * vt_fld32(a + 0x14);
+        t = t + x;
+        vt_fst32(slot, t, cw);
+        double yh = y * vt_fld32(a + 0x18);
+        double xg = x * vt_fld32(a + 0x14);
+        x = yh - xg;
+    }
+
+    /* The guest stores the allpass output over its first argument and pushes that word to each
+     * comb call. */
+    vt_fst32(e + 4, x, cw);
+    const double ap = vt_fld32(e + 4);
+
+    double r[9];
+    for (int k = 0; k < 9; k++) r[k] = reverb_comb(s + 0x1c + 0xb0u * (uint32_t)k, ap, cw);
+    for (int k = 0; k < 8; k++) r[k] = reverb_f32(r[k]);   /* r[8] stays on the x87 stack */
+
+    const double c1 = vt_fld32(0x764618u), c2 = vt_fld32(0x7645ccu), c3 = vt_fld32(0x81454cu);
+    const double c4 = vt_fld32(0x8313f0u), c5 = vt_fld32(0x8124d4u), c6 = vt_fld32(0x8313ecu);
+    const double c7 = vt_fld32(0x7645d0u), c8 = vt_fld32(0x765ca0u);
+    const uint32_t out_l = rd32(e + 0xc), out_r = rd32(e + 0x10), out_rn = rd32(e + 0x14);
+
+    double l = r[0] * c1, t;
+    t = r[1] * c2; l = l - t;
+    l = l + r[2];
+    t = r[3] * c3; l = l - t;
+    t = r[8] * c4; l = l + t;
+    t = r[7] * c5; l = l + t;
+    t = r[6] * c6; l = l + t;
+    t = r[5] * c7; l = l + t;
+    t = r[4] * c8; l = l + t;
+    vt_fst32(out_l, l, cw);
+
+    double rr = r[8] * c5;
+    t = r[7] * c4; rr = rr + t;
+    t = r[6] * c7; rr = rr + t;
+    t = r[5] * c6; rr = rr + t;
+    t = r[4] * c1; rr = rr + t;
+    t = r[3] * c2; rr = rr + t;
+    t = r[1] * c3; rr = rr + t;
+    t = r[0] * c8; rr = rr + t;
+    rr = rr + r[2];
+    vt_fst32(out_r, rr, cw);
+    vt_fst32(out_rn, -rr, cw);
+    const uint32_t out_ln = rd32(e + 0x18);
+    vt_fst32(out_ln, -vt_fld32(out_l), cw);   /* re-read: out_l may alias out_r */
+
+    /* ret 0x18; eax/ecx/edx as the guest leaves them, the x87 stack balanced. */
+    c->eax = out_ln;
+    c->ecx = out_r;
+    c->edx = out_rn;
+    c->esp = e + 0x1c;
     return 1;
 }
