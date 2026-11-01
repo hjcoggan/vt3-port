@@ -713,7 +713,7 @@ static void emit_header(ctx *c, sb *h)
         }
         /* Alpha test (D3DRS_ALPHAFUNC and D3DRS_ALPHAREF), applied at the end of main. 0 = off. */
         sb_add(h, "bool vt3_alpha_pass(float a) {\n"
-                  "  float v = floor(a * 255.0 + 0.5);\n"
+                  "  float v = floor(clamp(a, 0.0, 1.0) * 255.0 + 0.5);\n"   /* D3D compares the clamped alpha */
                   "  if (vt3_at_func == 1) return false;\n"
                   "  if (vt3_at_func == 2) return v < vt3_at_ref;\n"
                   "  if (vt3_at_func == 3) return v == vt3_at_ref;\n"

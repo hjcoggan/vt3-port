@@ -924,11 +924,14 @@ static void barrier_mip(VkCommandBuffer cb, VkImage img, VkImageLayout from, VkI
     vkCmdPipelineBarrier(cb, src_stage, dst_stage, 0, 0, NULL, 0, NULL, 1, &b);
 }
 
+#define UPLOAD_WAIT_STAGES (VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT)
+
 static void record_upload(VkCommandBuffer cb, void *p)
 {
     upload_arg *u = p;
+    /* A re-upload must wait for earlier submissions (a frame still in flight) that sample or blit it. */
     barrier_image(cb, u->img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                  UPLOAD_WAIT_STAGES, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
                   VK_ACCESS_TRANSFER_WRITE_BIT, u->layer, 1, VK_IMAGE_ASPECT_COLOR_BIT);
     VkBufferImageCopy c = {0};
     c.bufferRowLength = u->row_pixels;
@@ -950,7 +953,7 @@ static void record_upload(VkCommandBuffer cb, void *p)
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
                     u->layer, l - 1, VK_IMAGE_ASPECT_COLOR_BIT);
         barrier_mip(cb, u->img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    UPLOAD_WAIT_STAGES, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
                     VK_ACCESS_TRANSFER_WRITE_BIT, u->layer, l, VK_IMAGE_ASPECT_COLOR_BIT);
         VkImageBlit blit = {0};
         blit.srcSubresource = (VkImageSubresourceLayers){ VK_IMAGE_ASPECT_COLOR_BIT, l - 1, u->layer, 1 };
