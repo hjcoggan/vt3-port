@@ -4,7 +4,9 @@
 The APK holds the native library, plus, when android/<SOURCE_DIR>/ has them, Java classes from java/
 (javac + d8) and a second JNI library from jni/ (with the vendored unshield). Steps: NDK clang builds lib<name>.so for
 arm64-v8a; aapt2 links the manifest into base.apk; the library is added to the zip; zipalign and
-apksigner finish it. The debug keystore and all outputs live under dump/android/, outside the repo.
+apksigner finish it. The debug keystore (debug.keystore) and all outputs live under ../dump/android/ when
+that folder exists (the maintainer's tree), otherwise under build/android/ in the repo. Keep that keystore:
+an APK signed with a new key cannot be installed over one signed with the old key.
 
 Usage: build_apk.py SOURCE_DIR NAME [--so LIBRARY] [--asset FILE]... [--install SERIAL]
   SOURCE_DIR holds the C sources (compiled with NDK clang), or is ignored when --so names a library
@@ -134,6 +136,11 @@ def main(argv):
         run([tool(JAVA_HOME, "bin", "keytool"), "-genkeypair", "-keystore", ks,
              "-storepass", KS_PASS, "-keypass", KS_PASS, "-alias", KS_ALIAS, "-keyalg", "RSA",
              "-keysize", "2048", "-validity", "36500", "-dname", "CN=vt3 port"])
+        print("WARNING: generated a new signing key, %s.\n"
+              "  If an APK signed with an earlier key is installed, `adb install -r` of this one fails with\n"
+              "  INSTALL_FAILED_UPDATE_INCOMPATIBLE, and uninstalling deletes the app's data (the unpacked game).\n"
+              "  Keep this file: back it up, and do not delete it when cleaning build/. To reuse an old key,\n"
+              "  put that debug.keystore back here and rebuild." % ks, file=sys.stderr)
     final = os.path.join(build, "%s.apk" % name)
     run([tool(bt, "apksigner"), "sign", "--ks", ks, "--ks-pass", "pass:" + KS_PASS,
          "--key-pass", "pass:" + KS_PASS, "--ks-key-alias", KS_ALIAS, "--out", final, aligned])

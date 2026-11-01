@@ -7,7 +7,8 @@ Vulkan mode) to GLSL 450, then glslangValidator makes SPIR-V. The pack is keyed 
 of the GLSL text, which the runtime computes on the text it generates, so the two sides agree.
 
 Usage: gen_spirv_pack.py OUT.pack [--bins DIR ...] [--glsl DIR ...]
-  --bins: directories of SM2 binaries named <id>.<vs|ps>_2_0.bin (default: the extracted game set)
+  --bins: directories of SM2 binaries named <id>.<vs|ps>_2_0.bin (default: the extracted game set,
+          with the rebuilt shaders written to ../dump; with --bins nothing is written outside OUT's folder)
   --glsl: directories of built-in GLSL files named <name>_vs.glsl or <name>_fs.glsl
 
 Writes OUT.pack and prints a line for each shader that failed. Pack layout (little endian):
@@ -24,7 +25,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))           # vt3-port
 DUMP = os.path.abspath(os.path.join(ROOT, "..", "dump"))                 # Virtua Tennis 3/dump
 GAME_BINS = os.path.join(DUMP, "runtime", "shaders", "bin")
-REBUILT_BINS = os.path.join(DUMP, "runtime", "shaders", "rebuilt")
+REBUILT_BINS = os.path.join(DUMP, "runtime", "shaders", "rebuilt")  # only when no --bins is given
+PACK_MAX = 2048  # runtime/src/render/vk.c PACK_MAX: the runtime ignores entries past it
 BUILTIN_TOOL_SRC = os.path.join(ROOT, "runtime", "tools", "builtin_dump.c")
 BUILTIN_SRC = os.path.join(ROOT, "runtime", "src", "render", "builtin_glsl.c")
 TOOL_SRC = os.path.join(ROOT, "runtime", "tools", "sm2tool.c")
@@ -63,7 +65,7 @@ def build_builtin_dump():
     return out
 
 
-def write_rebuilt_bins():
+def write_rebuilt_bins(out_dir):
     """The four D3DX-rebuilt shaders, as binaries, so they go through the same path."""
     sys.path.insert(0, HERE)
     import importlib.util
@@ -71,11 +73,11 @@ def write_rebuilt_bins():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     import sm2_asm
-    os.makedirs(REBUILT_BINS, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
     for name, _src, _len, _entry, kind, consts, listing in mod.SHADERS:
         tokens, k = sm2_asm.assemble(listing, consts)
         profile = "vs_2_0" if kind == "v" else "ps_2_0"
-        with open(os.path.join(REBUILT_BINS, "%s.%s.bin" % (name, profile)), "wb") as f:
+        with open(os.path.join(out_dir, "%s.%s.bin" % (name, profile)), "wb") as f:
             f.write(sm2_asm.to_bytes(tokens))
 
 
@@ -105,16 +107,22 @@ def main(argv):
             i += 2
         else:
             raise SystemExit("unknown argument " + argv[i])
+    with tempfile.TemporaryDirectory(prefix="vt3pack") as tmp:
+        return build_pack(out_path, bins, glsl_dirs, tmp)
+
+
+def build_pack(out_path, bins, glsl_dirs, tmp):
+    # The caller's --bins means a caller-owned tree, so the rebuilt shaders go to the temp dir, not ../dump.
+    rebuilt = os.path.join(tmp, "rebuilt") if bins else REBUILT_BINS
     if not bins:
         bins = [GAME_BINS]
     build_tool()
     glsl_dirs.insert(0, build_builtin_dump())
-    write_rebuilt_bins()
-    bins.append(REBUILT_BINS)
+    write_rebuilt_bins(rebuilt)
+    bins.append(rebuilt)
 
     entries = {}
     failed = []
-    tmp = tempfile.mkdtemp(prefix="vt3pack")
     for d in bins:
         for path in sorted(glob.glob(os.path.join(d, "*.bin"))):
             name = os.path.basename(path)[:-4]
@@ -147,6 +155,9 @@ def main(argv):
                 continue
             entries[key] = (0 if stage == "vert" else 1, open(spv, "rb").read(), name)
 
+    if len(entries) > PACK_MAX:
+        raise SystemExit("pack has %d shaders, more than the runtime's PACK_MAX (%d, runtime/src/render/vk.c): "
+                         "raise both" % (len(entries), PACK_MAX))
     with open(out_path, "wb") as f:
         f.write(b"VT3PACK1")
         f.write(struct.pack("<I", len(entries)))

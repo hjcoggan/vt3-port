@@ -127,6 +127,8 @@ if(VT3_ANDROID)
     if(NOT VT3_GAME_DIR)
         message(FATAL_ERROR "Set -DVT3_GAME_DIR to the folder with the translated vt3.c")
     endif()
+    # Not "python3" by name: python.org's Windows install only provides python and py.
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
     set(VT3_RT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../tools/recomp/rt)
     set(VT3_ADAPTERS ${CMAKE_CURRENT_BINARY_DIR}/vt3_shim_adapters.c)
     set(VT3_SHIM_SOURCES
@@ -139,7 +141,7 @@ if(VT3_ANDROID)
         shim/src/d3dx9_rebuilt.c shim/src/d3dx9_stub.c shim/src/dsound_stub.c shim/src/dinput8.c)
     add_custom_command(
         OUTPUT ${VT3_ADAPTERS}
-        COMMAND python3 ${VT3_RT_DIR}/gen_adapters.py ${CMAKE_CURRENT_SOURCE_DIR}/shim ${VT3_ADAPTERS} ${VT3_SHIM_SOURCES}
+        COMMAND ${Python3_EXECUTABLE} ${VT3_RT_DIR}/gen_adapters.py ${CMAKE_CURRENT_SOURCE_DIR}/shim ${VT3_ADAPTERS} ${VT3_SHIM_SOURCES}
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         DEPENDS ${VT3_RT_DIR}/gen_adapters.py ${VT3_SHIM_SOURCES}
         COMMENT "Generating the stdcall adapters")

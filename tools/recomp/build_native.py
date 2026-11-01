@@ -85,10 +85,10 @@ def sdl_prefix():
                           check=True).stdout.strip()
 
 
-def vulkan_prefix():
-    """Homebrew's MoltenVK and Vulkan loader (+ headers). The CMake build resolves this through
-    find_package(Vulkan); this build drives the compiler directly, so it asks brew."""
-    r = subprocess.run(['brew', '--prefix', 'vulkan'], capture_output=True, text=True)
+def brew_prefix(formula):
+    """A Homebrew formula's prefix (vulkan-headers, vulkan-loader). The CMake build resolves these
+    through find_package(Vulkan); this build drives the compiler directly, so it asks brew."""
+    r = subprocess.run(['brew', '--prefix', formula], capture_output=True, text=True)
     p = r.stdout.strip() if r.returncode == 0 else ''
     return p or '/opt/homebrew'
 
@@ -115,7 +115,8 @@ def main():
         print(gen.stdout.strip())
 
     sdl = sdl_prefix()
-    vk = vulkan_prefix()
+    vk_inc = os.path.join(brew_prefix('vulkan-headers'), 'include')
+    vk_lib = os.path.join(brew_prefix('vulkan-loader'), 'lib')
     translated = os.path.join(OUT, 'vt3.c')
     sources = [os.path.join(RT, s) for s in ('vt3rt.c', 'vt3native.c', 'vt3main.c', 'vt3simd.c', 'vt3fpu.c')]
     sources.append(adapters)
@@ -133,7 +134,7 @@ def main():
             '-I', os.path.join(RUNTIME, 'include'),
             '-I', os.path.join(SHIM, 'include'),
             '-I', os.path.join(sdl, 'include'),
-            '-I', os.path.join(vk, 'include')]
+            '-I', vk_inc]
     flags = ['-O2', '-std=gnu11', '-w', '-ffp-contract=off']
     objs = []
     for i, src in enumerate(sources):
@@ -153,7 +154,7 @@ def main():
     exe = os.path.join(OUT, 'vt3_native')
     run([CC, '-o', exe] + objs
         + ['-L', os.path.join(sdl, 'lib'), '-lSDL3', '-Wl,-rpath,' + os.path.join(sdl, 'lib'),
-           '-L', os.path.join(vk, 'lib'), '-lvulkan',
+           '-L', vk_lib, '-lvulkan',
            '-framework', 'OpenGL', '-lm', '-lpthread'])
     print('built', exe)
 

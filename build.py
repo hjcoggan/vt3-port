@@ -34,6 +34,11 @@ def need(tool, hint):
         sys.exit("missing %s: %s" % (tool, hint))
 
 
+def need_path(path, hint):
+    if not os.path.exists(path):
+        sys.exit("missing %s: %s" % (path, hint))
+
+
 def get_exe(path, out):
     """VT3.exe, bare or inside a zip, copied to out."""
     if zipfile.is_zipfile(path):
@@ -88,15 +93,24 @@ def shader_pack(exe):
 def android(exe):
     sys.path.insert(0, os.path.join(REPO, "android"))
     import build_apk
+    # Every tool the build needs, checked before the long translate and compile steps.
     need("cmake", "install CMake 3.22 or newer")
     need("ninja", "install Ninja")
+    need("glslangValidator", "install the Vulkan SDK (or the glslang package)")
+    need(os.environ.get("CC", "cc"), "install a host C compiler (or set CC); the shader pack tools are built with it")
+    need_path(build_apk.ndk_clang(), "install the NDK (sdkmanager \"ndk;30.0.16248370\") and set ANDROID_NDK_HOME")
+    need_path(build_apk.tool(build_apk.SDK, "build-tools", "36.1.0", "aapt2"),
+              "set ANDROID_HOME and install build-tools;36.1.0 with sdkmanager")
+    need_path(os.path.join(build_apk.SDK, "platforms", "android-%d" % build_apk.TARGET_API, "android.jar"),
+              "install platforms;android-%d with sdkmanager" % build_apk.TARGET_API)
+    need_path(build_apk.tool(build_apk.JAVA_HOME, "bin", "javac"), "install JDK 17 or newer and set JAVA_HOME")
     game = translate(exe)
     pack = shader_pack(os.path.join(game, "VT3.exe"))
     cm = os.path.join(BUILD, "android", "cmake")
     run(["cmake", "-S", os.path.join(REPO, "runtime"), "-B", cm, "-G", "Ninja",
          "-DCMAKE_TOOLCHAIN_FILE=" + os.path.join(build_apk.NDK, "build", "cmake", "android.toolchain.cmake"),
          "-DANDROID_PLATFORM=android-29", "-DANDROID_ABI=arm64-v8a", "-DCMAKE_BUILD_TYPE=Release",
-         "-DVT3_GAME_DIR=" + game])
+         "-DVT3_GAME_DIR=" + game, "-DPython3_EXECUTABLE=" + sys.executable])
     print("Compiling the translated game. This takes 5 to 15 minutes.")
     run(["cmake", "--build", cm, "--target", "vt3android"])
     so = os.path.join(BUILD, "android", "libvt3android.so")
@@ -111,13 +125,18 @@ def macos(exe, iso):
     if sys.platform != "darwin":
         sys.exit("The desktop build is macOS only. Use 'android' on Linux and Windows.")
     need("brew", "install Homebrew, then: brew install sdl3 molten-vk vulkan-loader vulkan-headers glslang")
+    need("glslangValidator", "brew install glslang")
+    need("clang", "install the Xcode command line tools: xcode-select --install")
+    need(os.environ.get("CC", "cc"), "install the Xcode command line tools: xcode-select --install")
     game = translate(exe)
     pack = shader_pack(os.path.join(game, "VT3.exe"))
     run([sys.executable, os.path.join(REPO, "tools", "recomp", "build_native.py"), game])
     data = os.path.expanduser("~/Library/Application Support/VT3/data2")
-    if not os.path.isdir(os.path.join(data, "Resource")):
+    done = os.path.join(data, ".unpacked")  # written only after a complete unpack, so an interrupted one is redone
+    if not os.path.exists(done):
         if not iso:
-            sys.exit("Pass --iso with your European PC DVD image the first time, to unpack the game data.")
+            sys.exit("Pass --iso with your European PC DVD image to unpack the game data "
+                     "(needed the first time, and again if an earlier unpack did not finish).")
         tool = os.path.join(BUILD, "macos", "vt3unpack")
         us = os.path.join(REPO, "android", "third_party", "unshield")
         os.makedirs(os.path.dirname(tool), exist_ok=True)
@@ -128,6 +147,7 @@ def macos(exe, iso):
             + [os.path.join(lib, "md5", "md5c.c"), "-lz"])
         print("Unpacking the disc into", data)
         run([tool, iso, data])
+        open(done, "w").close()
     app_dir = os.path.join(BUILD, "macos")
     run(["bash", os.path.join(REPO, "assets", "macos", "make_app.sh"), os.path.join(game, "vt3_native"),
          os.path.join(game, "image.bin"), app_dir, data], env=dict(os.environ, VT3_SHADER_PACK=pack))

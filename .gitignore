@@ -28,6 +28,8 @@ dump/
 extracted/
 assets/original/
 build/
+*.keystore
+*.jks
 .venv/
 __pycache__/
 *.pyc

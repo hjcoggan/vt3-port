@@ -26,6 +26,7 @@ Model in brief:
 """
 
 import argparse
+import filecmp
 import os
 import re
 import struct
@@ -2274,8 +2275,13 @@ def write_module(img, an, out_dir, name, allow_unsup, log):
         "",
     ]
     c_path = os.path.join(out_dir, f"{name}.c")
-    with open(c_path, 'w') as f:
+    # Replace vt3.c only when it changed: a new mtime makes the build recompile all ~100 MB of it.
+    with open(c_path + '.tmp', 'w') as f:
         f.write("\n".join(head + body + tail))
+    if os.path.exists(c_path) and filecmp.cmp(c_path + '.tmp', c_path, shallow=False):
+        os.remove(c_path + '.tmp')
+    else:
+        os.replace(c_path + '.tmp', c_path)
     with open(os.path.join(out_dir, 'image.bin'), 'wb') as f:
         f.write(bytes(img.mem))
     return c_path, ninsn, stubs, unsup_hard, mnemonics
