@@ -69,7 +69,7 @@ TRACE_POINTS = {0x4825c0, 0x482624, 0x482629}
 # Functions with a hand-written native replacement (rt/vt3native.c). Their translated body is
 # emitted as fn_<addr>_tr(), and fn_<addr>() becomes a dispatcher that calls the native body when
 # vt_native_on is set and falls back to the translated body when it returns 0.
-NATIVE_OVERRIDES = {0x421e90}
+NATIVE_OVERRIDES = {0x421e90, 0x6afd00}
 # Translated functions the native code calls directly (D3DXVec3Normalize, D3DXPlaneFromPoints).
 # Their definitions are emitted non-static so vt3native.c can call them.
 NATIVE_EXPORTS = {0x6506a2, 0x6506a8}
