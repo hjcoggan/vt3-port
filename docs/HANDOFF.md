@@ -1,4 +1,4 @@
-# Handoff: Virtua Tennis 3 port (2026-10-17, evening)
+# Handoff: Virtua Tennis 3 port (2026-11-02)
 
 The PC release (NoCD 1.0.1 build) is statically recompiled to C and runs natively on macOS and on
 Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one renderer, Vulkan
@@ -13,6 +13,44 @@ Android (Retroid Pocket, Snapdragon 8 Gen 2). Mac and Android now share one rend
   Retroid (confirmed by the owner). The Retroid's primary use is the goal; keep it asleep when idle.
 - Menus, tournament flow, serving, rallies, scoring all work on both. Mac audio is clean.
 - Court shadows are fixed on both backends (below). The .app now bundles the Vulkan loader.
+
+## Review rounds (2026-11-02, all on `main`)
+
+Code review of the runtime, shim and translator, then fixes. Each row's commit message has the
+detail and the verification.
+
+| Commit | Change |
+|---|---|
+| 2f95b29, de2d68d | **D3D9 safety.** Constant copy no longer over-reads (224 PS regs), Set/Get shader constant range checks cannot wrap, off-centre RH projection signs, NULL checks on stub objects, 64-bit level sizes, shader release drops its program cache entries. Draws whose vertex or index range overruns the buffer (e.g. a negative BaseVertexIndex) warn once and return INVALIDCALL. |
+| 710c0fd | **Vulkan sync and limits.** Barriers between the swapchain clear and the letterbox blit and for blits into a TRANSFER_DST image; UBO descriptors use `UBO_SLOT` instead of `VK_WHOLE_SIZE` (maxUniformBufferRange); relative constant reads outside c0..c255 return 0 as in D3D9; `VK_ERROR_SURFACE_LOST_KHR` rebuilds the surface next frame (Android); cube views for s8..s15. |
+| 19669ed | **Upload WAR barrier, alpha clamp.** A texture re-upload now waits for in-flight sampling/blits (it could tear a texture for a frame). The alpha test compares the alpha clamped to [0,1], as D3D does. Translator change: the pack was regenerated; the old one is `../dump/android/shaders.pack.pre-710c0fd`. |
+| 49dafdb, 12e46b6 | **Android backgrounding.** With no window the pump blocks in `ALooper_pollOnce(-1)` with AAudio paused: 39 CPU ticks over 20 s backgrounded on the Retroid, against a full core before. Resume rebuilds the swapchain. No audio resume while the activity is being destroyed. Also: hat axes no longer release a d-pad held by key events, installer reads capped and writes fsynced, ISO directory records bounds-checked, SDL pads not opened twice. |
+| 49dafdb | **AAudio disconnect recovery.** The error callback flags the stream and the pump reopens it on the game thread, keeping the ring. **Needs a Bluetooth connect/disconnect test on the device.** |
+| ddfafca, 12e46b6 | **kernel32 threading.** CloseHandle on an event/mutex defers the free to the last waiter; PulseEvent on auto-reset releases one waiter per pulse (pulses counted, capped by waiters); timed GIL waits keep one deadline slot each (32); the safepoint ticker sleeps out its period instead of waking every 1 ms; HeapCreate takes its region from the VM allocator (no overlap with VirtualAlloc/stacks). |
+| ddfafca | **rt.** `vt_fst64_rc` stores the double unchanged (RC was rounding it to an integer under truncate/floor/ceil); `vt_pmaddwd` without signed overflow; 16-bit idiv traps INT32_MIN/-1; `build_native.py` object reuse check was inverted. |
+| 12ecbd1, 37ee1c9, 205ca38, f9881b4 | **Recompiler emitter.** XMM pxor/por/pand/pandn, padd/psub, pcmpeq inline; rep stosb/stosd/movsb bulk paths (memset/memmove with overlap and pattern guards); `pause` is a nop; x87 stack top and control word held in locals (1930 functions). Each checked by a differential harness of old vs new emitter output on random states (0 mismatches, mutants caught); 44/44 recomp tests pass. |
+| c69f7ca | **Native CRI reverb `fn_006afd00`** (see Performance below): 8.8x in a microbenchmark, check mode 300/300 on the current build. `../dump/recomp/mainc/vt3.c` and `../dump/recomp/vt3_nocd/vt3.c` were re-translated for it; the old copies are `vt3.c.pre-2026-11-02` next to them. |
+| c25f21d | **dsound, dinput, user32.** DI keyboard queue cleared on Acquire/SetProperty, overflow drops the oldest and reports DI_BUFFEROVERFLOW; dsound Duplicate copies fresh-block flags, Unlock marks at the given pointers, GetStatus/GetCurrentPosition/Lock read play state under `g_mu`, a finished one-shot reports stopped; MessageBoxA returns IDYES/IDOK etc. by button set; wsprintfA `%ls`/`%S` read UTF-16. |
+| 80098c2 | **Build tooling.** `gen_spirv_pack.py --bins` writes rebuilt shaders to a temp dir (not `../dump`) and fails over PACK_MAX (2048); `build.py` checks tools before the long steps and marks the disc unpack done only on success; `recomp.py` rewrites `vt3.c` only when it changed; CMake finds Python3; `build_apk.py` warns on a new signing key (`*.keystore`, `*.jks` ignored). |
+
+**Check mode** (`VT3_NATIVE=check`) is now per function (own count, mode, timing), follows each
+call's esp, and holds safepoints off during a check. `VT3_SAFEPOINT_MS=0` now stalls loading, so do
+not combine it. The reverb's checks run from boot on the audio thread and stall start-up about a
+minute: check cloth in a separate run (the commit message of c69f7ca has the details).
+
+**Measuring on the Retroid.** CPU ticks over a match window cannot resolve changes under about 5%:
+CPU frequency scaling, and scene variance from the random venues (`instructions:u` ranged 121-152 G
+per 40 s). `simpleperf stat --app net.vt3port.game -e cpu-cycles:u,instructions:u` works from
+`adb shell`; kernel events and `-p` are refused. A profile at 60 fps put the game thread at ~0.59 of
+a core and the CRI audio thread at ~0.15, the latter constant regardless of frame rate.
+
+**Not merged / open:**
+- Native CRI resampler `fn_006b29f0`: on branch `worktree-agent-a9f364718d16767b2` (`dc37542`),
+  bit-identical, but worth only ~0.15% of a core; left out for risk against benefit.
+- `texkill` tests xyz, not w; left as is (the MS docs say xyz).
+- Mixer clock drift against the device clock: needs ear testing.
+- One Vulkan memory allocation per texture: fine on Adreno so far.
+- A texture re-uploaded twice in one frame: ordering of the draws between is latent, not seen.
 
 ## Performance and audio (session of 2026-10-24)
 
@@ -265,7 +303,7 @@ $PY tools/formats/shaders/gen_spirv_pack.py ../dump/android/shaders.pack
 translates with `tools/recomp/vt3_seeds.txt` (function entries, addresses only, from the Ghidra
 dump) and `tools/recomp/vt3_table_sizes.txt`, extracts the SM2 blobs from VT3.exe for the shader
 pack, then runs the CMake and APK steps below into `build/`. The output matches the maintainer
-build except that `../dump/recomp/vt3_nocd/vt3.c` predates the rep-movs fast path from e5bdaf9.
+build (`../dump/recomp/vt3_nocd/vt3.c` was re-translated on 2026-11-02).
 
 **Android** (configure once from the repo root; use a build dir for this tree):
 ```bash
@@ -342,7 +380,7 @@ the GLSL.
 Ruled out this session (do not retry): swapped sin/cos (only `fsin`/`fcos` are lowered), the D3DX
 matrix routines (match the documented formulas), `texldp` (handled), alpha-test scale (same in both
 backends), vertex formats (all supported on MoltenVK), uniform descriptor ranges (exact block sizes
-**black out the 3D scene**; keep `VK_WHOLE_SIZE`), the cull/front-face mapping (swapping it did not
+**black out the 3D scene**; keep the whole slot, `UBO_SLOT` since 710c0fd), the cull/front-face mapping (swapping it did not
 help), stencil (the shim never enables it), bone palettes (identical on GL and Vulkan).
 
 ## Working with models
