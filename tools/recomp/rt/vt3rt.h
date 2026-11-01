@@ -220,8 +220,12 @@ extern volatile int vt3shim_safepoint_req;
 void vt3shim_safepoint(void);
 #define VT_SAFEPOINT() do { if (__builtin_expect(vt3shim_safepoint_req, 0)) vt3shim_safepoint(); } while (0)
 
-#define FST(i) (c->fp[(c->ftop + (uint32_t)(i)) & 7u])
-#define FPUSH(v) do { vt_x80 vt_t_ = (v); c->ftop = (c->ftop - 1u) & 7u; c->fp[c->ftop] = vt_t_; } while (0)
-#define FPOP() do { c->ftop = (c->ftop + 1u) & 7u; } while (0)
+/* The generated code defines VT_FTOP as its local copy of the stack top (recomp.py promote_x87). */
+#ifndef VT_FTOP
+#define VT_FTOP c->ftop
+#endif
+#define FST(i) (c->fp[(VT_FTOP + (uint32_t)(i)) & 7u])
+#define FPUSH(v) do { vt_x80 vt_t_ = (v); VT_FTOP = (VT_FTOP - 1u) & 7u; c->fp[VT_FTOP] = vt_t_; } while (0)
+#define FPOP() do { VT_FTOP = (VT_FTOP + 1u) & 7u; } while (0)
 
 #endif /* VT3RT_H */
