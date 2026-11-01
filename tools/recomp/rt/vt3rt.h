@@ -34,6 +34,7 @@ typedef struct vt3_cpu {
     vt_x80 fp[8];        /* x87 physical registers, host doubles (vt3fpu.h); st(i) = fp[(ftop+i)&7] */
     vt_xmm xmm[8];
     uint64_t mm[8];       /* MMX registers. Not aliased to the x87 stack. */
+    uint32_t mxcsr;       /* SSE control/status word, stored and read back only (recomp.py ldmxcsr) */
 } vt3_cpu;
 
 typedef void (*vt3_fnptr)(vt3_cpu *c);

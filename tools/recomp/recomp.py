@@ -1824,9 +1824,10 @@ def simd_or_misc(ins):
     if mn == 'xlatb':
         return [blk("uint32_t t = rd8(ebx + (eax & 0xFFu));", "eax = (eax & 0xFFFFFF00u) | (t & 0xFFu);")]
     if mn == 'stmxcsr':
-        return [f"wr32({ea(ops[0])}, 0x1F80u);"]
+        return [f"wr32({ea(ops[0])}, c->mxcsr);"]
     if mn == 'ldmxcsr':
-        return []
+        # shortcut: RC, FTZ and DAZ are not honoured (SSE math rounds to nearest), upgrade if a game writes a non-default MXCSR.
+        return [f"c->mxcsr = rd32({ea(ops[0])});"]
     if mn in ('rcl', 'rcr'):
         d, s = ops
         sz = size_of(d)

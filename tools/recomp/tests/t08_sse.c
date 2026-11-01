@@ -78,5 +78,11 @@ int vt_main(void)
     double dacc = 0.0;
     for (int i = 1; i < 200; i++) dacc += 1.0 / (double)i;
     dbits("harmonic_d", dacc);
+
+    /* stmxcsr returns what ldmxcsr stored (FTZ set, no SSE op in between to raise status bits) */
+    unsigned int mx_old, mx_new = 0x9F80u, mx_back;
+    __asm__ volatile("stmxcsr %0\n\tldmxcsr %2\n\tstmxcsr %1\n\tldmxcsr %0"
+                     : "=m"(mx_old), "=m"(mx_back) : "m"(mx_new));
+    kvx("mxcsr_back", mx_back);
     return (int)(acc) & 0x7F;
 }

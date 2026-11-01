@@ -72,6 +72,7 @@ static void guest_thiscall1(const vt3_cpu *cur, uint32_t fn, uint32_t ecx, uint3
     n.ecx = ecx;
     n.fs_base = cur->fs_base;
     n.fcw = 0x37Fu;
+    n.mxcsr = 0x1F80u;
     vt_icall(&n, fn);
 }
 
@@ -286,6 +287,7 @@ static uint32_t guest_call_hook(uint32_t stack_top, uint32_t teb, uint32_t fn,
     put32(c.esp, VT_SENTINEL_RET);
     c.fs_base = teb;
     c.fcw = 0x37Fu;
+    c.mxcsr = 0x1F80u;
     vt_icall(&c, fn);
     return c.eax;
 }
@@ -420,6 +422,7 @@ int vt3_run(const vt3_module *m, const char *image_path)
     put32(c.esp, VT_SENTINEL_RET);
     c.fs_base = VT_TEB;
     c.fcw = 0x37Fu;
+    c.mxcsr = 0x1F80u;
 
     vt_icall(&c, m->entry);
     /* The entry is expected to call ExitProcess. Returning means it did not. */
