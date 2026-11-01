@@ -20,6 +20,7 @@
 #include "vt3/vt3_input.h"
 #include "vt3/vt3_renderer.h"
 #include "vt3shim/shim.h"
+#include "win32/d3d9_com.h"
 #include "win32/d3dx9.h"
 #include "win32/dinput.h"
 #include "win32/dsound.h"
@@ -811,6 +812,95 @@ static void test_d3dx_offcenter_rh(void)
     printf("PASS d3dx perspective off-centre RH\n");
 }
 
+static GPTR put_floats(const float *v, uint32_t n)
+{
+    GPTR p = HeapAlloc(GetProcessHeap(), 0, 4 * n);
+    memcpy(vt3_g2h(p), v, 4 * n);
+    return p;
+}
+
+static void check_floats(GPTR p, const float *want, int n, const char *what)
+{
+    float got[16];
+    memcpy(got, vt3_g2h(p), 4u * (uint32_t)n);
+    for (int i = 0; i < n; i++)
+        CHECK(fabsf(got[i] - want[i]) < 1e-5f, "%s [%d] = %g, want %g", what, i, got[i], want[i]);
+}
+
+static void test_d3dx_misc(void)
+{
+    /* Hand values from the D3DX formulas (MS docs). LookAtRH from (0,0,5) at the origin, up +y:
+     * axes are the identity and _43 = -dot(zaxis, eye) = -5. */
+    static const float eye[3] = { 0, 0, 5 }, at[3] = { 0, 0, 0 }, up[3] = { 0, 1, 0 };
+    static const float look[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -5, 1 };
+    /* OrthoOffCenterLH l=0 r=640 b=480 t=0 zn=0 zf=1: 2/(r-l), 2/(t-b), 1/(zf-zn), (l+r)/(l-r), (t+b)/(b-t). */
+    static const float ortho[16] = { 2.0f / 640, 0, 0, 0, 0, -2.0f / 480, 0, 0, 0, 0, 1, 0, -1, 1, 0, 1 };
+    GPTR m = HeapAlloc(GetProcessHeap(), 0, 64), out = HeapAlloc(GetProcessHeap(), 0, 16);
+    GPTR e = put_floats(eye, 3), a = put_floats(at, 3), u = put_floats(up, 3);
+    D3DXMatrixLookAtRH(m, e, a, u);
+    check_floats(m, look, 16, "LookAtRH");
+    D3DXMatrixOrthoOffCenterLH(m, fbits(0), fbits(640), fbits(480), fbits(0), fbits(0), fbits(1));
+    check_floats(m, ortho, 16, "OrthoOffCenterLH");
+    /* Project (320,240,0.5) through that ortho into a 640x480 viewport, z 0..1: the centre, z 0.5. */
+    static const float pt[3] = { 320, 240, 0.5f }, scr[3] = { 320, 240, 0.5f };
+    uint32_t vp[6] = { 0, 0, 640, 480, fbits(0), fbits(1) };
+    GPTR v = put_floats(pt, 3), vpp = put_floats((const float *)vp, 6);
+    D3DXVec3Project(out, v, vpp, m, 0, 0);
+    check_floats(out, scr, 3, "Vec3Project");
+    /* Plane through (0,0,1),(1,0,1),(0,1,1): normal cross(p2-p1, p3-p1) = +z, d = -1. */
+    static const float p1[3] = { 0, 0, 1 }, p2[3] = { 1, 0, 1 }, p3[3] = { 0, 1, 1 }, pl[4] = { 0, 0, 1, -1 };
+    D3DXPlaneFromPoints(out, put_floats(p1, 3), put_floats(p2, 3), put_floats(p3, 3));
+    check_floats(out, pl, 4, "PlaneFromPoints");
+    printf("PASS d3dx lookat, ortho, project, plane\n");
+}
+
+/* Shim internals (d3d9_resource.c): a texture made with no device and no renderer. */
+GPTR d3d9_create_texture_obj(GPTR dev, uint32_t cube, uint32_t w, uint32_t h, uint32_t levels, uint32_t fmt,
+                             uint32_t usage, uint32_t pool);
+
+static void test_d3d9_lock_and_refs(void)
+{
+    HANDLE ph = GetProcessHeap();
+    GPTR lr = HeapAlloc(ph, 0, 8), rc = HeapAlloc(ph, 0, 16), ps = HeapAlloc(ph, 0, 4);
+    /* A8R8G8B8 16x16: rect (4,2,..) starts at 2*64 + 4*4 bytes. */
+    GPTR t = d3d9_create_texture_obj(0, 0, 16, 16, 1, 0x15u, 0, 1);
+    CHECK(t != 0, "texture create failed");
+    uint32_t r[4] = { 4, 2, 8, 6 };
+    memcpy(vt3_g2h(rc), r, 16);
+    CHECK(IDirect3DTexture9_LockRect(t, 0, lr, rc, 0) == 0, "LockRect with a rect failed");
+    uint32_t got[2], base[2];
+    memcpy(got, vt3_g2h(lr), 8);
+    IDirect3DTexture9_LockRect(t, 0, lr, 0, 0);
+    memcpy(base, vt3_g2h(lr), 8);
+    CHECK(got[0] == 64 && got[1] == base[1] + 2 * 64 + 4 * 4, "LockRect rect: pitch %u bits +%u, want 64 +144",
+          got[0], got[1] - base[1]);
+    r[0] = 16;
+    memcpy(vt3_g2h(rc), r, 16);
+    CHECK(IDirect3DTexture9_LockRect(t, 0, lr, rc, 0) != 0, "LockRect with a rect outside the level must fail");
+    /* DXT5 16x16, rect (8,4): block row 1 (pitch 4 blocks * 16 = 64), block column 2. */
+    GPTR d = d3d9_create_texture_obj(0, 0, 16, 16, 1, 0x35545844u, 0, 1);
+    uint32_t r2[4] = { 8, 4, 12, 8 };
+    memcpy(vt3_g2h(rc), r2, 16);
+    IDirect3DTexture9_LockRect(d, 0, lr, 0, 0);
+    memcpy(base, vt3_g2h(lr), 8);
+    IDirect3DTexture9_LockRect(d, 0, lr, rc, 0);
+    memcpy(got, vt3_g2h(lr), 8);
+    CHECK(got[0] == 64 && got[1] == base[1] + 64 + 32, "DXT5 LockRect rect: pitch %u bits +%u, want 64 +96",
+          got[0], got[1] - base[1]);
+    IDirect3DTexture9_Release(d);
+    /* The surface of a level keeps its texture: releasing the texture first must leave it alive. */
+    CHECK(IDirect3DTexture9_GetSurfaceLevel(t, 0, ps) == 0, "GetSurfaceLevel failed");
+    GPTR s = *(uint32_t *)vt3_g2h(ps);
+    CHECK(IDirect3DTexture9_Release(t) == 1, "texture Release with its surface held must leave 1 reference");
+    CHECK(IDirect3DSurface9_LockRect(s, lr, 0, 0) == 0, "surface LockRect after the texture's Release failed");
+    CHECK(IDirect3DSurface9_Release(s) == 0, "surface Release");
+    CHECK(IDirect3DTexture9_GetLevelCount(t) == 0, "texture must be freed with its last surface");
+    HeapFree(ph, 0, lr);
+    HeapFree(ph, 0, rc);
+    HeapFree(ph, 0, ps);
+    printf("PASS d3d9 LockRect rect, surface keeps its texture\n");
+}
+
 /* ---- entry -------------------------------------------------------------- */
 
 int vt3_selftest_run(const char *adx_path)
@@ -830,6 +920,8 @@ int vt3_selftest_run(const char *adx_path)
     test_file_mapping();
     test_dinput8_xbox360_controls();
     test_d3dx_offcenter_rh();
+    test_d3dx_misc();
+    test_d3d9_lock_and_refs();
 
     int adx_ran = 0;
     if (adx_path) adx_ran = test_adx(adx_path);

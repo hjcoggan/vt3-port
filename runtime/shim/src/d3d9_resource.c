@@ -325,14 +325,27 @@ static HRESULT level_desc(d3d9_texture *t, UINT level, GPTR pDesc)
     return S_OK;
 }
 
-static HRESULT lock_level(d3d9_texture *t, UINT face, UINT level, GPTR locked, DWORD flags)
+/* pBits for a LockRect: the rect's top-left texel (a DXT rect is 4-aligned, so its block). 0 when the
+ * rect starts outside the w x h level. */
+static GPTR rect_bits(GPTR data, uint32_t pitch, uint32_t fmt, uint32_t w, uint32_t h, GPTR rect)
+{
+    if (!rect) return data;
+    uint32_t left = d3d9_rd(rect, 0), top = d3d9_rd(rect, 4);
+    if (left >= w || top >= h) return 0;
+    if (d3d9_fmt_is_dxt(fmt)) return data + (top / 4u) * pitch + (left / 4u) * (fmt == D3DFMT_CHK_DXT1 ? 8u : 16u);
+    return data + top * pitch + left * d3d9_fmt_bpp(fmt);
+}
+
+static HRESULT lock_level(d3d9_texture *t, UINT face, UINT level, GPTR locked, GPTR rect, DWORD flags)
 {
     (void)flags;
     if (!t || face >= t->faces || level >= t->levels || !d3d9_gmem(locked, LOCKED_RECT_SIZE))
         return D3DERR_CHK_INVALIDCALL;
     d3d9_level *lv = &t->lv[face][level];
+    GPTR bits = rect_bits(lv->data, lv->pitch, t->fmt, lv->w, lv->h, rect);
+    if (!bits) return D3DERR_CHK_INVALIDCALL;
     d3d9_wr(locked, 0, lv->pitch);
-    d3d9_wr(locked, 4, lv->data);
+    d3d9_wr(locked, 4, bits);
     return S_OK;
 }
 
@@ -372,6 +385,7 @@ static GPTR surface_for_level(GPTR owner, d3d9_texture *t, UINT face, UINT level
     s->pitch = lv->pitch;
     GPTR obj = d3d9_obj_new(D3D9_KIND_SURFACE, s, dev);
     if (!obj) free(s);
+    else d3d9_add_ref(owner);   /* as in D3D9: s->data is the texture's storage; free_data releases it */
     return obj;
 }
 
@@ -402,8 +416,7 @@ HRESULT WINAPI IDirect3DTexture9_GetSurfaceLevel(GPTR This, UINT Level, GPTR ppS
 
 HRESULT WINAPI IDirect3DTexture9_LockRect(GPTR This, UINT level, GPTR locked_rect, GPTR rect, DWORD flags)
 {
-    (void)rect;
-    return lock_level(d3d9_texture_of(This), 0, level, locked_rect, flags);
+    return lock_level(d3d9_texture_of(This), 0, level, locked_rect, rect, flags);
 }
 
 HRESULT WINAPI IDirect3DTexture9_UnlockRect(GPTR This, UINT Level)
@@ -440,8 +453,7 @@ HRESULT WINAPI IDirect3DCubeTexture9_GetCubeMapSurface(GPTR This, UINT FaceType,
 HRESULT WINAPI IDirect3DCubeTexture9_LockRect(GPTR This, UINT face, UINT level, GPTR locked_rect, GPTR rect,
                                               DWORD flags)
 {
-    (void)rect;
-    return lock_level(d3d9_texture_of(This), face, level, locked_rect, flags);
+    return lock_level(d3d9_texture_of(This), face, level, locked_rect, rect, flags);
 }
 
 HRESULT WINAPI IDirect3DCubeTexture9_UnlockRect(GPTR This, UINT FaceType, UINT Level)
@@ -560,16 +572,17 @@ HRESULT WINAPI IDirect3DSurface9_GetDesc(GPTR This, GPTR pDesc)
 
 HRESULT WINAPI IDirect3DSurface9_LockRect(GPTR This, GPTR locked_rect, GPTR rect, DWORD flags)
 {
-    (void)rect; (void)flags;
+    (void)flags;
     d3d9_surface *s = d3d9_surface_of(This);
     if (!s || !d3d9_gmem(locked_rect, LOCKED_RECT_SIZE)) return D3DERR_CHK_INVALIDCALL;
-    if (!s->data) {
+    GPTR bits = s->data ? rect_bits(s->data, s->pitch, s->fmt, s->w, s->h, rect) : 0;
+    if (!bits) {
         d3d9_wr(locked_rect, 0, 0);
         d3d9_wr(locked_rect, 4, 0);
-        return D3DERR_CHK_INVALIDCALL;     /* the back buffer has no CPU storage */
+        return D3DERR_CHK_INVALIDCALL;     /* the back buffer has no CPU storage, or the rect is outside */
     }
     d3d9_wr(locked_rect, 0, s->pitch);
-    d3d9_wr(locked_rect, 4, s->data);
+    d3d9_wr(locked_rect, 4, bits);
     s->locked = 1;
     return S_OK;
 }

@@ -143,7 +143,9 @@ static void free_data(uint32_t kind, void *data)
         d3d9_surface *s = data;
         if (!s->owner && s->data) HeapFree(GetProcessHeap(), 0, s->data);
         d3d9_gpu_tex_destroy(s->rt);   /* the lazily made target (d3d9_surface_target); 0 when none */
+        GPTR owner = s->owner;
         free(s);
+        if (owner) d3d9_release(owner);   /* the reference surface_for_level took */
         break;
     }
     case D3D9_KIND_VB:
