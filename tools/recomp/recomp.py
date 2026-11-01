@@ -1794,7 +1794,7 @@ def simd_or_misc(ins):
     if mn in ('cvtps2pi', 'cvttps2pi'):
         d, s = ops
         trunc = 1 if mn.startswith('cvtt') else 0
-        return [blk(f"vt_xmm sv = {_vload(s, 16)};",
+        return [blk(f"vt_xmm sv = {_vload(s, 8)};",
                     f"c->mm[{_vreg(d)[1]}] = (uint64_t)vt_cvt_i32((double)sv.f32[0], {trunc}) | "
                     f"((uint64_t)vt_cvt_i32((double)sv.f32[1], {trunc}) << 32);")]
     if mn == 'cvtpi2ps':
@@ -1807,7 +1807,9 @@ def simd_or_misc(ins):
         pred = CMP_PRED[m.group(1)]
         dbl = 1 if m.group(2)[1] == 'd' else 0
         scalar = 1 if m.group(2)[0] == 's' else 0
-        return [blk(f"vt_xmm dv = c->xmm[{_xmm(d)}];", f"vt_xmm sv = {_vload(s, 16)};",
+        # A scalar m32/m64 source reads only its own width: a 16-byte read can run off the arena.
+        sv = f"vt_mmv(rd32({ea(s)}))" if scalar and not dbl and s.kind == 'mem' else _vload(s, 8 if scalar else 16)
+        return [blk(f"vt_xmm dv = c->xmm[{_xmm(d)}];", f"vt_xmm sv = {sv};",
                     f"vt_cmpf({pred}, {dbl}, {scalar}, &dv, &sv);", f"c->xmm[{_xmm(d)}] = dv;")]
     if mn in ('rcpss', 'rsqrtss'):
         d, s = ops
@@ -1934,7 +1936,7 @@ def _packed(ins):
     if mn == 'cvtdq2pd':
         d, s = ops
         di = _xmm(d)
-        return [blk(f"vt_xmm s = {_x128src(s)}; vt_xmm r;",
+        return [blk(f"vt_xmm s = {_vload(s, 8)}; vt_xmm r;",  # m64 source
                     "r.f64[0] = (double)(int32_t)s.u32[0]; r.f64[1] = (double)(int32_t)s.u32[1];",
                     f"c->xmm[{di}] = r;")]
     if mn == 'cvttpd2dq':
@@ -1946,7 +1948,7 @@ def _packed(ins):
     if mn == 'cvtps2pd':
         d, s = ops
         di = _xmm(d)
-        return [blk(f"vt_xmm s = {_x128src(s)}; vt_xmm r;",
+        return [blk(f"vt_xmm s = {_vload(s, 8)}; vt_xmm r;",  # m64 source
                     "r.f64[0] = (double)s.f32[0]; r.f64[1] = (double)s.f32[1];", f"c->xmm[{di}] = r;")]
     if mn == 'cvtpd2ps':
         d, s = ops
