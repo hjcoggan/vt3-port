@@ -124,13 +124,13 @@ int main(int argc, char **argv)
     if (vt3_guest_init(VT3_GUEST_DEFAULT_BYTES) != 0) return 1;
     if (vt3shim_init() != 0) return 1;
     vt3shim_set_game_root(cfg.game_root);
+    vt3_input_init();   /* before the platform: its init opens the attached pads and marks them connected */
 
     if (vt3_platform_init(&cfg) != 0) {
         vt3shim_shutdown();
         vt3_guest_shutdown();
         return 1;
     }
-    vt3_input_init();
 
     vt3_gfx_config gc = {
         .logical_w = cfg.logical_w,

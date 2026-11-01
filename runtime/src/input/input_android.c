@@ -209,9 +209,13 @@ static int touch_event(const AInputEvent *e)
         case AMOTION_EVENT_ACTION_POINTER_UP:
             down = (int32_t)i != up_index;                   /* the rest stay down */
             break;
-        default:
-            down = 1;                                        /* DOWN, POINTER_DOWN, MOVE */
+        case AMOTION_EVENT_ACTION_DOWN:
+        case AMOTION_EVENT_ACTION_POINTER_DOWN:
+        case AMOTION_EVENT_ACTION_MOVE:
+            down = 1;
             break;
+        default:
+            return 1;   /* hover, scroll, outside: a mouse or stylus hovering is not a press, and no UP would follow */
         }
         vt3_touch_pointer(id, down, x, y);
     }
