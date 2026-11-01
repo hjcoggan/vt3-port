@@ -137,7 +137,7 @@ LONG WINAPI InterlockedExchange(LPLONG target, LONG value)
 int WINAPI WideCharToMultiByte(UINT cp, DWORD flags, LPCVOID wide, int wide_len,
                                LPSTR multi, int multi_len, LPCSTR defchar, LPVOID used)
 {
-    (void)flags; (void)defchar; (void)used;
+    (void)flags; (void)defchar;
     if (cp != VT3_CP_ACP && cp != VT3_CP_UTF8) {
         vt3s_set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
@@ -164,10 +164,20 @@ int WINAPI WideCharToMultiByte(UINT cp, DWORD flags, LPCVOID wide, int wide_len,
         return 0;
     }
     if (multi_len == 0 || !multi) return (int)units;
-    uint32_t n = units < (uint32_t)multi_len ? units : (uint32_t)multi_len;
+    /* Win32 fails a short buffer rather than truncating. */
+    if (multi_len < 0 || units > (uint32_t)multi_len) {
+        vt3s_set_last_error(ERROR_INSUFFICIENT_BUFFER);
+        return 0;
+    }
+    uint32_t n = units;
     if (!vt3s_guest_range_ok(multi, n)) return 0;
     uint8_t *out = vt3_g2h(multi);
-    for (uint32_t i = 0; i < n; i++) out[i] = w[i] < 0x80u ? (uint8_t)w[i] : '?';
+    uint32_t defaulted = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        out[i] = w[i] < 0x80u ? (uint8_t)w[i] : '?';
+        defaulted |= w[i] >= 0x80u;
+    }
+    vt3s_store_u32(used, defaulted);   /* lpUsedDefaultChar, when given */
     vt3s_set_last_error(ERROR_SUCCESS);
     return (int)n;
 }
@@ -192,7 +202,11 @@ int WINAPI MultiByteToWideChar(UINT cp, DWORD flags, LPCSTR multi, int multi_len
         return 0;
     }
     if (wide_len == 0 || !wide) return (int)units;
-    size_t n = units < (size_t)wide_len ? units : (size_t)wide_len;
+    if (wide_len < 0 || units > (size_t)wide_len) {
+        vt3s_set_last_error(ERROR_INSUFFICIENT_BUFFER);
+        return 0;
+    }
+    size_t n = units;
     if (!vt3s_guest_range_ok(wide, (DWORD)(2 * n))) return 0;
     const uint8_t *in = vt3_g2h(multi);
     uint16_t *out = vt3_g2h(wide);

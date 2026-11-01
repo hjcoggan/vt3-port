@@ -108,11 +108,17 @@ DWORD WINAPI GetModuleFileNameA(HANDLE module, LPSTR buf, DWORD size)
     (void)module;
     static const char path[] = "C:\\VT3\\VT3.exe";
     DWORD n = (DWORD)(sizeof path - 1);
-    if (!buf || size == 0) return 0;
+    if (!buf || size == 0) {
+        vt3s_set_last_error(ERROR_INSUFFICIENT_BUFFER);
+        return 0;
+    }
+    /* Truncated: returns size (not the length copied) with ERROR_INSUFFICIENT_BUFFER, as Win32. */
+    DWORD ret = n >= size ? size : n;
     if (n >= size) n = size - 1;
     put_bytes(buf, path, n);
     if (vt3s_guest_range_ok(buf, n + 1)) ((char *)vt3_g2h(buf))[n] = 0;
-    return n;
+    vt3s_set_last_error(ret == size ? ERROR_INSUFFICIENT_BUFFER : ERROR_SUCCESS);
+    return ret;
 }
 
 UINT WINAPI GetACP(void) { return 1252u; }
@@ -265,8 +271,9 @@ int WINAPI CompareStringW(DWORD locale, DWORD flags, LPCVOID s1, int n1, LPCVOID
 {
     (void)locale;
     size_t a = n1 < 0 ? 0 : (size_t)n1, b = n2 < 0 ? 0 : (size_t)n2;
-    if (n1 < 0) { const uint16_t *w = vt3_g2h(s1); while (w[a]) a++; }
-    if (n2 < 0) { const uint16_t *w = vt3_g2h(s2); while (w[b]) b++; }
+    /* -1 lengths: scan for the NUL without leaving guest memory (NULL scans nothing). */
+    if (n1 < 0) { while (vt3s_guest_range_ok(s1, (DWORD)(2 * a + 2)) && ((const uint16_t *)vt3_g2h(s1))[a]) a++; }
+    if (n2 < 0) { while (vt3s_guest_range_ok(s2, (DWORD)(2 * b + 2)) && ((const uint16_t *)vt3_g2h(s2))[b]) b++; }
     if (!vt3s_guest_range_ok(s1, (DWORD)(2 * a)) || !vt3s_guest_range_ok(s2, (DWORD)(2 * b))) return 0;
     return cmp_units(vt3_g2h(s1), a, vt3_g2h(s2), b, (flags & NORM_IGNORECASE) != 0);
 }

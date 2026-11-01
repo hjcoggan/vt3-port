@@ -322,6 +322,9 @@ static GPTR guest_cstr(HANDLE heap, const char *s)
     return p;
 }
 
+static void st32(GPTR p, uint32_t v) { memcpy(vt3_g2h(p), &v, 4); }
+static uint32_t ld32(GPTR p) { uint32_t v; memcpy(&v, vt3_g2h(p), 4); return v; }
+
 static void test_file_mapping(void)
 {
     const char *tmp = getenv("TMPDIR");
@@ -367,6 +370,47 @@ static void test_file_mapping(void)
     CHECK(GetLastError() == ERROR_FILE_NOT_FOUND, "missing file error %u", (unsigned)GetLastError());
     HeapFree(ph, 0, name);
     HeapFree(ph, 0, missing);
+
+    /* The save path: overlapped write at the OVERLAPPED offset, its count read back, the file
+     * sized, renamed without replacing, then the old name deleted. */
+    GPTR tmpn = guest_cstr(ph, "data\\save.tmp"), dstn = guest_cstr(ph, ".\\DATA\\save.bin");
+    GPTR wbuf = guest_cstr(ph, "abcd"), ovl = HeapAlloc(ph, HEAP_ZERO_MEMORY, 20), cnt = HeapAlloc(ph, 0, 4);
+    HANDLE w = CreateFileA(tmpn, GENERIC_READ | GENERIC_WRITE, 0, 0, CREATE_ALWAYS, 0, 0);
+    CHECK(w != INVALID_HANDLE_VALUE, "create save.tmp (err %u)", (unsigned)GetLastError());
+    if (w != INVALID_HANDLE_VALUE) {
+        CHECK(WriteFile(w, wbuf, 4, cnt, 0), "plain write");
+        st32(ovl + 8, 1);   /* Offset 1: overwrite "bcd" with "abc" */
+        CHECK(WriteFile(w, wbuf, 3, cnt, ovl), "overlapped write");
+        st32(cnt, 0);
+        CHECK(GetOverlappedResult(w, ovl, cnt, 1) && ld32(cnt) == 3, "overlapped count %u",
+              (unsigned)ld32(cnt));
+        CHECK(SetFilePointer(w, 2, 0, FILE_BEGIN) == 2 && SetEndOfFile(w) && GetFileSize(w, 0) == 2,
+              "SetEndOfFile");
+        CHECK(SetFilePointer(w, -5, 0, FILE_BEGIN) == INVALID_SET_FILE_POINTER &&
+              GetLastError() == ERROR_NEGATIVE_SEEK, "negative seek error %u", (unsigned)GetLastError());
+        CloseHandle(w);
+    }
+    CHECK(MoveFileExA(tmpn, dstn, 0), "MoveFileExA to a new name (err %u)", (unsigned)GetLastError());
+    HANDLE again = CreateFileA(tmpn, GENERIC_WRITE, 0, 0, CREATE_NEW, 0, 0);
+    if (again != INVALID_HANDLE_VALUE) CloseHandle(again);
+    CHECK(!MoveFileExA(tmpn, dstn, 0) && GetLastError() == ERROR_ALREADY_EXISTS, "MoveFileExA over a file");
+    CHECK(MoveFileExA(tmpn, dstn, 1), "MoveFileExA REPLACE_EXISTING");
+    CHECK(DeleteFileA(dstn), "DeleteFileA (err %u)", (unsigned)GetLastError());
+    CHECK(!DeleteFileA(dstn) && GetLastError() == ERROR_FILE_NOT_FOUND, "DeleteFileA missing");
+    GPTR wide = HeapAlloc(ph, HEAP_ZERO_MEMORY, 8), mb = HeapAlloc(ph, 0, 4);
+    memcpy(vt3_g2h(wide), "a\0\xe9\0\0", 6);   /* L"aé" */
+    st32(cnt, 7);
+    CHECK(WideCharToMultiByte(0, 0, wide, -1, mb, 2, 0, 0) == 0 && GetLastError() == ERROR_INSUFFICIENT_BUFFER,
+          "WideCharToMultiByte short buffer");
+    CHECK(WideCharToMultiByte(0, 0, wide, -1, mb, 4, 0, cnt) == 3 && ld32(cnt) == 1,
+          "WideCharToMultiByte lpUsedDefaultChar");
+    HeapFree(ph, 0, tmpn);
+    HeapFree(ph, 0, dstn);
+    HeapFree(ph, 0, wbuf);
+    HeapFree(ph, 0, ovl);
+    HeapFree(ph, 0, cnt);
+    HeapFree(ph, 0, wide);
+    HeapFree(ph, 0, mb);
 
     unlink(file);
     snprintf(dir, sizeof dir, "%s/Data/Sub", root);

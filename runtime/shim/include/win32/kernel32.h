@@ -49,6 +49,9 @@ BOOL   WINAPI FindNextFileA(HANDLE find, LPWIN32_FIND_DATAA data);
 BOOL   WINAPI FindClose(HANDLE find);
 #define INVALID_FILE_ATTRIBUTES  0xFFFFFFFFu
 DWORD  WINAPI GetFileAttributesA(LPCSTR name);
+BOOL   WINAPI SetEndOfFile(HANDLE file);
+BOOL   WINAPI DeleteFileA(LPCSTR name);
+BOOL   WINAPI MoveFileExA(LPCSTR from, LPCSTR to, DWORD flags);
 
 /* Errors. */
 DWORD  WINAPI GetLastError(void);

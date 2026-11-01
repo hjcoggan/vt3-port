@@ -104,6 +104,19 @@ static int split_path(const char *win, char *dir, size_t cap, const char **leaf)
     return 0;
 }
 
+/* Host path for a name that does not exist yet. Its directory must exist; the new name keeps the
+ * case the game gave. Returns 0, or -1 for ERROR_PATH_NOT_FOUND. */
+static int resolve_new(const char *win, char *out, size_t cap)
+{
+    char dir[PATH_MAX], dpath[PATH_MAX];
+    const char *leaf = NULL;
+    struct stat dst;
+    if (split_path(win, dir, sizeof dir, &leaf) != 0 || resolve_path(dir, dpath, sizeof dpath) != 0) return -1;
+    if (stat(dpath, &dst) != 0 || !S_ISDIR(dst.st_mode)) return -1;
+    int n = snprintf(out, cap, "%s/%s", dpath, leaf);
+    return n < 0 || (size_t)n >= cap ? -1 : 0;
+}
+
 /* The Win32 error for a failed open(2). */
 static DWORD open_error(int err)
 {
@@ -175,19 +188,7 @@ HANDLE WINAPI CreateFileA(LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATT
             vt3s_set_last_error(ERROR_FILE_NOT_FOUND);
             return INVALID_HANDLE_VALUE;
         }
-        /* A new file. Its directory must exist; the new name keeps the case the game gave. */
-        char dir[PATH_MAX], dpath[PATH_MAX];
-        const char *leaf = NULL;
-        if (split_path(win, dir, sizeof dir, &leaf) != 0 || resolve_path(dir, dpath, sizeof dpath) != 0) {
-            vt3s_set_last_error(ERROR_PATH_NOT_FOUND);
-            return INVALID_HANDLE_VALUE;
-        }
-        struct stat dst;
-        if (stat(dpath, &dst) != 0 || !S_ISDIR(dst.st_mode)) {
-            vt3s_set_last_error(ERROR_PATH_NOT_FOUND);
-            return INVALID_HANDLE_VALUE;
-        }
-        if (snprintf(path, sizeof path, "%s/%s", dpath, leaf) >= (int)sizeof path) {
+        if (resolve_new(win, path, sizeof path) != 0) {
             vt3s_set_last_error(ERROR_PATH_NOT_FOUND);
             return INVALID_HANDLE_VALUE;
         }
@@ -311,7 +312,6 @@ BOOL WINAPI GetOverlappedResult(HANDLE hf, LPOVERLAPPED ovl, LPDWORD transferred
 
 BOOL WINAPI WriteFile(HANDLE hf, LPCVOID buffer, DWORD bytes, LPDWORD bytes_written, LPOVERLAPPED ovl)
 {
-    (void)ovl;
     vfile *f = vt3s_handle_get(hf, VT3S_H_FILE);
     if (!f) {
         vt3s_set_last_error(ERROR_INVALID_HANDLE);
@@ -320,6 +320,19 @@ BOOL WINAPI WriteFile(HANDLE hf, LPCVOID buffer, DWORD bytes, LPDWORD bytes_writ
     if (bytes && !vt3s_guest_range_ok(buffer, bytes)) {
         vt3s_set_last_error(ERROR_INVALID_PARAMETER);
         return FALSE;
+    }
+    if (ovl) {
+        /* As in ReadFile: the save writer (0x4288ff) writes at the OVERLAPPED offset and reads
+         * the count back with GetOverlappedResult, so the block must be filled in. */
+        if (!vt3s_guest_range_ok(ovl, 20)) {
+            vt3s_set_last_error(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        uint64_t off = (uint64_t)vt3s_load_u32(ovl + 8) | ((uint64_t)vt3s_load_u32(ovl + 12) << 32);
+        if (lseek(f->fd, (off_t)off, SEEK_SET) < 0) {
+            vt3s_set_last_error(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
     }
     const uint8_t *src = bytes ? vt3_g2h(buffer) : NULL;
     DWORD done = 0;
@@ -332,6 +345,12 @@ BOOL WINAPI WriteFile(HANDLE hf, LPCVOID buffer, DWORD bytes, LPDWORD bytes_writ
     struct stat wst;   /* the file may have grown: GetFileSize reads the size kept here */
     if (fstat(f->fd, &wst) == 0) f->size = (int64_t)wst.st_size;
     if (bytes_written) vt3s_store_u32(bytes_written, done);
+    if (ovl && done == bytes) {
+        vt3s_store_u32(ovl + 0, 0u);           /* Internal: STATUS_SUCCESS */
+        vt3s_store_u32(ovl + 4, done);         /* InternalHigh: bytes transferred */
+        HANDLE ev = vt3s_load_u32(ovl + 16);
+        if (ev) SetEvent(ev);
+    }
     vt3s_set_last_error(done == bytes ? ERROR_SUCCESS : ERROR_ACCESS_DENIED);
     return done == bytes ? TRUE : FALSE;
 }
@@ -357,7 +376,7 @@ DWORD WINAPI SetFilePointer(HANDLE hf, LONG distance, LPLONG distance_high, DWOR
 
     off_t pos = lseek(f->fd, (off_t)off, whence);
     if (pos < 0) {
-        vt3s_set_last_error(ERROR_INVALID_PARAMETER);
+        vt3s_set_last_error(errno == EINVAL ? ERROR_NEGATIVE_SEEK : ERROR_INVALID_PARAMETER);
         return INVALID_SET_FILE_POINTER;
     }
     vt3s_store_u32(distance_high, (uint32_t)((uint64_t)pos >> 32));
@@ -679,6 +698,75 @@ DWORD WINAPI GetFileAttributesA(LPCSTR name)
     }
     vt3s_set_last_error(ERROR_SUCCESS);
     return attrs_of(&st);
+}
+
+/* The save code (0x42f630, 0x42f6b0, 0x4284c0) sizes, renames and deletes its file. */
+BOOL WINAPI SetEndOfFile(HANDLE hf)
+{
+    vfile *f = vt3s_handle_get(hf, VT3S_H_FILE);
+    if (!f) {
+        vt3s_set_last_error(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    off_t pos = lseek(f->fd, 0, SEEK_CUR);
+    if (pos < 0 || ftruncate(f->fd, pos) != 0) {
+        vt3s_set_last_error(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+    f->size = (int64_t)pos;
+    vt3s_set_last_error(ERROR_SUCCESS);
+    return TRUE;
+}
+
+BOOL WINAPI DeleteFileA(LPCSTR name)
+{
+    const char *win = (const char *)vt3_g2h(name);
+    if (!win) {
+        vt3s_set_last_error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    char path[PATH_MAX];
+    struct stat st;
+    if (resolve_path(win, path, sizeof path) != 0 || stat(path, &st) != 0) {
+        vt3s_set_last_error(missing_error(win));
+        return FALSE;
+    }
+    if (S_ISDIR(st.st_mode) || unlink(path) != 0) {
+        vt3s_set_last_error(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+    vt3s_set_last_error(ERROR_SUCCESS);
+    return TRUE;
+}
+
+/* MOVEFILE_REPLACE_EXISTING (1) is the only flag honoured; the rest do not apply to one volume. */
+BOOL WINAPI MoveFileExA(LPCSTR from, LPCSTR to, DWORD flags)
+{
+    const char *wf = (const char *)vt3_g2h(from), *wt = (const char *)vt3_g2h(to);
+    if (!wf || !wt) {
+        vt3s_set_last_error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    char src[PATH_MAX], dst[PATH_MAX];
+    if (resolve_path(wf, src, sizeof src) != 0) {
+        vt3s_set_last_error(missing_error(wf));
+        return FALSE;
+    }
+    if (resolve_path(wt, dst, sizeof dst) == 0) {
+        if (!(flags & 1u)) {
+            vt3s_set_last_error(ERROR_ALREADY_EXISTS);
+            return FALSE;
+        }
+    } else if (resolve_new(wt, dst, sizeof dst) != 0) {
+        vt3s_set_last_error(ERROR_PATH_NOT_FOUND);
+        return FALSE;
+    }
+    if (rename(src, dst) != 0) {
+        vt3s_set_last_error(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+    vt3s_set_last_error(ERROR_SUCCESS);
+    return TRUE;
 }
 
 BOOL WINAPI CloseHandle(HANDLE h)
