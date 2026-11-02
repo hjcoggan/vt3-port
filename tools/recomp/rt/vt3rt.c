@@ -37,6 +37,7 @@ typedef struct {
 static icent *itab = NULL;
 static size_t nitab = 0;
 static int trace = 0;
+static const char *trace_imports;   /* VT3_TRACE_IMPORTS="WriteFile,DeleteFileA": imports to log */
 
 /* ---- Skip intro (VT3_SKIP_INTRO) ----------------------------------------------------------
  * Game addresses are for the NoCD 1.0.1 VT3.exe (ImageBase 0x400000). See skipintro/plan.md.
@@ -205,8 +206,22 @@ void vt_icall(vt3_cpu *c, uint32_t target)
     uint32_t sp_slot = c->fs_base + VT3SHIM_TEB_GUEST_SP, saved_sp;
     memcpy(&saved_sp, vt_mem + sp_slot, 4);
     memcpy(vt_mem + sp_slot, &c->esp, 4);
+    /* VT3_TRACE_IMPORTS: log the named imports with their return value (EAX). */
+    char named[96] = "";
+    int watch = 0;
+    uint32_t ret_addr = trace_imports ? rd32(c->esp) : 0;
+    if (trace_imports && e->name) {
+        size_t n = strlen(e->name);
+        for (const char *h = strstr(trace_imports, e->name); h && !watch; h = strstr(h + 1, e->name))
+            watch = (h == trace_imports || h[-1] == ',') && (h[n] == ',' || !h[n]);
+        uint32_t p = rd32(c->esp + 4);
+        if (watch && (!strcmp(e->name, "CreateFileA") || !strcmp(e->name, "DeleteFileA") ||
+                      !strcmp(e->name, "MoveFileExA")) && p && p < (1u << 30))
+            snprintf(named, sizeof named, "%s", (const char *)(vt_mem + p));
+    }
     e->fn(c);
     memcpy(vt_mem + sp_slot, &saved_sp, 4);
+    if (watch) fprintf(stderr, "vt3: import %s %s from %08x -> %08x\n", e->name, named, ret_addr, c->eax);
     if (msg_kind == 1 && c->eax) vt_trace_msg("returned", msg_arg);
 }
 
@@ -330,6 +345,7 @@ void vt_serve_point(vt3_cpu *c, uint32_t addr)
 int vt3_run(const vt3_module *m, const char *image_path)
 {
     trace = getenv("VT3_TRACE") != NULL;
+    trace_imports = getenv("VT3_TRACE_IMPORTS");
     vt_trace_serve = getenv("VT3_TRACE_SERVE") != NULL;
 
     /* One guest arena from the native runtime. Guest address A is vt_mem + A,
