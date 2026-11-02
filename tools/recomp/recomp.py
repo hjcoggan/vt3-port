@@ -352,7 +352,8 @@ def fl_sub(bits, sbb):
 
 
 FLAG_NEUTRAL = {'mov', 'lea', 'push', 'pop', 'movzx', 'movsx', 'movss', 'movsd', 'movaps',
-                'movups', 'movd', 'movq', 'fld', 'fst', 'fstp', 'fild', 'fistp', 'fxch'}
+                'movups', 'movd', 'movq', 'fld', 'fst', 'fstp', 'fild', 'fistp', 'fxch',
+                'wait', 'fnstcw'}
 
 
 def flag_neutral(ins):
@@ -364,11 +365,13 @@ FLAG_READERS = {'adc', 'sbb', 'rcl', 'rcr', 'cmc', 'pushf', 'pushfd', 'lahf', 's
                 'loope', 'loopz', 'loopne', 'loopnz'}
 
 
-def reads_flags_at(dec, a):
+def reads_flags_at(dec, a, follow_call=True):
     """True if the code at a reads an arithmetic flag before any instruction that may write one.
 
-    Used after a call: hand-written helpers (one in VT3's CRT math, 0x65cb65) return status in
-    the flags. shortcut: only straight-line code past flag-neutral instructions is looked at;
+    Used after a call: hand-written helpers (VT3's CRT math, 0x65cb65 and 0x65cba8) return status
+    in the flags. A direct call into a function whose entry reads them counts as a reader, since
+    call leaves the flags alone (0x654e81 calls 0x65cba8, then 0x654e98 does je on its ZF).
+    shortcut: only straight-line code past flag-neutral instructions is looked at;
     a full liveness pass found no other site in VT3, upgrade if another game needs one."""
     ins = dec.at(a)
     while ins is not None and flag_neutral(ins):
@@ -376,6 +379,8 @@ def reads_flags_at(dec, a):
     if ins is None:
         return False
     mn = ins.mn
+    if mn == 'call' and follow_call and ins.ops[0].kind == 'imm':
+        return reads_flags_at(dec, ins.ops[0].imm & M32, False)
     return (is_jcc(mn) or mn in FLAG_READERS or mn.startswith('fcmov')
             or mn[:3] == 'set' and mn[3:] in CC or mn[:4] == 'cmov' and mn[4:] in CC)
 
@@ -1101,7 +1106,9 @@ class FnGen:
                 t = op.imm & M32
                 call = f"{fname(t)}(c);" if t in self.an.E else f"vt_icall(c, 0x{t:x}u);"
                 fl = " VT_RELOAD_FLAGS();" if t in self.an.flag_returns and reads_flags_at(self.an.dec, ret) else ""
-                return [f"{{ esp -= 4u; wr32(esp, 0x{ret:x}u); VT_SPILL(); {call} VT_RELOAD();{fl} }}"]
+                # A callee whose entry reads the flags gets the caller's, not a stale c->eflags.
+                sp = " VT_SPILL_FLAGS();" if reads_flags_at(self.an.dec, t, False) else ""
+                return [f"{{ esp -= 4u; wr32(esp, 0x{ret:x}u);{sp} VT_SPILL(); {call} VT_RELOAD();{fl} }}"]
             return [f"{{ uint32_t t = {val(op, 4)}; esp -= 4u; wr32(esp, 0x{ret:x}u); "
                     f"VT_SPILL(); vt_icall(c, t); VT_RELOAD(); }}"]
         if mn == 'jmp':
