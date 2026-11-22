@@ -207,6 +207,8 @@ static struct {
     uint32_t cur;
     VkDescriptorSetLayout dsl0, dsl1;
     VkPipelineLayout pl;
+    VkPipelineCache pipe_cache;    /* session + on-disk pipeline cache: first-encounter compiles happen once */
+    char pipe_cache_path[1024];    /* empty: in-memory only (Android, or no state dir found) */
     VkSampler samp;                /* default clamp/linear sampler, also used by TL */
     vk_sampler_entry samplers[SAMPLER_CACHE];
     uint32_t nsamplers;
@@ -1750,7 +1752,7 @@ static VkPipeline get_pipeline(uint32_t prog, VkShaderModule vs, VkShaderModule 
     gci.subpass = 0;
     VkPipeline pipe = VK_NULL_HANDLE;
     uint64_t pt0 = stats_enabled() ? now_ns() : 0;
-    VkResult pcr = vkCreateGraphicsPipelines(g.dev, VK_NULL_HANDLE, 1, &gci, NULL, &pipe);
+    VkResult pcr = vkCreateGraphicsPipelines(g.dev, g.pipe_cache, 1, &gci, NULL, &pipe);
     if (stats_enabled()) {
         g_stats.pipes++;
         g_stats.pipe_ns += now_ns() - pt0;
@@ -2451,6 +2453,57 @@ static int vk_init(int logical_w, int logical_h)
     }
     VT3_INFO("vulkan: %s, API %u.%u", props.deviceName, VK_VERSION_MAJOR(props.apiVersion),
              VK_VERSION_MINOR(props.apiVersion));
+    /* Pipeline cache: pipelines were created with VK_NULL_HANDLE, so every new state combination
+     * paid a full driver compile on the guest thread (a hitch, and an audio stall via the guest
+     * lock). Load the previous session's cache when its UUID matches this device/driver, keep it
+     * for the session, and write it back at shutdown. VT3_PIPELINE_CACHE overrides the path;
+     * an empty value disables the file (the in-memory cache still applies). */
+    {
+        const char *pc_env = getenv("VT3_PIPELINE_CACHE");
+        g.pipe_cache_path[0] = '\0';
+        if (pc_env && *pc_env) {
+            snprintf(g.pipe_cache_path, sizeof g.pipe_cache_path, "%s", pc_env);
+        }
+#ifndef __ANDROID__
+        else {
+            const char *xdg = getenv("XDG_STATE_HOME");
+            const char *home = getenv("HOME");
+            if (xdg && *xdg)
+                snprintf(g.pipe_cache_path, sizeof g.pipe_cache_path, "%s/vt3/pipeline-cache.bin", xdg);
+            else if (home && *home)
+                snprintf(g.pipe_cache_path, sizeof g.pipe_cache_path, "%s/.local/state/vt3/pipeline-cache.bin", home);
+        }
+#endif
+        void *initial = NULL;
+        size_t initial_size = 0;
+        if (g.pipe_cache_path[0]) {
+            FILE *f = fopen(g.pipe_cache_path, "rb");
+            if (f) {
+                fseek(f, 0, SEEK_END);
+                long len = ftell(f);
+                fseek(f, 0, SEEK_SET);
+                if (len >= 32) {
+                    initial = malloc((size_t)len);
+                    if (initial && fread(initial, 1, (size_t)len, f) == (size_t)len) {
+                        const uint32_t *hdr = initial;
+                        /* header: size, version (1), then the 16-byte pipelineCacheUUID */
+                        if (hdr[1] == 1 && memcmp((const uint8_t *)initial + 8, props.pipelineCacheUUID, VK_UUID_SIZE) == 0)
+                            initial_size = (size_t)len;
+                    }
+                    if (!initial_size) { free(initial); initial = NULL; }
+                }
+                fclose(f);
+            }
+        }
+        VkPipelineCacheCreateInfo pcci = { VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
+        pcci.initialDataSize = initial_size;
+        pcci.pInitialData = initial;
+        if (vkCreatePipelineCache(g.dev, &pcci, NULL, &g.pipe_cache) != VK_SUCCESS)
+            g.pipe_cache = VK_NULL_HANDLE;
+        else if (initial_size)
+            VT3_INFO("vulkan: pipeline cache: loaded %zu bytes from %s", initial_size, g.pipe_cache_path);
+        free(initial);
+    }
     if (stats_enabled() && qf[found].timestampValidBits && props.limits.timestampPeriod > 0.0f) {
         VkQueryPoolCreateInfo qci2 = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
         qci2.queryType = VK_QUERY_TYPE_TIMESTAMP;
@@ -2644,6 +2697,27 @@ static void vk_shutdown(void)
     if (g.sc) vkDestroySwapchainKHR(g.dev, g.sc, NULL);
     if (g_once_pool) vkDestroyCommandPool(g.dev, g_once_pool, NULL);
     if (g.pool) vkDestroyCommandPool(g.dev, g.pool, NULL);
+    if (g.pipe_cache) {
+        if (g.pipe_cache_path[0]) {
+            size_t size = 0;
+            if (vkGetPipelineCacheData(g.dev, g.pipe_cache, &size, NULL) == VK_SUCCESS && size) {
+                void *data = malloc(size);
+                if (data && vkGetPipelineCacheData(g.dev, g.pipe_cache, &size, data) == VK_SUCCESS) {
+                    char tmp_path[1100];
+                    snprintf(tmp_path, sizeof tmp_path, "%s.tmp", g.pipe_cache_path);
+                    FILE *f = fopen(tmp_path, "wb");
+                    if (f) {
+                        fwrite(data, 1, size, f);
+                        fclose(f);
+                        rename(tmp_path, g.pipe_cache_path);
+                    }
+                }
+                free(data);
+            }
+        }
+        vkDestroyPipelineCache(g.dev, g.pipe_cache, NULL);
+        g.pipe_cache = VK_NULL_HANDLE;
+    }
     vkDestroyDevice(g.dev, NULL);
     if (g.surf) vkDestroySurfaceKHR(g.inst, g.surf, NULL);
     if (g.inst) vkDestroyInstance(g.inst, NULL);

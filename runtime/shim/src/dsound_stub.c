@@ -37,7 +37,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/resource.h>
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(__linux__)
 #include <sys/syscall.h>
 #elif defined(__APPLE__)
 #include <pthread/qos.h>
@@ -394,6 +394,12 @@ static void raise_mixer_priority(void)
     setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), -16);   /* THREAD_PRIORITY_AUDIO */
 #elif defined(__APPLE__)
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#elif defined(__linux__)
+    /* Same reasoning on desktop Linux (the Nova's PipeWire build): without this the mixer
+     * competes at normal priority with a guest thread holding the guest lock, the 40 ms ring
+     * runs dry, and the result is the menu/match stutter. -5 stays inside what an unprivileged
+     * process may take where it is permitted at all; failure is harmless. */
+    setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), -5);
 #endif
 }
 
