@@ -595,6 +595,20 @@ static int create_swapchain(void)
         VT3_INFO("vulkan: panel rate %d Hz requested (%d)", fps_cap_hz(), (int)rc);
         g_cap_probe = 0;
     }
+#else
+    if (ext.width == 0xFFFFFFFFu) {
+        int dw = 0, dh = 0;
+        vt3_platform_drawable_size(&dw, &dh);
+        if (dw <= 0) dw = g.logical_w;
+        if (dh <= 0) dh = g.logical_h;
+        uint32_t w = (uint32_t)dw, h = (uint32_t)dh;
+        if (w < caps.minImageExtent.width) w = caps.minImageExtent.width;
+        if (caps.maxImageExtent.width && w > caps.maxImageExtent.width) w = caps.maxImageExtent.width;
+        if (h < caps.minImageExtent.height) h = caps.minImageExtent.height;
+        if (caps.maxImageExtent.height && h > caps.maxImageExtent.height) h = caps.maxImageExtent.height;
+        ext.width = w;
+        ext.height = h;
+    }
 #endif
     if (ext.width == 0 || ext.height == 0) return -1;
 
@@ -643,11 +657,28 @@ static int create_swapchain(void)
 #else
     sci.preTransform = caps.currentTransform;
 #endif
-    sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    if (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
+        sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    else if (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR)
+        sci.compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+    else if (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR)
+        sci.compositeAlpha = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
+    else
+        sci.compositeAlpha = VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR;
     sci.presentMode = g.present_mode;
     sci.clipped = VK_TRUE;
     sci.oldSwapchain = g.sc;
-    VKT(vkCreateSwapchainKHR(g.dev, &sci, NULL, &g.sc), "vkCreateSwapchainKHR");
+    VkResult scr = vkCreateSwapchainKHR(g.dev, &sci, NULL, &g.sc);
+    if (scr != VK_SUCCESS) {
+        VT3_ERROR("vulkan: vkCreateSwapchainKHR failed (%d) extent=%ux%u caps=%ux%u min=%ux%u max=%ux%u fmt=%d alpha=0x%x(sup=0x%x) usage=0x%x(sup=0x%x)",
+                  (int)scr, ext.width, ext.height,
+                  caps.currentExtent.width, caps.currentExtent.height,
+                  caps.minImageExtent.width, caps.minImageExtent.height,
+                  caps.maxImageExtent.width, caps.maxImageExtent.height,
+                  (int)pick.format, (unsigned)sci.compositeAlpha, (unsigned)caps.supportedCompositeAlpha,
+                  (unsigned)sci.imageUsage, (unsigned)caps.supportedUsageFlags);
+        return -1;
+    }
     if (sci.oldSwapchain) vkDestroySwapchainKHR(g.dev, sci.oldSwapchain, NULL);
     g.sc_format = pick.format;
     g.sc_extent = ext;
