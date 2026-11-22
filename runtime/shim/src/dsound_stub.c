@@ -75,8 +75,14 @@ typedef struct ds_buffer {
  * is the same race a real sound card has with the game's write cursor. */
 #define MIX_RATE 48000u
 #define MIX_CH 2u
+#ifndef __ANDROID__
+#define MIX_RING_MS 80u
+#define MIX_CUSHION_MS 40u
+#else
 #define MIX_RING_MS 40u
-#define MIX_MAX_FRAMES 960u
+#define MIX_CUSHION_MS 0u
+#endif
+#define MIX_MAX_FRAMES 1920u
 #define MIX_MAX_ACTIVE 64
 #define FRESH_BLOCK VT3_MIX_FRESH_BLOCK
 /* Q15 gate change per output frame: the ramp completes inside VT3_MIX_RAMP_FRAMES. */
@@ -403,6 +409,23 @@ static void raise_mixer_priority(void)
 #endif
 }
 
+static void prefill_cushion(void)
+{
+    if (MIX_CUSHION_MS == 0u || !g_out) return;
+    static const int16_t silence[MIX_MAX_FRAMES * MIX_CH];
+    size_t target_bytes = (size_t)MIX_RATE * MIX_CH * sizeof(int16_t) * MIX_CUSHION_MS / 1000u;
+    size_t space = vt3_audio_space(g_out);
+    size_t used = g_ring_bytes > space ? g_ring_bytes - space : 0;
+    if (used >= target_bytes) return;
+    size_t frames = (target_bytes - used) / (MIX_CH * sizeof(int16_t));
+    while (frames > 0) {
+        size_t chunk = frames > MIX_MAX_FRAMES ? MIX_MAX_FRAMES : frames;
+        size_t wrote = vt3_audio_write(g_out, silence, chunk * MIX_CH * sizeof(int16_t));
+        if (wrote == 0) break;
+        frames -= wrote / (MIX_CH * sizeof(int16_t));
+    }
+}
+
 static void *mix_thread(void *arg)
 {
     (void)arg;
@@ -415,15 +438,24 @@ static void *mix_thread(void *arg)
     FILE *dump = getenv("VT3_DUMP_AUDIO") ? fopen(getenv("VT3_DUMP_AUDIO"), "wb") : NULL;
     uint64_t window_ns = now_ns();
     int32_t window_peak = 0;
+    uint32_t prev_underruns = vt3_audio_underruns(g_out);
     for (;;) {
         struct timespec ts = { 0, 4000000 };          /* 4 ms */
         nanosleep(&ts, NULL);
         pthread_mutex_lock(&g_mu);
         uint64_t now = now_ns();
+        int need_cushion = 0;
         if (now > g_mix_next_ns + 50000000u) {
             g_mix_next_ns = now - 10000000u;
             g_resyncs++;                              /* more than 50 ms behind the read timeline: resync */
+            need_cushion = 1;
         }
+        uint32_t cur_underruns = vt3_audio_underruns(g_out);
+        if (cur_underruns != prev_underruns) {
+            prev_underruns = cur_underruns;
+            need_cushion = 1;
+        }
+        if (need_cushion) prefill_cushion();
         uint64_t due = now > g_mix_next_ns ? (now - g_mix_next_ns) * MIX_RATE / 1000000000u : 0;
         uint64_t space = vt3_audio_space(g_out) / (MIX_CH * sizeof(int16_t));
         uint64_t frames = due < space ? due : space;
@@ -496,6 +528,7 @@ static void mixer_start_once(void)
         return;
     }
     g_ring_bytes = ring;
+    prefill_cushion();
     g_mix_next_ns = now_ns();
     pthread_t th;
     if (pthread_create(&th, NULL, mix_thread, NULL) != 0) {
