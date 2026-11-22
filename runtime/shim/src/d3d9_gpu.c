@@ -41,6 +41,12 @@ static void slow_end(struct slow_op *s, uint32_t w, uint32_t h, uint32_t fmt)
 
 static int g_gpu_ok;
 static int g_plat_ok;
+static int g_wide;
+
+static int is_widescreen(uint32_t w, uint32_t h)
+{
+    return h > 0 && (float)w / (float)h > 1.40f;
+}
 
 /* The game has its own widescreen mode, named WIDESCREEN in its INI. With it on, the 3D camera
  * keeps its vertical field of view and widens horizontally (a true Hor+), and the HUD lays itself
@@ -65,7 +71,7 @@ static int g_plat_ok;
 
 static void widescreen_enable(void)
 {
-    if (getenv("VT3_NO_WIDESCREEN")) return;
+    if (!g_wide || getenv("VT3_NO_WIDESCREEN")) return;
     uint32_t c = vt3s_load_u32((GPTR)VT3_GUEST_CONFIG_WIDE);
     vt3s_store_u32((GPTR)VT3_GUEST_CONFIG_WIDE, (c & 0xffffff00u) | 0x01u);
     uint32_t eng = vt3s_load_u32((GPTR)VT3_GUEST_ENGINE);
@@ -77,7 +83,7 @@ static void widescreen_enable(void)
 
 static void widescreen_aspect(int w, int h)
 {
-    if (getenv("VT3_NO_WIDESCREEN")) return;
+    if (!g_wide || getenv("VT3_NO_WIDESCREEN")) return;
     if (w <= 0 || h <= 0) return;
     float aspect = (float)w / (float)h;
     uint32_t bits;
@@ -129,7 +135,7 @@ int d3d9_gpu_prepare(uint32_t req_w, uint32_t req_h, uint32_t *out_w, uint32_t *
 }
 
 /* Write (or refresh) the three keys we drive, keeping any other key the player put in the file. */
-static int write_widescreen_ini(const char *path, uint32_t w, uint32_t h)
+static int write_widescreen_ini(const char *path, uint32_t w, uint32_t h, int wide)
 {
     char *body = NULL;
     size_t blen = 0;
@@ -153,7 +159,8 @@ static int write_widescreen_ini(const char *path, uint32_t w, uint32_t h)
         free(body);
         return -1;
     }
-    fprintf(o, "DX/RES/WIDTH = %u\nDX/RES/HEIGHT = %u\nWIDESCREEN = 1\n", (unsigned)w, (unsigned)h);
+    fprintf(o, "DX/RES/WIDTH = %u\nDX/RES/HEIGHT = %u\nWIDESCREEN = %d\n",
+            (unsigned)w, (unsigned)h, wide ? 1 : 0);
     if (body) {
         char *save = NULL;
         for (char *line = strtok_r(body, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
@@ -179,14 +186,18 @@ void vt3s_display_prepare(void)
 {
     uint32_t tw = 0, th = 0;
     if (d3d9_gpu_prepare(0, 0, &tw, &th) != 0) return;
-    if (getenv("VT3_NO_WIDESCREEN")) return;
+    if (getenv("VT3_NO_WIDESCREEN")) {
+        g_wide = 0;
+        return;
+    }
+    g_wide = is_widescreen(tw, th);
 
     char path[1200];
     snprintf(path, sizeof path, "%svt3.ini", vt3s_game_root());
-    if (write_widescreen_ini(path, tw, th) != 0) {
+    if (write_widescreen_ini(path, tw, th, g_wide) != 0) {
         VT3_WARN("widescreen: cannot write %s; the game keeps its own resolution", path);
     } else {
-        VT3_INFO("widescreen: %s = %ux%u", path, (unsigned)tw, (unsigned)th);
+        VT3_INFO("display: %s = %ux%u (widescreen %d)", path, (unsigned)tw, (unsigned)th, g_wide);
     }
     widescreen_aspect((int)tw, (int)th);
     widescreen_enable();
@@ -200,6 +211,7 @@ int d3d9_gpu_init(uint32_t width, uint32_t height)
         uint32_t tw = width, th = height;
         if (d3d9_gpu_prepare(width, height, &tw, &th) != 0) return -1;
     }
+    g_wide = getenv("VT3_NO_WIDESCREEN") ? 0 : is_widescreen(width, height);
     vt3_gfx_config gc;
     gc.logical_w = (int)width;
     gc.logical_h = (int)height;
