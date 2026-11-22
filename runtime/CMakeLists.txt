@@ -10,6 +10,10 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+if(UNIX AND NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Android")
+    add_compile_definitions(_POSIX_C_SOURCE=200809L _GNU_SOURCE)
+endif()
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
 endif()
@@ -68,20 +72,24 @@ if(VT3_ANDROID)
     )
 else()
     set(VT3_CORE_PLATFORM
-        src/render/gl33.c
         src/render/vk.c
         src/audio/audio_sdl.c
         src/input/input_sdl.c
         src/platform/platform_sdl.c
     )
+    if(APPLE)
+        list(APPEND VT3_CORE_PLATFORM src/render/gl33.c)
+    endif()
 endif()
 add_library(vt3core STATIC ${VT3_CORE_COMMON} ${VT3_CORE_PLATFORM})
 target_include_directories(vt3core PUBLIC include)
 if(VT3_ANDROID)
     target_link_libraries(vt3core PUBLIC android log aaudio m)
     target_include_directories(vt3core PRIVATE ${ANDROID_NDK}/sources/android/native_app_glue)
-else()
+elseif(APPLE)
     target_link_libraries(vt3core PUBLIC SDL3::SDL3 Vulkan::Vulkan)
+else()
+    target_link_libraries(vt3core PUBLIC SDL3::SDL3 Vulkan::Vulkan m pthread)
 endif()
 target_compile_options(vt3core PRIVATE ${VT3_WARNINGS} ${VT3_ANDROID_FASTCALL})
 
@@ -185,17 +193,24 @@ if(VT3_ANDROID)
 endif()
 
 # The runtime executable. It also carries the self-test.
-add_executable(vt3rt
+set(VT3_RT_SOURCES
     src/main.c
     tests/selftest.c
     tests/layout_check.c   # compile-time only: checks the COM vtable layouts
-    tests/sm2_glcheck.c    # --sm2-check: GL compile and link of SM2 shaders
 )
+if(APPLE)
+    list(APPEND VT3_RT_SOURCES tests/sm2_glcheck.c)   # --sm2-check: GL compile and link of SM2 shaders
+endif()
+add_executable(vt3rt ${VT3_RT_SOURCES})
 if(APPLE)
     target_link_libraries(vt3rt PRIVATE "-framework OpenGL")
 endif()
 target_include_directories(vt3rt PRIVATE tests)
-target_link_libraries(vt3rt PRIVATE vt3shim)
+if(APPLE)
+    target_link_libraries(vt3rt PRIVATE vt3shim)
+else()
+    target_link_libraries(vt3rt PRIVATE "-Wl,--whole-archive" vt3shim vt3core "-Wl,--no-whole-archive")
+endif()
 target_compile_options(vt3rt PRIVATE ${VT3_WARNINGS})
 # The weak defaults in vt3shim must lose to the real renderer, platform and translator in vt3core.
 # A static archive would not pull those members in, so force every member in.

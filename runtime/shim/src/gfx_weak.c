@@ -131,6 +131,16 @@ __attribute__((weak)) void vt3_gfx_draw(vt3_prim prim, const vt3_tlvertex *v, ui
     (void)tex;
 }
 
+__attribute__((weak)) void vt3_gfx_draw_state(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex,
+                                              const vt3_rstate *st)
+{
+    (void)prim;
+    (void)v;
+    (void)count;
+    (void)tex;
+    (void)st;
+}
+
 __attribute__((weak)) void vt3_gfx_draw_program(const vt3_draw *d)
 {
     (void)d;

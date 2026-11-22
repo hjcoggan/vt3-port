@@ -991,6 +991,53 @@ static void test_d3d9_target_refs(void)
     printf("PASS d3d9 bound targets hold references\n");
 }
 
+static void test_d3d9_extra_formats(void)
+{
+    uint32_t pitch = 0;
+    uint8_t dst[4 * 4 * 4];
+
+    /* A4R4G4B4 (26): 0x8F40 -> A=0x88, R=0xFF, G=0x44, B=0x00 -> BGRA {0x00, 0x44, 0xFF, 0x88}. */
+    uint8_t a4[] = { 0x40, 0x8F };
+    CHECK(d3d9_level_layout(D3DFMT_CHK_A4R4G4B4, 1, 1, &pitch) == 2 && pitch == 2, "A4R4G4B4 layout");
+    CHECK(d3d9_to_bgra(D3DFMT_CHK_A4R4G4B4, a4, pitch, 1, 1, dst) == 0 &&
+          dst[0] == 0x00 && dst[1] == 0x44 && dst[2] == 0xFF && dst[3] == 0x88, "A4R4G4B4 decode");
+
+    /* L8 (50): L=0x5A -> BGRA {0x5A, 0x5A, 0x5A, 0xFF}. */
+    uint8_t l8[] = { 0x5A };
+    CHECK(d3d9_level_layout(D3DFMT_CHK_L8, 1, 1, &pitch) == 1 && pitch == 1, "L8 layout");
+    CHECK(d3d9_to_bgra(D3DFMT_CHK_L8, l8, pitch, 1, 1, dst) == 0 &&
+          dst[0] == 0x5A && dst[1] == 0x5A && dst[2] == 0x5A && dst[3] == 0xFF, "L8 decode");
+
+    /* A8L8 (51): L=0x40, A=0x80 -> BGRA {0x40, 0x40, 0x40, 0x80}. */
+    uint8_t a8l8[] = { 0x40, 0x80 };
+    CHECK(d3d9_level_layout(D3DFMT_CHK_A8L8, 1, 1, &pitch) == 2 && pitch == 2, "A8L8 layout");
+    CHECK(d3d9_to_bgra(D3DFMT_CHK_A8L8, a8l8, pitch, 1, 1, dst) == 0 &&
+          dst[0] == 0x40 && dst[1] == 0x40 && dst[2] == 0x40 && dst[3] == 0x80, "A8L8 decode");
+
+    /* R8G8B8 (20), A8B8G8R8 (32), X8B8G8R8 (33). */
+    uint8_t rgb24[] = { 0x11, 0x22, 0x33 };
+    CHECK(d3d9_level_layout(D3DFMT_CHK_R8G8B8, 1, 1, &pitch) == 3 && pitch == 3, "R8G8B8 layout");
+    CHECK(d3d9_to_bgra(D3DFMT_CHK_R8G8B8, rgb24, pitch, 1, 1, dst) == 0 &&
+          dst[0] == 0x11 && dst[1] == 0x22 && dst[2] == 0x33 && dst[3] == 0xFF, "R8G8B8 decode");
+
+    uint8_t abgr[] = { 0xAA, 0xBB, 0xCC, 0x77 };
+    CHECK(d3d9_level_layout(D3DFMT_CHK_A8B8G8R8, 1, 1, &pitch) == 4 && pitch == 4, "A8B8G8R8 layout");
+    CHECK(d3d9_to_bgra(D3DFMT_CHK_A8B8G8R8, abgr, pitch, 1, 1, dst) == 0 &&
+          dst[0] == 0xCC && dst[1] == 0xBB && dst[2] == 0xAA && dst[3] == 0x77, "A8B8G8R8 decode");
+
+    CHECK(d3d9_level_layout(D3DFMT_CHK_X8B8G8R8, 1, 1, &pitch) == 4 &&
+          d3d9_to_bgra(D3DFMT_CHK_X8B8G8R8, abgr, pitch, 1, 1, dst) == 0 && dst[3] == 0xFF, "X8B8G8R8 decode");
+
+    /* DXT2 and DXT4 layout + decode. */
+    uint8_t dxt_blk[16] = { 0 };
+    CHECK(d3d9_level_layout(D3DFMT_CHK_DXT2, 4, 4, &pitch) == 16 &&
+          d3d9_to_bgra(D3DFMT_CHK_DXT2, dxt_blk, pitch, 4, 4, dst) == 0, "DXT2 decode");
+    CHECK(d3d9_level_layout(D3DFMT_CHK_DXT4, 4, 4, &pitch) == 16 &&
+          d3d9_to_bgra(D3DFMT_CHK_DXT4, dxt_blk, pitch, 4, 4, dst) == 0, "DXT4 decode");
+
+    printf("PASS d3d9 extra texture formats\n");
+}
+
 /* ---- entry -------------------------------------------------------------- */
 
 int vt3_selftest_run(const char *adx_path)
@@ -1013,6 +1060,7 @@ int vt3_selftest_run(const char *adx_path)
     test_d3dx_misc();
     test_d3d9_lock_and_refs();
     test_d3d9_target_refs();
+    test_d3d9_extra_formats();
 
     int adx_ran = 0;
     if (adx_path) adx_ran = test_adx(adx_path);

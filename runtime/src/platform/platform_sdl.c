@@ -42,10 +42,17 @@ void vt3_config_defaults(vt3_config *c)
  * is the fallback. VT3_RENDERER=gl forces OpenGL and VT3_RENDERER=vulkan forces Vulkan. */
 static int wants_vulkan(void)
 {
+#ifndef __APPLE__
+    const char *r = getenv("VT3_RENDERER");
+    if (r && strcmp(r, "gl") == 0)
+        VT3_WARN("platform: OpenGL backend is unavailable on Linux; using Vulkan");
+    return 1;
+#else
     const char *r = getenv("VT3_RENDERER");
     if (r && strcmp(r, "gl") == 0) return 0;
     if (r && strcmp(r, "vulkan") == 0) return 1;
     return vt3_vk_probe();
+#endif
 }
 
 int vt3_platform_is_vulkan(void)

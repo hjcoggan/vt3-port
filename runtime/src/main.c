@@ -14,8 +14,10 @@
 #include "vt3/vt3_renderer.h"
 #include "vt3shim/shim.h"
 
+#ifdef __APPLE__
 int vt3_sm2_glcheck_dir(const char *dir);
 int vt3_sm2_gl_draw_test(void);
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -104,9 +106,20 @@ int main(int argc, char **argv)
         } else if (strcmp(a, "--no-vsync") == 0) {
             cfg.vsync = 0;
         } else if (strcmp(a, "--sm2-draw-test") == 0) {
+#ifdef __APPLE__
             return vt3_sm2_gl_draw_test();
+#else
+            fprintf(stderr, "--sm2-draw-test requires OpenGL (macOS only)\n");
+            return 1;
+#endif
         } else if (strcmp(a, "--sm2-check") == 0 && i + 1 < argc) {
+#ifdef __APPLE__
             return vt3_sm2_glcheck_dir(argv[i + 1]);
+#else
+            (void)argv[++i];
+            fprintf(stderr, "--sm2-check requires OpenGL (macOS only)\n");
+            return 1;
+#endif
         } else if (strcmp(a, "--game-root") == 0 && i + 1 < argc) {
             cfg.game_root = argv[++i];
         } else {
@@ -139,7 +152,7 @@ int main(int argc, char **argv)
         .aspect_h = cfg.aspect_h,
         .integer_scale = cfg.integer_scale,
     };
-    if (vt3_gfx_init(&vt3_gfx_gl33, &gc) != 0) {
+    if (vt3_gfx_init(vt3_gfx_default_ops(), &gc) != 0) {
         vt3_platform_shutdown();
         vt3shim_shutdown();
         vt3_guest_shutdown();

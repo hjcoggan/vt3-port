@@ -949,8 +949,30 @@ HRESULT d3d9_draw(d3d9_device *d, const d3d9_draw_args *a)
         vt3_tex t0 = 0;
         d3d9_texture *tx = d3d9_texture_of(d->textures[0]);
         if (tx) t0 = tx->gl;
-        vt3_gfx_draw(prim_list == PRIM_TRIANGLESTRIP ? VT3_PRIM_TRIANGLESTRIP : VT3_PRIM_TRIANGLELIST,
-                     tmp, n, t0);
+        /* Honour stage-0 fixed-function texture stage ops and D3DRS_* blend/alpha-test state. */
+        uint32_t cop = d->tss[0][1], carg1 = d->tss[0][2], carg2 = d->tss[0][3];
+        uint32_t aop = d->tss[0][4], aarg1 = d->tss[0][5], aarg2 = d->tss[0][6];
+        if (cop == 1u && aop == 1u) t0 = 0;
+        if ((cop == 2u && carg1 == 2u) || (cop == 3u && carg2 == 2u)) {
+            for (uint32_t i = 0; i < n; i++) tmp[i].color |= 0x00FFFFFFu;
+        }
+        if ((aop == 2u && aarg1 == 2u) || (aop == 3u && aarg2 == 2u)) {
+            for (uint32_t i = 0; i < n; i++) tmp[i].color |= 0xFF000000u;
+        }
+        if (((cop == 2u && carg1 == 0u) || (cop == 3u && carg2 == 0u)) &&
+            (aop == 1u || (aop == 2u && aarg1 == 0u) || (aop == 3u && aarg2 == 0u))) {
+            t0 = 0;
+        }
+        vt3_rstate tl_st;
+        fill_rstate(d, &tl_st);
+        tl_st.vp_x = tl_st.vp_y = tl_st.vp_w = tl_st.vp_h = 0;
+        if (tl_st.alpha_test && !tl_st.alpha_blend) {
+            tl_st.alpha_blend = 1;
+            tl_st.src_blend = 5;
+            tl_st.dst_blend = 6;
+        }
+        vt3_gfx_draw_state(prim_list == PRIM_TRIANGLESTRIP ? VT3_PRIM_TRIANGLESTRIP : VT3_PRIM_TRIANGLELIST,
+                           tmp, n, t0, &tl_st);
         return S_OK;
     }
 

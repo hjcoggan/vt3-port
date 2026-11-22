@@ -22,18 +22,24 @@ static uint8_t half_to_u8(const uint8_t *p)
 
 int d3d9_fmt_is_dxt(uint32_t fmt)
 {
-    return fmt == D3DFMT_CHK_DXT1 || fmt == D3DFMT_CHK_DXT3 || fmt == D3DFMT_CHK_DXT5;
+    return fmt == D3DFMT_CHK_DXT1 || fmt == D3DFMT_CHK_DXT2 || fmt == D3DFMT_CHK_DXT3 ||
+           fmt == D3DFMT_CHK_DXT4 || fmt == D3DFMT_CHK_DXT5;
 }
 
 uint32_t d3d9_fmt_bpp(uint32_t fmt)
 {
     switch (fmt) {
-    case D3DFMT_CHK_X8R8G8B8: case D3DFMT_CHK_A8R8G8B8: case D3DFMT_CHK_D24S8:
-    case D3DFMT_CHK_G16R16F:
+    case D3DFMT_CHK_X8R8G8B8: case D3DFMT_CHK_A8R8G8B8:
+    case D3DFMT_CHK_A8B8G8R8: case D3DFMT_CHK_X8B8G8R8:
+    case D3DFMT_CHK_D24S8: case D3DFMT_CHK_G16R16F:
         return 4;
-    case D3DFMT_CHK_R5G6B5: case D3DFMT_CHK_A1R5G5B5: case D3DFMT_CHK_INDEX16:
+    case D3DFMT_CHK_R8G8B8:
+        return 3;
+    case D3DFMT_CHK_R5G6B5: case D3DFMT_CHK_X1R5G5B5: case D3DFMT_CHK_A1R5G5B5:
+    case D3DFMT_CHK_A4R4G4B4: case D3DFMT_CHK_X4R4G4B4: case D3DFMT_CHK_A8L8:
+    case D3DFMT_CHK_INDEX16:
         return 2;
-    case D3DFMT_CHK_A8:
+    case D3DFMT_CHK_A8: case D3DFMT_CHK_L8:
         return 1;
     case D3DFMT_CHK_A16B16G16R16F:
         return 8;
@@ -111,6 +117,8 @@ static void decode_dxt(uint32_t fmt, const uint8_t *src, uint32_t pitch, uint32_
 {
     uint32_t bw = (w + 3) / 4, bh = (h + 3) / 4;
     uint32_t bs = fmt == D3DFMT_CHK_DXT1 ? 8u : 16u;
+    int premul = (fmt == D3DFMT_CHK_DXT2 || fmt == D3DFMT_CHK_DXT4);
+    int has_explicit_alpha = (fmt == D3DFMT_CHK_DXT2 || fmt == D3DFMT_CHK_DXT3);
     for (uint32_t by = 0; by < bh; by++) {
         for (uint32_t bx = 0; bx < bw; bx++) {
             const uint8_t *blk = src + by * pitch + bx * bs;
@@ -119,8 +127,8 @@ static void decode_dxt(uint32_t fmt, const uint8_t *src, uint32_t pitch, uint32_
                 decode_color(blk, 0, col, idx);
                 for (int i = 0; i < 16; i++) alpha[i] = col[idx[i]][3];
             } else {
-                /* Explicit alpha (DXT3: 4 bits per pixel) or interpolated (DXT5: 3-bit indices). */
-                if (fmt == D3DFMT_CHK_DXT3) {
+                /* Explicit alpha (DXT2/3: 4 bits per pixel) or interpolated (DXT4/5: 3-bit indices). */
+                if (has_explicit_alpha) {
                     uint64_t a = 0;
                     for (int k = 0; k < 8; k++) a |= (uint64_t)blk[k] << (8 * k);
                     for (int i = 0; i < 16; i++) alpha[i] = (uint8_t)(((a >> (4 * i)) & 15u) * 17u);
@@ -145,7 +153,16 @@ static void decode_dxt(uint32_t fmt, const uint8_t *src, uint32_t pitch, uint32_
                 decode_color(blk + 8, 1, col, idx);
             }
             for (int i = 0; i < 16; i++) {
-                uint8_t rgba[4] = { col[idx[i]][0], col[idx[i]][1], col[idx[i]][2], alpha[i] };
+                uint8_t r = col[idx[i]][0], g = col[idx[i]][1], b = col[idx[i]][2], a = alpha[i];
+                if (premul && a > 0 && a < 255) {
+                    uint32_t ur = ((uint32_t)r * 255u + a / 2u) / a;
+                    uint32_t ug = ((uint32_t)g * 255u + a / 2u) / a;
+                    uint32_t ub = ((uint32_t)b * 255u + a / 2u) / a;
+                    r = (uint8_t)(ur > 255u ? 255u : ur);
+                    g = (uint8_t)(ug > 255u ? 255u : ug);
+                    b = (uint8_t)(ub > 255u ? 255u : ub);
+                }
+                uint8_t rgba[4] = { r, g, b, a };
                 put_pixel(dst, w, bx * 4 + (uint32_t)(i & 3), by * 4 + (uint32_t)(i >> 2), w, h, rgba);
             }
         }
@@ -169,10 +186,39 @@ int d3d9_to_bgra(uint32_t fmt, const uint8_t *src, uint32_t pitch, uint32_t w, u
             if (fmt == D3DFMT_CHK_X8R8G8B8)
                 for (uint32_t x = 0; x < w; x++) out[x * 4 + 3] = 255;
             break;
+        case D3DFMT_CHK_A8B8G8R8:
+        case D3DFMT_CHK_X8B8G8R8:
+            for (uint32_t x = 0; x < w; x++) {
+                out[x * 4 + 0] = row[x * 4 + 2];
+                out[x * 4 + 1] = row[x * 4 + 1];
+                out[x * 4 + 2] = row[x * 4 + 0];
+                out[x * 4 + 3] = (fmt == D3DFMT_CHK_X8B8G8R8) ? 255 : row[x * 4 + 3];
+            }
+            break;
+        case D3DFMT_CHK_R8G8B8:
+            for (uint32_t x = 0; x < w; x++) {
+                out[x * 4 + 0] = row[x * 3 + 0];
+                out[x * 4 + 1] = row[x * 3 + 1];
+                out[x * 4 + 2] = row[x * 3 + 2];
+                out[x * 4 + 3] = 255;
+            }
+            break;
         case D3DFMT_CHK_A8:
             for (uint32_t x = 0; x < w; x++) {
                 out[x * 4 + 0] = out[x * 4 + 1] = out[x * 4 + 2] = 255;
                 out[x * 4 + 3] = row[x];
+            }
+            break;
+        case D3DFMT_CHK_L8:
+            for (uint32_t x = 0; x < w; x++) {
+                out[x * 4 + 0] = out[x * 4 + 1] = out[x * 4 + 2] = row[x];
+                out[x * 4 + 3] = 255;
+            }
+            break;
+        case D3DFMT_CHK_A8L8:
+            for (uint32_t x = 0; x < w; x++) {
+                out[x * 4 + 0] = out[x * 4 + 1] = out[x * 4 + 2] = row[2 * x];
+                out[x * 4 + 3] = row[2 * x + 1];
             }
             break;
         case D3DFMT_CHK_R5G6B5:
@@ -183,13 +229,25 @@ int d3d9_to_bgra(uint32_t fmt, const uint8_t *src, uint32_t pitch, uint32_t w, u
             }
             break;
         case D3DFMT_CHK_A1R5G5B5:
+        case D3DFMT_CHK_X1R5G5B5:
             for (uint32_t x = 0; x < w; x++) {
                 uint16_t c = (uint16_t)(row[2 * x] | (row[2 * x + 1] << 8));
                 uint32_t r5 = (c >> 10) & 31u, g5 = (c >> 5) & 31u, b5 = c & 31u;
                 out[x * 4 + 0] = (uint8_t)((b5 << 3) | (b5 >> 2));
                 out[x * 4 + 1] = (uint8_t)((g5 << 3) | (g5 >> 2));
                 out[x * 4 + 2] = (uint8_t)((r5 << 3) | (r5 >> 2));
-                out[x * 4 + 3] = (c & 0x8000u) ? 255 : 0;
+                out[x * 4 + 3] = (fmt == D3DFMT_CHK_X1R5G5B5 || (c & 0x8000u)) ? 255 : 0;
+            }
+            break;
+        case D3DFMT_CHK_A4R4G4B4:
+        case D3DFMT_CHK_X4R4G4B4:
+            for (uint32_t x = 0; x < w; x++) {
+                uint16_t c = (uint16_t)(row[2 * x] | (row[2 * x + 1] << 8));
+                uint32_t a4 = (c >> 12) & 15u, r4 = (c >> 8) & 15u, g4 = (c >> 4) & 15u, b4 = c & 15u;
+                out[x * 4 + 0] = (uint8_t)(b4 * 17u);
+                out[x * 4 + 1] = (uint8_t)(g4 * 17u);
+                out[x * 4 + 2] = (uint8_t)(r4 * 17u);
+                out[x * 4 + 3] = (fmt == D3DFMT_CHK_X4R4G4B4) ? 255 : (uint8_t)(a4 * 17u);
             }
             break;
         case D3DFMT_CHK_A16B16G16R16F:

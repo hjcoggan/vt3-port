@@ -90,6 +90,13 @@ void vt3_gfx_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex 
     if (g_ops && v && count) g_ops->draw(prim, v, count, tex);
 }
 
+void vt3_gfx_draw_state(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex, const vt3_rstate *st)
+{
+    if (!g_ops || !v || !count) return;
+    if (g_ops->draw_state && st) g_ops->draw_state(prim, v, count, tex, st);
+    else g_ops->draw(prim, v, count, tex);
+}
+
 void vt3_gfx_present(int drawable_w, int drawable_h)
 {
     if (!g_ops) return;

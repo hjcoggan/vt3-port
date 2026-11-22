@@ -622,11 +622,11 @@ static void gl_clear(uint32_t argb)
 
 static void apply_state(const vt3_rstate *s);
 
-static void gl_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex)
+static void gl_draw_state(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex, const vt3_rstate *st)
 {
     gl_bind_logical_fbo();
     static const vt3_rstate tl_state = { 1, 5, 6, 0, 0, 8, 1, 1, 0, 0, 0, 0xF };   /* alpha blend, no depth, no cull, ADD */
-    apply_state(&tl_state);
+    apply_state(st ? st : &tl_state);
     p_glBindVertexArray(g.vao_tl);
     p_glBindBuffer(GL_ARRAY_BUFFER, g.vbo_tl);
     p_glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)count * VT3_VERTEX_BYTES, v, GL_STREAM_DRAW);
@@ -644,6 +644,11 @@ static void gl_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_te
     p_glUniform1i(g.u_tex, 0);
 
     p_glDrawArrays(prim == VT3_PRIM_TRIANGLESTRIP ? GL_TRIANGLE_STRIP : GL_TRIANGLES, 0, (GLsizei)count);
+}
+
+static void gl_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex)
+{
+    gl_draw_state(prim, v, count, tex, NULL);
 }
 
 /* VT3_DUMP_RT=dir: once, VT3_DUMP_RT_AT seconds after the first present (default 50), every 8-bit render
@@ -1079,6 +1084,7 @@ const vt3_gfx_ops vt3_gfx_gl33 = {
     .begin_frame = gl_begin_frame,
     .clear = gl_clear,
     .draw = gl_draw,
+    .draw_state = gl_draw_state,
     .present = gl_present,
     .prog_create = gl_prog_create,
     .prog_destroy = gl_prog_destroy,

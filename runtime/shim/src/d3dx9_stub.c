@@ -198,10 +198,13 @@ HRESULT WINAPI D3DXCreateTexture(GPTR device, UINT width, UINT height, UINT mipl
 #define DDPF_ALPHA 0x00000002u
 #define DDPF_FOURCC 0x00000004u
 #define DDPF_RGB 0x00000040u
+#define DDPF_LUMINANCE 0x00020000u
 #define DDSCAPS2_CUBEMAP 0x00000200u
 #define DDS_FOURCC(a, b, c, d) ((uint32_t)(a) | ((uint32_t)(b) << 8) | ((uint32_t)(c) << 16) | ((uint32_t)(d) << 24))
 #define DDS_FCC_DXT1 DDS_FOURCC('D', 'X', 'T', '1')
+#define DDS_FCC_DXT2 DDS_FOURCC('D', 'X', 'T', '2')
 #define DDS_FCC_DXT3 DDS_FOURCC('D', 'X', 'T', '3')
+#define DDS_FCC_DXT4 DDS_FOURCC('D', 'X', 'T', '4')
 #define DDS_FCC_DXT5 DDS_FOURCC('D', 'X', 'T', '5')
 #define DDS_FCC_DX10 DDS_FOURCC('D', 'X', '1', '0')
 #define DDS_FCC_D3DFMT_A16B16G16R16F 113u   /* a D3DFORMAT value used as the FourCC */
@@ -247,20 +250,44 @@ static int dds_read(const uint8_t *d, uint32_t n, dds_info *o, const char **why)
     if (pflags & DDPF_FOURCC) {
         switch (fcc) {
         case DDS_FCC_DXT1: o->fmt = D3DFMT_CHK_DXT1; break;
+        case DDS_FCC_DXT2: o->fmt = D3DFMT_CHK_DXT2; break;
         case DDS_FCC_DXT3: o->fmt = D3DFMT_CHK_DXT3; break;
+        case DDS_FCC_DXT4: o->fmt = D3DFMT_CHK_DXT4; break;
         case DDS_FCC_DXT5: o->fmt = D3DFMT_CHK_DXT5; break;
         case DDS_FCC_D3DFMT_A16B16G16R16F: o->fmt = D3DFMT_CHK_A16B16G16R16F; break;
         case DDS_FCC_DX10: *why = "DX10 DDS headers are not supported"; return -1;
         default: *why = "unsupported DDS FourCC"; return -1;
         }
     } else if (pflags & DDPF_RGB) {
-        if (bits != 32u || rmask != 0x00ff0000u || gmask != 0x0000ff00u || bmask != 0x000000ffu) {
-            *why = "only 32-bit ARGB and XRGB DDS files are supported";
+        if (bits == 32u && rmask == 0x00ff0000u && gmask == 0x0000ff00u && bmask == 0x000000ffu) {
+            if ((pflags & DDPF_ALPHAPIXELS) && amask == 0xff000000u) o->fmt = D3DFMT_CHK_A8R8G8B8;
+            else if (amask == 0) o->fmt = D3DFMT_CHK_X8R8G8B8;
+            else { *why = "unsupported DDS alpha mask"; return -1; }
+        } else if (bits == 32u && rmask == 0x000000ffu && gmask == 0x0000ff00u && bmask == 0x00ff0000u) {
+            if ((pflags & DDPF_ALPHAPIXELS) && amask == 0xff000000u) o->fmt = D3DFMT_CHK_A8B8G8R8;
+            else if (amask == 0) o->fmt = D3DFMT_CHK_X8B8G8R8;
+            else { *why = "unsupported DDS alpha mask"; return -1; }
+        } else if (bits == 24u && rmask == 0x00ff0000u && gmask == 0x0000ff00u && bmask == 0x000000ffu && amask == 0) {
+            o->fmt = D3DFMT_CHK_R8G8B8;
+        } else if (bits == 16u && rmask == 0xf800u && gmask == 0x07e0u && bmask == 0x001fu && amask == 0) {
+            o->fmt = D3DFMT_CHK_R5G6B5;
+        } else if (bits == 16u && rmask == 0x7c00u && gmask == 0x03e0u && bmask == 0x001fu) {
+            if ((pflags & DDPF_ALPHAPIXELS) && amask == 0x8000u) o->fmt = D3DFMT_CHK_A1R5G5B5;
+            else if (amask == 0) o->fmt = D3DFMT_CHK_X1R5G5B5;
+            else { *why = "unsupported 16-bit DDS alpha mask"; return -1; }
+        } else if (bits == 16u && rmask == 0x0f00u && gmask == 0x00f0u && bmask == 0x000fu) {
+            if ((pflags & DDPF_ALPHAPIXELS) && amask == 0xf000u) o->fmt = D3DFMT_CHK_A4R4G4B4;
+            else if (amask == 0) o->fmt = D3DFMT_CHK_X4R4G4B4;
+            else { *why = "unsupported 16-bit DDS alpha mask"; return -1; }
+        } else {
+            *why = "unsupported RGB DDS pixel format";
             return -1;
         }
-        if ((pflags & DDPF_ALPHAPIXELS) && amask == 0xff000000u) o->fmt = D3DFMT_CHK_A8R8G8B8;
-        else if (amask == 0) o->fmt = D3DFMT_CHK_X8R8G8B8;
-        else { *why = "unsupported DDS alpha mask"; return -1; }
+    } else if ((pflags & DDPF_LUMINANCE) && bits == 8u && rmask == 0xffu) {
+        o->fmt = D3DFMT_CHK_L8;
+    } else if ((pflags & DDPF_LUMINANCE) && (pflags & DDPF_ALPHAPIXELS) && bits == 16u && rmask == 0x00ffu &&
+               amask == 0xff00u) {
+        o->fmt = D3DFMT_CHK_A8L8;
     } else if ((pflags & DDPF_ALPHA) && bits == 8u && amask == 0xffu) {
         o->fmt = D3DFMT_CHK_A8;
     } else {

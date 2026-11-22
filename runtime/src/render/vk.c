@@ -1772,8 +1772,8 @@ static VkPipeline get_pipeline(uint32_t prog, VkShaderModule vs, VkShaderModule 
     return pipe;
 }
 
-/* Fixed-function draws (XYZRHW): alpha blend, no depth, no culling, as gl33.c. */
-static void vk_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex)
+/* Fixed-function draws (XYZRHW): use caller render state when supplied, else default TL state. */
+static void vk_draw_state(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex, const vt3_rstate *st)
 {
     if (count == 0 || !g.tl_vs || !g.tl_fs || ensure_frame() != 0) return;
     prepare_sampled(tex);
@@ -1792,9 +1792,10 @@ static void vk_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_te
     memcpy(g.vb_ptr + off, v, bytes);
     f->vb_used = (f->vb_used + bytes + 15u) & ~15u;
 
-    static const vt3_rstate tl_state = { 1, 5, 6, 0, 0, 8, 1, 1, 0, 0, 0, 0xF };
+    static const vt3_rstate default_tl = { 1, 5, 6, 0, 0, 8, 1, 1, 0, 0, 0, 0xF };
+    const vt3_rstate *use_st = st ? st : &default_tl;
     vk_tex *tgt = rt_of(g.tgt);
-    VkPipeline pipe = get_pipeline(0, g.tl_vs, g.tl_fs, NULL, 1, &tl_state, prim == VT3_PRIM_TRIANGLESTRIP,
+    VkPipeline pipe = get_pipeline(0, g.tl_vs, g.tl_fs, NULL, 1, use_st, prim == VT3_PRIM_TRIANGLESTRIP,
                                    tgt ? (uint32_t)tgt->rpk : RPK_RGBA8);
     VkDescriptorSet set1 = VK_NULL_HANDLE;
     vt3_tex samplers[VT3_MAX_SAMPLERS] = {0};
@@ -1811,7 +1812,7 @@ static void vk_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_te
     pc.use_tex = (tex != 0 && tex <= VT3_MAX_TEX && g.tex[tex - 1].used) ? 1 : 0;
     VkCommandBuffer cb = f->cmd;
     VkRect2D sc = current_scissor();
-    VkViewport vp = current_viewport(&tl_state);
+    VkViewport vp = current_viewport(use_st);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
     vkCmdSetViewport(cb, 0, 1, &vp);
     vkCmdSetScissor(cb, 0, 1, &sc);
@@ -1820,6 +1821,11 @@ static void vk_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_te
     VkDeviceSize vo = off;
     vkCmdBindVertexBuffers(cb, 0, 1, &g.vb, &vo);
     vkCmdDraw(cb, count, 1, 0, 0);
+}
+
+static void vk_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex)
+{
+    vk_draw_state(prim, v, count, tex, NULL);
 }
 
 /* Reserves n bytes in this frame's vertex ring and returns where to write them. d3d9_draw uses
@@ -2975,6 +2981,7 @@ const vt3_gfx_ops vt3_gfx_vk = {
     .begin_frame = vk_begin_frame,
     .clear = vk_clear,
     .draw = vk_draw,
+    .draw_state = vk_draw_state,
     .present = vk_present,
     .prog_create = vk_prog_create,
     .prog_destroy = vk_prog_destroy,
@@ -2990,8 +2997,8 @@ const vt3_gfx_ops vt3_gfx_vk = {
     .blit = vk_blit,
 };
 
-#ifdef __ANDROID__
-/* On Android there is no GL backend and no environment variable: Vulkan is the only renderer. */
+#if defined(__ANDROID__) || !defined(__APPLE__)
+/* On Android and Linux desktop there is no GL backend built: Vulkan is the only renderer. */
 const vt3_gfx_ops *vt3_gfx_default_ops(void)
 {
     return &vt3_gfx_vk;

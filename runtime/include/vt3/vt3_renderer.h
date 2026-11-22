@@ -144,6 +144,7 @@ typedef struct vt3_gfx_ops {
     void (*begin_frame)(void);
     void (*clear)(uint32_t argb);
     void (*draw)(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex);
+    void (*draw_state)(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex, const vt3_rstate *st);
     void (*present)(const vt3_rect *dst, int nearest, int drawable_w, int drawable_h);
     int  (*prog_create)(vt3_prog *out, const char *vs_src, const char *ps_src, char *err, size_t errcap);
     void (*prog_destroy)(vt3_prog p);
@@ -174,6 +175,7 @@ void vt3_gfx_cube_upload(vt3_tex t, int face, const void *pixels, int pitch, int
 void vt3_gfx_begin_frame(void);
 void vt3_gfx_clear(uint32_t argb);
 void vt3_gfx_draw(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex);
+void vt3_gfx_draw_state(vt3_prim prim, const vt3_tlvertex *v, uint32_t count, vt3_tex tex, const vt3_rstate *st);
 /* Letterbox the logical buffer into the drawable and show it. Does not swap. */
 void vt3_gfx_present(int drawable_w, int drawable_h);
 
